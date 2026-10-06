@@ -135,6 +135,40 @@ Bugpatrol reads each PR and issue that has the first label, and it updates its o
 
 `publish` runs a sync after it publishes. While the dashboard runs, it syncs every 5 minutes. The Issues page shows the PR or issue number and its state. `bugpatrol issue list` shows the numbers too.
 
+## 7. Review a pull request
+
+```bash
+npx bugpatrol review 123                # the number or the URL of the pull request
+npx bugpatrol review 123 --dry-run      # write the comment to a local file, and send nothing to GitHub
+```
+
+`review` tests a pull request of your team in the running app, and it comments only the problems that the pull request introduces. It does not open a PR or an issue.
+
+1. Bugpatrol fetches the pull request and its base branch. It compares the pull request commit with the merge base: the base branch as it was when the pull request left it.
+2. It starts the app from the pull request commit, in its own worktree. The explorer reads the diff, and it tests the screens and the flows that the change can affect. It does not test the rest of the app.
+3. If the explorer reports nothing, the review ends here. If not, Bugpatrol starts the app from the merge base, and the explorer repeats the flow of each report on that build.
+4. The judge compares the two screenshots of each report, and it reads the diff. It gives each report one verdict:
+
+   | Verdict | Meaning | In the comment |
+   | --- | --- | --- |
+   | Introduced | The pull request build shows the problem, and the base build does not | A section with both screenshots and the steps |
+   | Already on the base branch | The base build shows the problem too | A folded list. A later `bugpatrol judge` can file it as a normal issue |
+   | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A folded list |
+   | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A folded list |
+
+5. Bugpatrol writes one comment on the pull request. A new review edits that comment, so a pull request never gets a second one. The comment does not block the merge, and `review` sets no check.
+
+`.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol publishes that review again and tests nothing. Use `--force` to test the same commit again.
+
+What you must know before you run it:
+
+- **The code of the pull request runs on your machine, with the secrets of the app.** Bugpatrol refuses a pull request from a fork. Read the diff first. If you trust it, add `--allow-fork`.
+- **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
+- **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
+- **The pull request build changes nothing that the patrol knows.** The explorer of a review records no screen, no routine, and no lesson.
+- The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
+- When the app does not start from the pull request commit, `review` stops with an error and writes no comment.
+
 ## Troubleshooting
 
 | Message | Action |
@@ -142,6 +176,8 @@ Bugpatrol reads each PR and issue that has the first label, and it updates its o
 | `GitHub is off` | Set `agents.github.enabled: true`, or use `publish --dry-run` |
 | `the gh CLI is not installed` | Install it from https://cli.github.com |
 | `gh is not logged in` | Run `gh auth login` |
+| `PR #<n> comes from a fork` | A review runs the code of the pull request. Read the diff, then add `--allow-fork` |
+| `A patrol runs (pid <n>)` | Stop the patrol, or run `review` when the patrol waits for a new commit |
 | `Nothing to publish` | No item matches the table in [What Bugpatrol publishes](#what-bugpatrol-publishes). Run `bugpatrol issue list`, and check the severities and the fixes |
 | The commit hook rejected a commit | The fixer gets a lesson with the hook error. Fix the hook error in the worktree, or run `bugpatrol fix --issue <id>` again |
 | The images do not show | The repo is private, and the reader is not signed in to GitHub, or has no access |

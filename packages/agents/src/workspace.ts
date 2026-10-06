@@ -15,6 +15,7 @@ import {
   type LessonRole,
   type LogRecord,
   type MemoryFile,
+  type PrReview,
   paths,
   type Routine,
   type ScreenTransition,
@@ -226,6 +227,13 @@ export class Workspace {
   }
   saveFix(value: FixProposal): Promise<void> {
     return atomic(paths.fix(this.root, value.id), value);
+  }
+
+  readReview(pr: number): Promise<PrReview | undefined> {
+    return readJson(paths.review(this.root, pr));
+  }
+  saveReview(value: PrReview): Promise<void> {
+    return atomic(paths.review(this.root, value.pr.number), value);
   }
 
   /** The session header, as written by `startSession`. */

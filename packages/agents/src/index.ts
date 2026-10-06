@@ -13,6 +13,7 @@ export * from './roles/judge.js';
 export * from './roles/publish.js';
 export * from './roles/reflect.js';
 export * from './roles/retest.js';
+export * from './roles/review.js';
 export * from './roles/worktrees.js';
 export * from './runtime/index.js';
 export * from './session.js';

@@ -292,6 +292,45 @@ export type FixProposal = {
   };
 };
 
+export type ReviewVerdict = 'introduced' | 'pre-existing' | 'not-a-bug' | 'unclear';
+
+/** One explorer report on a pull request build, after the judge compared it with the base build. */
+export type ReviewFinding = {
+  candidateId: string;
+  screenId?: string;
+  verdict: ReviewVerdict;
+  title: string;
+  severity: Severity;
+  reason: string;
+  /** The flow, in words, from the routine to the problem. */
+  steps: string[];
+  /** Workspace-relative screenshots of the same flow on the two builds. */
+  head?: string;
+  base?: string;
+  /** What happened when Bugpatrol repeated the flow on the base build. */
+  baseNote?: string;
+};
+
+/** `reviews/pr-<number>.json`: the last review of one pull request. */
+export type PrReview = {
+  version: 1;
+  pr: { number: number; url: string; title: string };
+  /** The pull request commit and its merge base: the two builds that the review compared. */
+  head: string;
+  base: string;
+  baseRef: string;
+  status: 'running' | 'finished' | 'failed';
+  startedAt: string;
+  endedAt?: string;
+  sessions: { explorer?: string; base?: string; judge?: string };
+  /** The explorer's own account of what it tested. */
+  tested?: string;
+  findings: ReviewFinding[];
+  comment?: { url: string; at: string };
+  error?: string;
+  costUsd: number;
+};
+
 export type AgentEventKind =
   | 'session-start'
   | 'session-end'

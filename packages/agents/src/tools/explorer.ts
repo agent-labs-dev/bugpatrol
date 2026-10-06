@@ -386,8 +386,15 @@ function stepSignature(step: RoutineStep): string {
   return step.kind;
 }
 
-/** Tool calls operate on refs; only replayable locators and placeholders enter routines. */
-export function explorerTools(session: AgentSession): Tool[] {
+/**
+ * Tool calls operate on refs; only replayable locators and placeholders enter routines.
+ * `replay` goes to each run_routine replay: a build that is not the main build
+ * passes `save: false`, so a routine that it breaks does not look broken on main.
+ */
+export function explorerTools(
+  session: AgentSession,
+  opts: { replay?: Parameters<typeof replayRoutine>[2] } = {},
+): Tool[] {
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -643,7 +650,7 @@ export function explorerTools(session: AgentSession): Tool[] {
       inputSchema: schema({ id: string }, ['id']),
       async run(input) {
         const id = arg(input, 'id');
-        const result = await replayRoutine(session, id);
+        const result = await replayRoutine(session, id, opts.replay);
         if (!result.ok) {
           return {
             ...text(`Routine ${id} failed at step ${result.failedStep ?? 'dependency'}: ${result.error}`),

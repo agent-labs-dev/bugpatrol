@@ -10,6 +10,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol judge [--session <id>]` | Judge the recent explorer sessions that have new candidates (or the sessions that you name) |
 | `bugpatrol fix [--issue <id>]` | Fix the worst open issues, then retest each fix |
 | `bugpatrol retest --issue <id>` | Retest one fix in the app, from its worktree |
+| `bugpatrol review <pr> [--dry-run] [--force] [--steps N]` | Review one pull request in the running app, and comment what it introduces. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol publish [--issue <id>] [--dry-run]` | Open PRs and issues on GitHub, or write them to local files. Refer to [GitHub](github.md) |
 | `bugpatrol ci [--issue <id>] [--wait]` | Watch the CI checks of each Bugpatrol PR, and let the fixer fix a failed check. Refer to [GitHub](github.md#5-make-ci-green) |
 | `bugpatrol [--once] [--force]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again |

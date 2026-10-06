@@ -17,16 +17,14 @@ import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { closeOnGitHub } from '../github.js';
 import { startApp } from '../lifecycle.js';
 import { explorerRetestSystem, judgeRetestSystem } from '../prompts.js';
-import { replayRoutine, replaySteps } from '../replay.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
-import { explorerTools } from '../tools/explorer.js';
 import { lessonTools } from '../tools/memory.js';
-import type { Tool } from '../types.js';
+import type { RoleOutcome, Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
-import { stopOnCancellation } from './explorer.js';
-import { linkEnvFiles, runFixer, stepWords } from './fixer.js';
+import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { linkEnvFiles, runFixer } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
 import { reflectOnSession } from './reflect.js';
 
@@ -39,15 +37,6 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 });
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
-async function image(root: string, file?: string): Promise<{ type: 'image'; png: Buffer }[]> {
-  if (!file) return [];
-  try {
-    return [{ type: 'image', png: await readFile(resolve(root, file)) }];
-  } catch {
-    return [];
-  }
-}
-
 type Deps = {
   createDriver?: typeof makeDriver;
   createRuntime?: typeof makeRuntime;
@@ -57,10 +46,8 @@ type Deps = {
   isMerged?: (fix: FixProposal) => Promise<boolean>;
 };
 
-type Target = { shot: RetestShot; steps: RoutineStep[] };
-
-async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Target[]> {
-  const targets: Target[] = [];
+async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<CaptureTarget[]> {
+  const targets: CaptureTarget[] = [];
   const add = (
     screenId: string | undefined,
     routineId: string | undefined,
@@ -169,192 +156,25 @@ export async function retestFix(
     const explorerRuntime = runtime(config.agents.explorer.use);
     await session.activity(`Retesting ${issue.title}`, 0, explorerRuntime.label);
     session.emit({ kind: 'session-start', summary: `Retesting the fix for: ${issue.title}` });
-    let steps = 0;
-    let cost = 0;
-    let explorerStop = 'done';
+    let outcome: RoleOutcome | undefined;
     try {
-      const targetSchema = { target: { type: 'integer', minimum: 1, maximum: targets.length } };
-      const selected = (input: Record<string, unknown>) =>
-        Number.isInteger(input.target) ? targets[Number(input.target) - 1] : undefined;
-      let finishTried = false;
-      let finishSummary = '';
-      const allowed = new Set([
-        'look',
-        'tap',
-        'type',
-        'press',
-        'scroll',
-        'back',
-        'open',
-        'wait',
-        'run_routine',
-        'switch_window',
-        'save_lesson',
-      ]);
-      const tools: Tool[] = explorerTools(session)
-        .filter((tool) => allowed.has(tool.name))
-        .map((tool) =>
-          tool.name !== 'run_routine'
-            ? tool
-            : {
-                ...tool,
-                async run(input) {
-                  const id = String(input.id ?? '');
-                  const result = await replayRoutine(session, id, { save: false, onFixBuild: !options.build });
-                  if (!result.ok)
-                    return {
-                      ...response(`Routine ${id} failed at step ${result.failedStep ?? 'dependency'}: ${result.error}`),
-                      isError: true,
-                    };
-                  await driver!.settle();
-                  const observation = await driver!.observe();
-                  const screenshot = await session.capture(observation, `routine-${id}`);
-                  return {
-                    content: [
-                      { type: 'image' as const, png: observation.screenshot },
-                      {
-                        type: 'text' as const,
-                        text: session.vars.redact(
-                          `Replayed ${id}. Elements: ${observation.elements.map((item) => `[${item.ref}] ${item.role} ${item.name}`).join('; ')}`,
-                        ) as string,
-                      },
-                    ],
-                    meta: { screenshot, summary: `Replayed the routine ${id}` },
-                  };
-                },
-              },
-        );
-      tools.push(
-        {
-          name: 'replay_issue_steps',
-          description: 'Replay the target steps after the routine.',
-          inputSchema: schema(targetSchema, ['target']),
-          async run(input) {
-            const target = selected(input);
-            if (!target) return { ...response('Choose a valid target number.'), isError: true };
-            const result = await replaySteps(session, target.steps);
-            if (!result.ok)
-              return { ...response(`Issue steps failed at ${result.failedStep}: ${result.error}`), isError: true };
-            await driver!.settle();
-            const observation = await driver!.observe();
-            const screenshot = await session.capture(observation, `retest-steps-${input.target}`);
-            return {
-              content: [
-                { type: 'image', png: observation.screenshot },
-                {
-                  type: 'text',
-                  text: session.vars.redact(
-                    `Replayed issue steps. Elements: ${observation.elements.map((item) => `[${item.ref}] ${item.role} ${item.name}`).join('; ')}`,
-                  ) as string,
-                },
-              ],
-              meta: { screenshot, summary: `Replayed steps for screen ${input.target}` },
-            };
-          },
-        },
-        {
-          name: 'view_before',
-          description: 'View the target screenshot before the fix.',
-          inputSchema: schema(targetSchema, ['target']),
-          async run(input) {
-            const target = selected(input);
-            if (!target) return { ...response('Choose a valid target number.'), isError: true };
-            const content: Awaited<ReturnType<Tool['run']>>['content'] = [
-              { type: 'text', text: `Screen ${input.target}: ${target.shot.screenId ?? '(unknown)'}` },
-            ];
-            content.push(...(await image(root, target.shot.before)));
-            return { content };
-          },
-        },
-        {
-          name: 'capture_after',
-          description: 'Capture the screen after replaying the flow.',
-          inputSchema: schema({ ...targetSchema, note: string, reached: { type: 'boolean' } }, [
-            'target',
-            'note',
-            'reached',
-          ]),
-          async run(input) {
-            const target = selected(input);
-            if (!target) return { ...response('Choose a valid target number.'), isError: true };
-            await driver!.settle();
-            const observation = await driver!.observe();
-            target.shot.after = await session.capture(observation, `retest-after-${input.target}`);
-            target.shot.note = String(input.note ?? '');
-            target.shot.reached = input.reached === true;
-            return {
-              ...response(`Captured after screenshot for screen ${input.target}: ${target.shot.after}`),
-              meta: { screenshot: target.shot.after, summary: `Retest capture: ${target.shot.note}` },
-            };
-          },
-        },
-        {
-          name: 'finish_retest',
-          description: 'Finish after capturing every target.',
-          inputSchema: schema({ summary: string }, ['summary']),
-          async run(input) {
-            const missing = targets.flatMap((target, index) => (target.shot.after ? [] : [index + 1]));
-            if (missing.length && !finishTried) {
-              finishTried = true;
-              return {
-                ...response(
-                  `Missing captures for target numbers: ${missing.join(', ')}. Capture them, then finish again.`,
-                ),
-                isError: true,
-              };
-            }
-            finishSummary = String(input.summary ?? '');
-            return { ...response(finishSummary), done: true };
-          },
-        },
-      );
       const guide = config.app.instructions;
       const instructions = guide ? await readFile(resolve(root, guide), 'utf8') : '';
-      const result = await explorerRuntime.run(
-        {
-          role: 'explorer',
-          sessionId: record.id,
-          system: explorerRetestSystem(
-            config.app.platform,
-            instructions,
-            lessonsFor(await workspace.readMemory(), 'explorer'),
-          ).replace(
-            'a build with a proposed fix',
-            options.build === 'main' ? 'the main build after a merged fix' : 'a build with a proposed fix',
-          ),
-          prompt: `Issue: ${issue.title}\nSeverity: ${issue.severity}\n${issue.body}\nTargets:\n${targets
-            .map(
-              (target, index) =>
-                `${index + 1}. screen ${target.shot.screenId ?? '(unknown)'} — routine ${target.shot.routineId ?? '(none)'} — steps: ${target.steps.map(stepWords).join('; ') || '(none)'}`,
-            )
-            .join('\n')}`,
-          tools: tools.map((tool) => stopOnCancellation(session, tool)),
-          maxSteps: Math.max(config.agents.fixer.retest.maxSteps, 12 * targets.length),
-          budgetUsd: config.agents.fixer.retest.budgetUsd,
-          timeoutMs: config.agents.explorer.timeoutMs,
-        },
-        session.emit,
-      );
-      steps = result.steps;
-      cost = result.costUsd;
-      explorerStop = result.stop;
-      if (!finishSummary && !targets.some((target) => target.shot.after))
-        targets[0]!.shot.note = `The explorer stopped without capture_after (${result.stop}).`;
+      outcome = await captureTargets(session, explorerRuntime, targets, {
+        replay: { save: false, onFixBuild: !options.build },
+        system: explorerRetestSystem(
+          config.app.platform,
+          instructions,
+          lessonsFor(await workspace.readMemory(), 'explorer'),
+        ).replace(
+          'a build with a proposed fix',
+          options.build === 'main' ? 'the main build after a merged fix' : 'a build with a proposed fix',
+        ),
+        prompt: `Issue: ${issue.title}\nSeverity: ${issue.severity}\n${issue.body}\nTargets:\n${targetLines(targets)}`,
+      });
     } finally {
-      if (!targets.some((target) => target.shot.after) && targets[0]) {
-        targets[0].shot.note ??= 'The explorer stopped without capture_after.';
-        targets[0].shot.reached = false;
-        try {
-          targets[0].shot.after = await session.capture(await driver.observe(), 'retest-after-1');
-        } catch {
-          /* no screen */
-        }
-      }
-      for (const target of targets)
-        if (!target.shot.after) {
-          target.shot.reached = false;
-          target.shot.note = 'The explorer did not reach this screen.';
-        }
+      const cost = outcome?.costUsd ?? 0;
+      const explorerStop = outcome?.stop ?? 'done';
       retest.after = targets[0]?.shot.after;
       retest.note = targets[0]?.shot.note;
       retest.costUsd = (retest.costUsd ?? 0) + cost;
@@ -362,7 +182,7 @@ export async function retestFix(
         summary:
           `Retest capture: ${retest.note ?? 'No capture'}` +
           (explorerStop === 'done' ? '' : `; stopped: ${explorerStop}`),
-        steps,
+        steps: outcome?.steps ?? 0,
         costUsd: cost,
       });
       session.emit({ kind: 'session-end', summary: `Retest capture: ${retest.note ?? 'No capture'}` });

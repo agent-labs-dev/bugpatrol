@@ -53,3 +53,4 @@ The dashboard shows the files that the agents write. You can also read them dire
 | `.bugpatrol/runs/memory.json` | The lessons |
 | `.bugpatrol/runs/agents.json` | What each agent does now |
 | `.bugpatrol/runs/publish/` | The reports from `publish --dry-run` |
+| `.bugpatrol/runs/reviews/pr-<number>.json` | The last review of one pull request. The dashboard does not show it yet |
