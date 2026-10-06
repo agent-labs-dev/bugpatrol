@@ -181,6 +181,7 @@ describe('pull request review', () => {
       );
       expect(decisions).toContain(review.findings[0]!.candidateId);
       expect((await git(f.source, 'worktree', 'list')).split('\n')).toHaveLength(1);
+      expect(await git(f.source, 'for-each-ref', 'refs/bugpatrol')).toBe('');
       expect(await f.workspace.readAppMap()).toBeUndefined();
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -272,6 +273,7 @@ describe('pull request review', () => {
           createDriver: screens,
         });
       await expect(run()).rejects.toThrow(/comes from a fork/);
+      expect(await git(f.source, 'for-each-ref', 'refs/bugpatrol')).toBe('');
       const off = parseConfig({ version: 1, app: { source: 'source', connect: { url: 'fake://home' } } });
       await expect(run(off)).rejects.toThrow(/GitHub is off/);
       await mkdir(join(f.root, '.bugpatrol', 'runs'), { recursive: true });

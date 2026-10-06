@@ -111,6 +111,9 @@ type Context = {
   log: (message: string) => void;
 };
 
+/** Holds the fetched pull request commit for the time of one review. */
+const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
+
 async function loadPullRequest(
   gh: Gh,
   repo: string,
@@ -129,7 +132,7 @@ async function loadPullRequest(
       `PR #${number} comes from a fork. A review runs its code on this machine, with the secrets of the app. ` +
         'Read the diff first. If you trust it, run the review again with --allow-fork.',
     );
-  const headRef = `refs/bugpatrol/pr-${number}`;
+  const headRef = headRefOf(number);
   const baseRef = `refs/remotes/origin/${view.baseRefName}`;
   await git(
     source,
@@ -622,17 +625,22 @@ export async function reviewPullRequest(
   const source = resolve(root, config.app.source);
   const log = opts.onLog ?? (() => {});
   const { repo } = await resolveRepo(gh, config, source);
-  const pr = await loadPullRequest(gh, repo, source, number, Boolean(opts.allowFork));
-  const ctx: Context = { root, source, config, workspace, repo, pr, opts, log };
-  const last = await workspace.readReview(number);
-  let review: PrReview;
-  if (last?.status === 'finished' && last.head === pr.head && !opts.force) {
-    log(`PR #${number} has a review of ${short(pr.head)}: published it again. Use --force to test the commit again.`);
-    review = last;
-  } else {
-    log(`Reviewing PR #${number} at ${short(pr.head)} against ${short(pr.base)} on ${pr.baseRef}.`);
-    review = await runReview(ctx);
+  try {
+    const pr = await loadPullRequest(gh, repo, source, number, Boolean(opts.allowFork));
+    const ctx: Context = { root, source, config, workspace, repo, pr, opts, log };
+    const last = await workspace.readReview(number);
+    let review: PrReview;
+    if (last?.status === 'finished' && last.head === pr.head && !opts.force) {
+      log(`PR #${number} has a review of ${short(pr.head)}: published it again. Use --force to test the commit again.`);
+      review = last;
+    } else {
+      log(`Reviewing PR #${number} at ${short(pr.head)} against ${short(pr.base)} on ${pr.baseRef}.`);
+      review = await runReview(ctx);
+    }
+    await publishComment(ctx, gh, review);
+    return review;
+  } finally {
+    // The ref of a pull request that is not there yet deletes as a no-op.
+    await git(source, 'update-ref', '-d', headRefOf(number));
   }
-  await publishComment(ctx, gh, review);
-  return review;
 }
