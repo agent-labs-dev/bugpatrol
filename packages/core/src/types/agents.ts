@@ -302,6 +302,9 @@ export type ReviewFinding = {
   title: string;
   severity: Severity;
   reason: string;
+  /** The changed line that causes an introduced problem, when the judge found it in the diff. */
+  file?: string;
+  line?: number;
   /** The flow, in words, from the routine to the problem. */
   steps: string[];
   /** Workspace-relative screenshots of the same flow on the two builds. */
@@ -326,7 +329,8 @@ export type PrReview = {
   /** The explorer's own account of what it tested. */
   tested?: string;
   findings: ReviewFinding[];
-  comment?: { url: string; at: string };
+  /** The review on GitHub. */
+  posted?: { url: string; at: string };
   error?: string;
   costUsd: number;
 };

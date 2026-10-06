@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { type PrReview, parseConfig, paths, type ReviewVerdict } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from './github.js';
-import { REVIEW_MARKER, renderReviewComment } from './review-comment.js';
+import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER } from './review-comment.js';
 import { reviewPullRequest } from './roles/review.js';
 import { FakeDriver } from './testing/fake-driver.js';
 import type { RoleTask, Runtime } from './types.js';
@@ -49,7 +49,8 @@ async function fixture(github: Record<string, unknown> = { enabled: true, repo: 
   return { root, source, head, base: await git(source, 'rev-parse', 'main'), config, workspace: new Workspace(root) };
 }
 
-function fakeGh(state: { fork?: boolean; comment?: string } = {}) {
+/** `reviews` and `comments` are the rows that the jq filters of the review print. */
+function fakeGh(state: { fork?: boolean; reviews?: string; comments?: string } = {}) {
   const calls: { args: string[]; input?: string }[] = [];
   const gh: Gh = async (args, opts) => {
     calls.push({ args, input: opts?.input });
@@ -64,28 +65,42 @@ function fakeGh(state: { fork?: boolean; comment?: string } = {}) {
         baseRefName: 'main',
         isCrossRepository: Boolean(state.fork),
       });
-    if (args.includes('--paginate')) return state.comment ?? '';
+    if (args.includes('--paginate')) return (args[2]!.endsWith('/reviews') ? state.reviews : state.comments) ?? '';
+    if (args.includes('DELETE')) return '';
+    if (args.some((arg) => arg.includes('/reviews')))
+      return JSON.stringify({ html_url: 'https://github.com/o/r/pull/7#pullrequestreview-1' });
     if (args.includes('PUT')) return '{}';
-    if (args.includes('POST') || args.includes('PATCH'))
-      return JSON.stringify({ html_url: 'https://github.com/o/r/pull/7#issuecomment-1' });
     if (args[1]?.includes('/git/ref/heads/')) return '{}';
     // An image that the assets branch does not have yet.
     if (args[1]?.includes('/contents/')) throw Object.assign(new Error('HTTP 404'), { stderr: 'Not Found' });
     throw new Error(`Unexpected gh ${args.join(' ')}`);
   };
-  const posted = () => {
-    const call = calls.find((item) => item.args.includes('POST') || item.args.includes('PATCH'));
-    return call ? { args: call.args, body: (JSON.parse(call.input!) as { body: string }).body } : undefined;
+  const sent = (method: string, path: string) =>
+    calls
+      .filter((call) => call.args.includes(method) && call.args.some((arg) => arg.includes(path)))
+      .map((call) => ({
+        path: call.args.find((arg) => arg.startsWith('repos/'))!,
+        input: call.input ? (JSON.parse(call.input) as Record<string, unknown>) : undefined,
+      }));
+  type Posted = {
+    commit_id: string;
+    event: string;
+    body: string;
+    comments: { path: string; line: number; side: string; body: string }[];
   };
-  return { gh, calls, posted };
+  const posted = () => sent('POST', '/reviews').map((call) => call.input as Posted);
+  return { gh, calls, sent, posted, state };
 }
 
 const tool = (task: RoleTask, name: string) => task.tools.find((item) => item.name === name)!;
 const screens = () =>
   new FakeDriver({ home: { elements: [] }, settings: { elements: [], color: 40 } }, 'home') as FakeDriver;
 
-/** The three agents of a review, scripted: the explorer reports `reports` bugs, and the judge gives `verdict`. */
-function scripted(verdict: ReviewVerdict, reports = 1) {
+/**
+ * The three agents of a review, scripted: the explorer reports `reports` bugs, and the judge gives `verdict`.
+ * With `line`, the judge puts the finding on that line of settings.txt.
+ */
+function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
   const tasks: RoleTask[] = [];
   const runtime: Runtime = {
     label: 'scripted',
@@ -110,13 +125,17 @@ function scripted(verdict: ReviewVerdict, reports = 1) {
         const id = /can_[a-f0-9]+/.exec(task.prompt)![0];
         const view = await tool(task, 'view_finding').run({ id });
         expect(view.content.filter((item) => item.type === 'image')).toHaveLength(2);
-        await tool(task, 'classify').run({
+        const input = {
           id,
           verdict,
           title: 'The save button does nothing on Settings',
           severity: 'major',
           reason: 'The base build saves, and this build does not: settings.txt changed the handler.',
-        });
+        };
+        // A line that the diff does not show would make GitHub refuse the whole review.
+        const wrong = await tool(task, 'classify').run({ ...input, file: 'settings.txt', line: 99 });
+        expect(wrong.isError).toBe(true);
+        await tool(task, 'classify').run({ ...input, ...(line ? { file: 'settings.txt', line } : {}) });
         await tool(task, 'finish').run({ summary: 'Done.' });
       }
       return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Tested the settings screen.' };
@@ -126,11 +145,11 @@ function scripted(verdict: ReviewVerdict, reports = 1) {
 }
 
 describe('pull request review', () => {
-  it('tests the pull request build, repeats the flow on the base, and comments what the PR introduces', async () => {
+  it('tests the pull request build, repeats the flow on the base, and comments on the line that causes the problem', async () => {
     const f = await fixture();
     try {
       const { gh, posted } = fakeGh();
-      const agents = scripted('introduced');
+      const agents = scripted('introduced', 1, 1);
       const drivers: FakeDriver[] = [];
       const review = await reviewPullRequest(f.root, f.config, 7, {
         gh,
@@ -145,6 +164,8 @@ describe('pull request review', () => {
         {
           verdict: 'introduced',
           title: 'The save button does nothing on Settings',
+          file: 'settings.txt',
+          line: 1,
           steps: ['Open fake://settings'],
           baseNote: 'Save works on this build.',
         },
@@ -159,19 +180,25 @@ describe('pull request review', () => {
       expect(names).toEqual(expect.arrayContaining(['open', 'run_routine', 'report_bug', 'finish']));
       for (const name of ['record_screen', 'save_routine', 'save_lesson']) expect(names).not.toContain(name);
       expect(explorer!.prompt).toContain('PULL REQUEST #7: Change settings');
-      expect(explorer!.prompt).toContain('+save is broken');
+      expect(explorer!.prompt).toContain('+    1 save is broken');
       expect(base!.system).toContain('The app now runs the base build');
       expect(judge!.prompt).toContain('Base build: reached.');
 
-      const comment = posted()!;
-      expect(comment.args).toContain('repos/o/r/issues/7/comments');
-      expect(comment.body).toContain(REVIEW_MARKER);
-      expect(comment.body).toContain('**1 problem that this pull request introduces.**');
-      expect(comment.body.match(/<img src="https:\/\/github\.com\/o\/r\/blob\/bugpatrol-assets\/pr-7\//g)).toHaveLength(
-        2,
-      );
+      // A review that comments: it can never block the merge.
+      const [sent] = posted();
+      expect(posted()).toHaveLength(1);
+      expect(sent).toMatchObject({ commit_id: f.head, event: 'COMMENT' });
+      expect(sent!.body).toContain(REVIEW_MARKER);
+      expect(sent!.body).toContain('**1 problem that this pull request introduces.**');
+      expect(sent!.body).toContain('Each one is a comment on the changed line that causes it.');
+      expect(sent!.body).not.toContain('<img');
+      expect(sent!.comments).toMatchObject([{ path: 'settings.txt', line: 1, side: 'RIGHT' }]);
+      expect(sent!.comments[0]!.body).toContain('**The save button does nothing on Settings**');
+      expect(
+        sent!.comments[0]!.body.match(/<img src="https:\/\/github\.com\/o\/r\/blob\/bugpatrol-assets\/pr-7\//g),
+      ).toHaveLength(2);
       expect(await f.workspace.readReview(7)).toMatchObject({
-        comment: { url: 'https://github.com/o/r/pull/7#issuecomment-1' },
+        posted: { url: 'https://github.com/o/r/pull/7#pullrequestreview-1' },
       });
 
       // A later `bugpatrol judge` must not file this as an issue of the main branch.
@@ -188,22 +215,49 @@ describe('pull request review', () => {
     }
   });
 
-  it('leaves a problem of the base build to the normal judge, and edits the comment of the last review', async () => {
+  it('keeps an introduced problem in the review body when the judge names no line', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh({ comment: '99' });
-      const review = await reviewPullRequest(f.root, f.config, 7, {
+      const { gh, posted } = fakeGh();
+      await reviewPullRequest(f.root, f.config, 7, {
         gh,
-        createRuntime: scripted('pre-existing').createRuntime,
+        createRuntime: scripted('introduced').createRuntime,
         createDriver: screens,
       });
+      const [sent] = posted();
+      expect(sent!.comments).toEqual([]);
+      expect(sent!.body).toContain('#### 1. The save button does nothing on Settings');
+      expect(sent!.body.match(/<img /g)).toHaveLength(2);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a problem of the base build to the normal judge, and replaces the review of an older commit', async () => {
+    const f = await fixture();
+    try {
+      // Review 55 is of an older commit. A person answered its comment 2.
+      const { gh, posted, sent } = fakeGh({
+        reviews: '55 0000000000000000000000000000000000000000',
+        comments: ['1 55 null', '2 55 null', '3 55 2', '4 77 null'].join('\n'),
+      });
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('pre-existing', 1, 1).createRuntime,
+        createDriver: screens,
+      });
+      // A line is for an introduced problem only.
       expect(review.findings).toMatchObject([{ verdict: 'pre-existing' }]);
+      expect(review.findings[0]!.file).toBeUndefined();
       expect(existsSync(join(paths.session(f.root, review.sessions.explorer!), 'decisions.jsonl'))).toBe(false);
-      const comment = posted()!;
-      expect(comment.args).toEqual(expect.arrayContaining(['PATCH', 'repos/o/r/issues/comments/99']));
-      expect(comment.body).toContain('**No problem found that this pull request introduces.**');
-      expect(comment.body).toContain('Already on `main`, not from this pull request (1)');
-      expect(comment.body).not.toContain('<img');
+      expect(posted()).toHaveLength(1);
+      expect(posted()[0]!.comments).toEqual([]);
+      expect(posted()[0]!.body).toContain('**No problem found that this pull request introduces.**');
+      expect(posted()[0]!.body).toContain('Already on `main`, not from this pull request (1)');
+      const replaced = sent('PUT', '/reviews/');
+      expect(replaced.map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
+      expect(replaced[0]!.input!.body).toContain(SUPERSEDED_MARKER);
+      expect(sent('DELETE', '/comments/').map((call) => call.path)).toEqual(['repos/o/r/pulls/comments/1']);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -227,17 +281,41 @@ describe('pull request review', () => {
       expect(agents.tasks).toHaveLength(1);
       expect(review).toMatchObject({ status: 'finished', findings: [], tested: 'Tested the settings screen.' });
       expect(review.sessions.base).toBeUndefined();
-      expect(posted()!.body).toContain('tested what the diff can affect');
+      expect(posted()[0]!.body).toContain('tested what the diff can affect');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
   });
 
-  it('publishes the last review again on the same commit, and tests again with force', async () => {
+  it('on the same commit, updates the body of its review and tests nothing', async () => {
+    const f = await fixture();
+    try {
+      const github = fakeGh();
+      const agents = scripted('introduced', 1, 1);
+      const run = () =>
+        reviewPullRequest(f.root, f.config, 7, {
+          gh: github.gh,
+          createRuntime: agents.createRuntime,
+          createDriver: screens,
+        });
+      await run();
+      github.state.reviews = `90 ${f.head}`;
+      await run();
+      expect(agents.tasks).toHaveLength(3);
+      // A second review of the same commit would notify the author again for nothing.
+      expect(github.posted()).toHaveLength(1);
+      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/90']);
+      expect(github.sent('DELETE', '/comments/')).toEqual([]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a dry run to a file, publishes it again on the same commit, and tests again with force', async () => {
     const f = await fixture({ enabled: false });
     try {
       const { gh, calls, posted } = fakeGh();
-      const agents = scripted('introduced');
+      const agents = scripted('introduced', 1, 1);
       const run = (opts: { force?: boolean } = {}) =>
         reviewPullRequest(f.root, f.config, 7, {
           gh,
@@ -249,10 +327,10 @@ describe('pull request review', () => {
       await run();
       expect(agents.tasks).toHaveLength(3);
       // A dry run reads the pull request, and writes to a local file only.
-      expect(posted()).toBeUndefined();
+      expect(posted()).toEqual([]);
       expect(calls.some((call) => call.args.includes('PUT'))).toBe(false);
-      const file = join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md');
-      expect(await readFile(file, 'utf8')).toContain('The save button does nothing on Settings');
+      const file = await readFile(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'), 'utf8');
+      expect(file).toContain('On `settings.txt` line 1:\n\n**The save button does nothing on Settings**');
       await run();
       expect(agents.tasks).toHaveLength(3);
       await run({ force: true });
@@ -292,7 +370,31 @@ describe('pull request review', () => {
   });
 });
 
-describe('review comment', () => {
+describe('numbered diff', () => {
+  it('numbers the lines of the new file, and lists the lines that take a comment', () => {
+    const diff = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -10,3 +10,3 @@ function a() {',
+      ' keep',
+      '-old',
+      '+new',
+      ' end',
+      'diff --git a/gone.ts b/gone.ts',
+      '--- a/gone.ts',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-bye',
+    ].join('\n');
+    const { text, lines } = numberDiff(diff);
+    expect(text.split('\n').slice(4, 8)).toEqual(['    10 keep', '-      old', '+   11 new', '    12 end']);
+    expect([...lines.keys()]).toEqual(['src/a.ts']);
+    expect([...lines.get('src/a.ts')!]).toEqual([10, 11, 12]);
+  });
+});
+
+describe('review rendering', () => {
   const review: PrReview = {
     version: 1,
     pr: { number: 7, url: 'https://github.com/o/r/pull/7', title: 'Change settings' },
@@ -322,9 +424,21 @@ describe('review comment', () => {
         title: 'A critical problem',
         severity: 'critical',
         reason: 'Critical reason.',
+        file: 'src/a.ts',
+        line: 11,
         steps: [],
         head: 'head2.png',
         base: 'base2.png',
+      },
+      {
+        candidateId: 'can_5',
+        verdict: 'introduced',
+        title: 'A problem on a line outside the diff',
+        severity: 'major',
+        reason: 'Major reason.',
+        file: 'src/a.ts',
+        line: 400,
+        steps: [],
       },
       { candidateId: 'can_3', verdict: 'unclear', title: 'Unclear', severity: 'minor', reason: 'No base.', steps: [] },
       {
@@ -337,15 +451,27 @@ describe('review comment', () => {
       },
     ],
   };
+  const render = () =>
+    renderReview(
+      review,
+      (path) => `https://img/${path}`,
+      (file, line) => file === 'src/a.ts' && line === 11,
+    );
 
-  it('puts the worst introduced problem first, and folds the rest', () => {
-    const body = renderReviewComment(review, (path) => `https://img/${path}`);
-    expect(body.startsWith(REVIEW_MARKER)).toBe(true);
-    expect(body).toContain('**2 problems that this pull request introduces.**');
-    expect(body).toContain('(`aaaaaaa`) and from its base (`bbbbbbb` on `main`)');
-    expect(body.indexOf('#### 1. A critical problem')).toBeLessThan(body.indexOf('#### 2. A minor problem'));
-    expect(body).toContain(
+  it('puts a problem on its line, and keeps the others in the body, worst first', () => {
+    const { body, comments } = render();
+    expect(comments).toEqual([{ path: 'src/a.ts', line: 11, body: expect.stringContaining('**A critical problem**') }]);
+    expect(comments[0]!.body).toContain(
       '| <img src="https://img/base2.png" width="360"> | <img src="https://img/head2.png" width="360"> |',
+    );
+    expect(body.startsWith(REVIEW_MARKER)).toBe(true);
+    expect(body).toContain('**3 problems that this pull request introduces.**');
+    expect(body).toContain('1 of them is a comment on the changed line that causes it. The others are below.');
+    expect(body).toContain('(`aaaaaaa`) and from its base (`bbbbbbb` on `main`)');
+    expect(body).not.toContain('A critical problem');
+    // A line that the diff does not show would make GitHub refuse the review.
+    expect(body.indexOf('#### 1. A problem on a line outside the diff')).toBeLessThan(
+      body.indexOf('#### 2. A minor problem'),
     );
     // With no base screenshot, the cell says why.
     expect(body).toContain('| _Not reached on the base build. The screen is new._ | <img src="https://img/head.png"');
@@ -355,6 +481,6 @@ describe('review comment', () => {
     expect(body).toContain('<details><summary>Could not compare (1)</summary>');
     expect(body).toContain('<details><summary>Reported, then judged not a bug (1)</summary>');
     expect(body).not.toContain('Already on `main`');
-    expect(body).toContain('This comment does not block the merge.');
+    expect(body).toContain('This review does not block the merge.');
   });
 });

@@ -199,7 +199,7 @@ ${input.pr.body.trim() || '(no description)'}
 CHANGED FILES
 ${input.pr.files.join('\n') || '(none)'}
 
-DIFF
+DIFF (each line has its sign, then its line number in the new file)
 ${input.pr.diff}
 
 You have ${input.maxSteps} steps.
@@ -261,6 +261,9 @@ HOW TO WRITE A VERDICT
   with difficulty), cosmetic (looks wrong only).
 - reason: one or two sentences. Say what differs between the two builds. Name the changed file that causes it, when
   the diff shows it.
+- file and line, for an introduced finding only: the changed line that causes the problem. Use the path and the line
+  number that the diff shows. Bugpatrol puts the finding on that line of the pull request, where the author reads
+  it. Leave both out when the diff does not show the cause. Do not guess a line.
 
 Be strict. A wrong "introduced" costs the author time, and the team then ignores the next comment. When every
 finding has a verdict, call finish with one sentence.

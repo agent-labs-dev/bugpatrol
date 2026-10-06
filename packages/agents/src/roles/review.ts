@@ -20,7 +20,7 @@ import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
 import { activePatrolPid } from '../patrol.js';
 import { explorerBaseSystem, explorerReviewPrompt, explorerReviewSystem, judgeReviewSystem } from '../prompts.js';
-import { REVIEW_MARKER, renderReviewComment } from '../review-comment.js';
+import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER, supersededBody } from '../review-comment.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
 import { explorerTools } from '../tools/explorer.js';
@@ -78,7 +78,7 @@ export type ReviewOptions = {
   createRuntime?: typeof makeRuntime;
   onLog?: (message: string) => void;
   onSession?: (session?: AgentSession) => void;
-  /** Write the comment to `.bugpatrol/runs/reviews/`, and send nothing to GitHub. */
+  /** Write the review to `.bugpatrol/runs/reviews/`, and send nothing to GitHub. */
   dryRun?: boolean;
   /** Test the pull request again, also when the last review tested the same commit. */
   force?: boolean;
@@ -97,7 +97,10 @@ type PullRequest = {
   /** The merge base: the base branch as it was when the pull request left it. */
   base: string;
   files: string[];
+  /** The diff, with the line number of the new file before each line. */
   diff: string;
+  /** The lines of each file that the diff shows: a review comment can go on these only. */
+  lines: Map<string, Set<number>>;
 };
 
 type Context = {
@@ -145,7 +148,7 @@ async function loadPullRequest(
   const head = await git(source, 'rev-parse', headRef);
   const base = await git(source, 'merge-base', head, baseRef);
   const files = (await git(source, 'diff', '--name-only', base, head)).split('\n').filter(Boolean);
-  const diff = await git(source, 'diff', '--no-color', base, head, '--', ...DIFF_PATHS);
+  const diff = numberDiff(await git(source, 'diff', '--no-color', base, head, '--', ...DIFF_PATHS));
   return {
     number,
     url: view.url,
@@ -155,7 +158,8 @@ async function loadPullRequest(
     head,
     base,
     files,
-    diff: diff.length > DIFF_LIMIT ? `${diff.slice(0, DIFF_LIMIT)}\n(cut: the diff is longer)` : diff,
+    diff: diff.text.length > DIFF_LIMIT ? `${diff.text.slice(0, DIFF_LIMIT)}\n(cut: the diff is longer)` : diff.text,
+    lines: diff.lines,
   };
 }
 
@@ -369,7 +373,10 @@ async function judgeFindings(
     const shot = targets[index]!.shot;
     return shot.reached ? (shot.note ?? '') : `Not reached on the base build. ${shot.note ?? ''}`.trim();
   };
-  const verdicts = new Map<string, Pick<ReviewFinding, 'verdict' | 'title' | 'severity' | 'reason'>>();
+  const verdicts = new Map<
+    string,
+    Pick<ReviewFinding, 'verdict' | 'title' | 'severity' | 'reason' | 'file' | 'line'>
+  >();
   const tools: Tool[] = [
     {
       name: 'view_finding',
@@ -396,7 +403,9 @@ async function judgeFindings(
     },
     {
       name: 'classify',
-      description: 'Give one finding its verdict, with a title of at most 80 characters and a reason.',
+      description:
+        'Give one finding its verdict, with a title of at most 80 characters and a reason. For an introduced finding, ' +
+        'add file and line when the diff shows the changed line that causes it.',
       inputSchema: schema(
         {
           id: string,
@@ -404,6 +413,8 @@ async function judgeFindings(
           title: string,
           severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
           reason: string,
+          file: string,
+          line: { type: 'integer', minimum: 1 },
         },
         ['id', 'verdict', 'title', 'severity', 'reason'],
       ),
@@ -416,11 +427,22 @@ async function judgeFindings(
             ...response(`The title has ${title.length} characters; the limit is 80. Write a shorter title.`),
             isError: true,
           };
+        const file = typeof input.file === 'string' && input.file ? input.file : undefined;
+        const line = Number.isInteger(input.line) ? Number(input.line) : undefined;
+        // GitHub refuses a whole review for one comment on a line that the diff does not show.
+        if (file && !(line && pr.lines.get(file)?.has(line)))
+          return {
+            ...response(
+              `The diff does not show line ${line ?? '(none)'} of ${file}. Use a path and a line number from the diff, or leave file and line out.`,
+            ),
+            isError: true,
+          };
         verdicts.set(String(input.id), {
           verdict: input.verdict as ReviewVerdict,
           title,
           severity: input.severity as Severity,
           reason: String(input.reason ?? '').trim(),
+          ...(file && input.verdict === 'introduced' ? { file, line } : {}),
         });
         const left = candidates.filter((candidate) => !verdicts.has(candidate.id)).map((candidate) => candidate.id);
         return response(`${input.id}: ${input.verdict}. ${left.length ? `Left: ${left.join(', ')}` : 'All decided.'}`);
@@ -446,7 +468,7 @@ async function judgeFindings(
         role: 'judge',
         sessionId: record.id,
         system: judgeReviewSystem(lessonsFor(await workspace.readMemory(), 'judge')),
-        prompt: `PULL REQUEST #${pr.number}: ${pr.title}\n${pr.body.trim() || '(no description)'}\n\nDIFF\n${pr.diff}\n\nFINDINGS\n${candidates
+        prompt: `PULL REQUEST #${pr.number}: ${pr.title}\n${pr.body.trim() || '(no description)'}\n\nDIFF (each line has its sign, then its line number in the new file)\n${pr.diff}\n\nFINDINGS\n${candidates
           .map(
             (candidate, index) =>
               `- ${candidate.id} [${candidate.severity}] on ${candidate.screenId ?? 'unknown screen'}: ${candidate.summary}. ` +
@@ -554,14 +576,72 @@ async function runReview(ctx: Context): Promise<PrReview> {
   return review;
 }
 
-/** One comment for each pull request: a new review edits the comment of the last one. */
-async function publishComment(ctx: Context, gh: Gh, review: PrReview): Promise<void> {
+/** The marked reviews on the pull request that no later review replaced yet. */
+async function openReviews(gh: Gh, reviews: string): Promise<{ id: string; commit: string }[]> {
+  const select = `.[] | select(.body | contains("${REVIEW_MARKER}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
+  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id)"`]))
+    .split('\n')
+    .filter(Boolean)
+    .map((row) => {
+      const [id, commit] = row.split(' ');
+      return { id: id!, commit: commit! };
+    });
+}
+
+/**
+ * GitHub keeps a submitted review for good, so an old review gets a one-line
+ * body, and Bugpatrol deletes its line comments. A comment that a person
+ * answered stays: the answer is theirs.
+ */
+async function supersede(ctx: Context, gh: Gh, old: { id: string }[], head: string): Promise<void> {
+  const pulls = `repos/${ctx.repo}/pulls`;
+  const ids = new Set(old.map((review) => review.id));
+  for (const id of ids)
+    await gh(['api', '-X', 'PUT', `${pulls}/${ctx.pr.number}/reviews/${id}`, '--input', '-'], {
+      input: JSON.stringify({ body: supersededBody(head) }),
+    });
+  const rows = (
+    await gh([
+      'api',
+      '--paginate',
+      `${pulls}/${ctx.pr.number}/comments`,
+      '--jq',
+      '.[] | "\\(.id) \\(.pull_request_review_id) \\(.in_reply_to_id)"',
+    ])
+  )
+    .split('\n')
+    .filter(Boolean)
+    .map((row) => row.split(' ') as [string, string, string]);
+  const answered = new Set(rows.map(([, , parent]) => parent));
+  for (const [id, review, parent] of rows)
+    if (ids.has(review) && parent === 'null' && !answered.has(id))
+      await gh(['api', '-X', 'DELETE', `${pulls}/comments/${id}`]);
+}
+
+/**
+ * Posts a pull request review with the event COMMENT, which never blocks a
+ * merge. A new test of the pull request posts a new review and replaces the
+ * older ones. The same result on the same commit only updates the body.
+ */
+async function publishReview(ctx: Context, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
   const { root, config, repo, pr } = ctx;
   const redact = (text: string) => new Vars(config.app.secrets).redact(text) as string;
+  const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
   if (ctx.opts.dryRun) {
     const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff);
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, redact(renderReviewComment(review, (path) => resolve(root, path))));
+    await writeFile(
+      file,
+      redact(
+        [
+          rendered.body,
+          ...rendered.comments.map(
+            (comment) => `---\n\nOn \`${comment.path}\` line ${comment.line}:\n\n${comment.body}`,
+          ),
+        ].join('\n\n'),
+      ),
+    );
     ctx.log(`Wrote the review of PR #${pr.number} to ${file}. Nothing went to GitHub.`);
     return;
   }
@@ -579,28 +659,48 @@ async function publishComment(ctx: Context, gh: Gh, review: PrReview): Promise<v
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
     }
   }
-  const body = JSON.stringify({ body: limitBody(redact(renderReviewComment(review, (path) => urls.get(path)))) });
-  const comments = `repos/${repo}/issues/${pr.number}/comments`;
-  const [existing] = (
-    await gh(['api', '--paginate', comments, '--jq', `.[] | select(.body | contains("${REVIEW_MARKER}")) | .id`])
-  )
-    .split('\n')
-    .filter(Boolean);
-  const posted = JSON.parse(
-    existing
-      ? await gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${existing}`, '--input', '-'], { input: body })
-      : await gh(['api', '-X', 'POST', comments, '--input', '-'], { input: body }),
-  ) as { html_url: string };
-  review.comment = { url: posted.html_url, at: new Date().toISOString() };
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff);
+  const body = limitBody(redact(rendered.body));
+  const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
+  const open = await openReviews(gh, reviews);
+  const current = open.find((item) => item.commit === review.head);
+  let posted: { html_url: string };
+  if (current && !tested) {
+    posted = JSON.parse(
+      await gh(['api', '-X', 'PUT', `${reviews}/${current.id}`, '--input', '-'], { input: JSON.stringify({ body }) }),
+    );
+  } else {
+    posted = JSON.parse(
+      await gh(['api', '-X', 'POST', reviews, '--input', '-'], {
+        input: JSON.stringify({
+          commit_id: review.head,
+          event: 'COMMENT',
+          body,
+          comments: rendered.comments.map((comment) => ({
+            path: comment.path,
+            line: comment.line,
+            side: 'RIGHT',
+            body: limitBody(redact(comment.body)),
+          })),
+        }),
+      }),
+    );
+    try {
+      await supersede(ctx, gh, open, review.head);
+    } catch (error) {
+      ctx.log(`Could not replace the older review(s) of PR #${pr.number}: ${String(error).split('\n')[0]}`);
+    }
+  }
+  review.posted = { url: posted.html_url, at: new Date().toISOString() };
   await ctx.workspace.saveReview(review);
-  ctx.log(`${existing ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
+  ctx.log(`${current && !tested ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
 }
 
 /**
  * A differential review of one pull request: the explorer tests what the
  * diff can affect on the pull request build, repeats each reported flow on
  * the merge base, and the judge keeps only what the pull request introduces.
- * The review comments and never blocks a merge (ADR 0005, section 6).
+ * The result is a pull request review that comments and never blocks a merge (ADR 0005, section 6).
  */
 export async function reviewPullRequest(
   root: string,
@@ -611,7 +711,7 @@ export async function reviewPullRequest(
   if (!opts.dryRun && !config.agents.github.enabled)
     throw new ConfigError(
       'GitHub is off. Set agents.github.enabled: true in .bugpatrol/bugpatrol.yml, ' +
-        'or run `bugpatrol review <pr> --dry-run` to write the comment to .bugpatrol/runs/reviews/ only.',
+        'or run `bugpatrol review <pr> --dry-run` to write the review to .bugpatrol/runs/reviews/ only.',
     );
   const gh = opts.gh ?? defaultGh;
   const ready = await ghReady(gh);
@@ -637,7 +737,7 @@ export async function reviewPullRequest(
       log(`Reviewing PR #${number} at ${short(pr.head)} against ${short(pr.base)} on ${pr.baseRef}.`);
       review = await runReview(ctx);
     }
-    await publishComment(ctx, gh, review);
+    await publishReview(ctx, gh, review, review !== last);
     return review;
   } finally {
     // The ref of a pull request that is not there yet deletes as a no-op.

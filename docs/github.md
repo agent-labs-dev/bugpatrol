@@ -139,26 +139,27 @@ Bugpatrol reads each PR and issue that has the first label, and it updates its o
 
 ```bash
 npx bugpatrol review 123                # the number or the URL of the pull request
-npx bugpatrol review 123 --dry-run      # write the comment to a local file, and send nothing to GitHub
+npx bugpatrol review 123 --dry-run      # write the review to a local file, and send nothing to GitHub
 ```
 
-`review` tests a pull request of your team in the running app, and it comments only the problems that the pull request introduces. It does not open a PR or an issue.
+`review` tests a pull request of your team in the running app, and it posts a GitHub review of the problems that the pull request introduces. It does not open a PR or an issue.
 
 1. Bugpatrol fetches the pull request and its base branch. It compares the pull request commit with the merge base: the base branch as it was when the pull request left it.
 2. It starts the app from the pull request commit, in its own worktree. The explorer reads the diff, and it tests the screens and the flows that the change can affect. It does not test the rest of the app.
 3. If the explorer reports nothing, the review ends here. If not, Bugpatrol starts the app from the merge base, and the explorer repeats the flow of each report on that build.
 4. The judge compares the two screenshots of each report, and it reads the diff. It gives each report one verdict:
 
-   | Verdict | Meaning | In the comment |
+   | Verdict | Meaning | In the review |
    | --- | --- | --- |
-   | Introduced | The pull request build shows the problem, and the base build does not | A section with both screenshots and the steps |
+   | Introduced | The pull request build shows the problem, and the base build does not | A comment on the changed line that causes it, with both screenshots and the steps. When the judge finds no such line in the diff, a section of the review body |
    | Already on the base branch | The base build shows the problem too | A folded list. A later `bugpatrol judge` can file it as a normal issue |
    | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A folded list |
    | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A folded list |
 
-5. Bugpatrol writes one comment on the pull request. A new review edits that comment, so a pull request never gets a second one. The comment does not block the merge, and `review` sets no check.
+5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check.
+6. A new test of the pull request posts a new review. Bugpatrol then replaces the body of each older review with one line, and it deletes the line comments of that review. A comment that a person answered stays.
 
-`.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol publishes that review again and tests nothing. Use `--force` to test the same commit again.
+`.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it updates the body of the review that the commit has, or it posts the review when the commit has none. Use `--force` to test the same commit again.
 
 What you must know before you run it:
 
@@ -166,8 +167,9 @@ What you must know before you run it:
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
 - **The pull request build changes nothing that the patrol knows.** The explorer of a review records no screen, no routine, and no lesson.
+- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
-- When the app does not start from the pull request commit, `review` stops with an error and writes no comment.
+- When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 
 ## Troubleshooting
 

@@ -92,7 +92,7 @@ The judge writes a short summary. Bugpatrol adds the full report: the steps, the
 
 ## Pull request review
 
-`bugpatrol review <pr>` uses the same agents on a pull request of your team. The explorer tests what the diff can affect on the pull request build. Bugpatrol then starts the app from the merge base, and the explorer repeats the flow of each report there. The judge compares the two builds, and the comment on the pull request puts first what the pull request introduces. A review never blocks a merge, and it writes nothing to the app map, the routines, or the memory. Refer to [GitHub](github.md#7-review-a-pull-request).
+`bugpatrol review <pr>` uses the same agents on a pull request of your team. The explorer tests what the diff can affect on the pull request build. Bugpatrol then starts the app from the merge base, and the explorer repeats the flow of each report there. The judge compares the two builds. The result is a GitHub review: each problem that the pull request introduces is a comment on the changed line that causes it. A review never blocks a merge, and it writes nothing to the app map, the routines, or the memory. Refer to [GitHub](github.md#7-review-a-pull-request).
 
 ## Safety
 

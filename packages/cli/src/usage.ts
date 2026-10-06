@@ -101,10 +101,11 @@ export const COMMAND_HELP: Record<string, string> = {
   review: `bugpatrol review <pr> [--dry-run] [--force] [--allow-fork] [--steps N]
   Review one pull request in the running app. The explorer tests what the diff can affect on the pull request
   build. Bugpatrol repeats each reported flow on the base build, and the judge keeps what the pull request introduces.
-  The result is one comment on the pull request. A new review edits that comment. It never blocks the merge.
-  Needs a logged-in gh CLI. To post the comment, it also needs agents.github.enabled: true.
+  The result is a GitHub review: each introduced problem is a comment on the changed line that causes it.
+  A new review replaces the review of an older commit. It never blocks the merge.
+  Needs a logged-in gh CLI. To post the review, it also needs agents.github.enabled: true.
   <pr>            the number or the URL of the pull request
-  --dry-run       write the comment to .bugpatrol/runs/reviews/, and send nothing to GitHub
+  --dry-run       write the review to .bugpatrol/runs/reviews/, and send nothing to GitHub
   --force         test the pull request again, also when the last review tested the same commit
   --allow-fork    review a pull request from a fork: its code runs on this machine, with the secrets of the app
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
