@@ -140,6 +140,7 @@ npx bugpatrol explore        # the explorer maps the app and reports problems
 npx bugpatrol judge          # the judge files the real bugs as issues
 npx bugpatrol fix            # fix the worst issues, then retest each fix in the app
 npx bugpatrol publish        # open the PRs and issues
+npx bugpatrol review 123     # review one pull request of your team in the running app
 ```
 
 The fixer and GitHub are off until you turn them on. [Getting started](docs/getting-started.md) shows each step in full, with Electron and mobile examples.
@@ -224,7 +225,7 @@ To move a repo to the new names, rename `.bughunters/` to `.bugpatrol/` and `bug
 | [LLMs](docs/models.md) | What each agent does, and the providers for each agent |
 | [Configuration](docs/configuration.md) | All the settings in `.bugpatrol/bugpatrol.yml` |
 | [Commands](docs/commands.md) | All the CLI commands |
-| [GitHub](docs/github.md) | Set up the PRs and issues, look at the reports first, and sync the state back |
+| [GitHub](docs/github.md) | Set up the PRs and issues, look at the reports first, sync the state back, and review a pull request |
 | [The dashboard](docs/dashboard.md) | What each page shows, and the files behind it |
 | [How it works](docs/how-it-works.md) | The cycle, noise control, memory, GitHub, and safety |
 | [The deterministic gate](docs/deterministic-gate.md) | `bugpatrol run`: a merge gate for web apps that uses no agent |

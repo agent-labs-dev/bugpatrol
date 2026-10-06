@@ -91,6 +91,7 @@ try {
     case 'judge':
     case 'fix':
     case 'retest':
+    case 'review':
     case 'publish':
     case 'ci':
     case 'patrol':

@@ -1,0 +1,746 @@
+import { execFile } from 'node:child_process';
+import { appendFile, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import {
+  type BugpatrolConfig,
+  type Candidate,
+  ConfigError,
+  InfrastructureError,
+  instructionsPath,
+  type PrReview,
+  paths,
+  type ReviewFinding,
+  type ReviewVerdict,
+  type Severity,
+} from '@bugpatrol/core';
+import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
+import { startApp } from '../lifecycle.js';
+import { withSessionLogs } from '../logs.js';
+import { activePatrolPid } from '../patrol.js';
+import { explorerBaseSystem, explorerReviewPrompt, explorerReviewSystem, judgeReviewSystem } from '../prompts.js';
+import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER, supersededBody } from '../review-comment.js';
+import { createRuntime as makeRuntime } from '../runtime/index.js';
+import { AgentSession } from '../session.js';
+import { explorerTools } from '../tools/explorer.js';
+import type { Tool } from '../types.js';
+import { Vars } from '../vars.js';
+import { lessonsFor, Workspace } from '../workspace.js';
+import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { stopOnCancellation } from './explorer.js';
+import { linkEnvFiles, stepWords } from './fixer.js';
+import { overlayBugpatrol } from './overlay.js';
+
+const exec = promisify(execFile);
+const git = async (cwd: string, ...args: string[]) =>
+  (await exec('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
+const schema = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
+  type: 'object',
+  properties,
+  required,
+  additionalProperties: false,
+});
+const string = { type: 'string' };
+const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
+const short = (commit: string) => commit.slice(0, 7);
+
+/** A lockfile diff is long and says nothing about a screen. */
+const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*', ':(exclude,glob)**/*.lockb'];
+const DIFF_LIMIT = 40_000;
+
+/**
+ * The explorer on a pull request build acts and reports, and writes nothing
+ * else. A screen, a routine or a lesson from a build that may never merge
+ * must not enter the map that the patrol keeps for the main branch.
+ */
+const REVIEW_TOOLS = new Set([
+  'look',
+  'tap',
+  'tap_point',
+  'type',
+  'press',
+  'scroll',
+  'back',
+  'open',
+  'wait',
+  'request',
+  'run_routine',
+  'switch_window',
+  'report_bug',
+  'list_screens',
+  'finish',
+]);
+
+export type ReviewOptions = {
+  gh?: Gh;
+  createDriver?: typeof makeDriver;
+  createRuntime?: typeof makeRuntime;
+  onLog?: (message: string) => void;
+  onSession?: (session?: AgentSession) => void;
+  /** Write the review to `.bugpatrol/runs/reviews/`, and send nothing to GitHub. */
+  dryRun?: boolean;
+  /** Test the pull request again, also when the last review tested the same commit. */
+  force?: boolean;
+  /** Run the code of a pull request from a fork. It runs on this machine with the app's secrets. */
+  allowFork?: boolean;
+  maxSteps?: number;
+};
+
+type PullRequest = {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  baseRef: string;
+  head: string;
+  /** The merge base: the base branch as it was when the pull request left it. */
+  base: string;
+  files: string[];
+  /** The diff, with the line number of the new file before each line. */
+  diff: string;
+  /** The lines of each file that the diff shows: a review comment can go on these only. */
+  lines: Map<string, Set<number>>;
+};
+
+type Context = {
+  root: string;
+  source: string;
+  config: BugpatrolConfig;
+  workspace: Workspace;
+  repo: string;
+  pr: PullRequest;
+  opts: ReviewOptions;
+  log: (message: string) => void;
+};
+
+/** Holds the fetched pull request commit for the time of one review. */
+const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
+
+async function loadPullRequest(
+  gh: Gh,
+  repo: string,
+  source: string,
+  number: number,
+  allowFork: boolean,
+): Promise<PullRequest> {
+  const view = JSON.parse(
+    await gh(
+      ['pr', 'view', String(number), '--repo', repo, '--json', 'number,title,body,url,baseRefName,isCrossRepository'],
+      { cwd: source },
+    ),
+  ) as { number: number; title: string; body: string; url: string; baseRefName: string; isCrossRepository: boolean };
+  if (view.isCrossRepository && !allowFork)
+    throw new ConfigError(
+      `PR #${number} comes from a fork. A review runs its code on this machine, with the secrets of the app. ` +
+        'Read the diff first. If you trust it, run the review again with --allow-fork.',
+    );
+  const headRef = headRefOf(number);
+  const baseRef = `refs/remotes/origin/${view.baseRefName}`;
+  await git(
+    source,
+    'fetch',
+    '-q',
+    'origin',
+    `+refs/pull/${number}/head:${headRef}`,
+    `+refs/heads/${view.baseRefName}:${baseRef}`,
+  );
+  const head = await git(source, 'rev-parse', headRef);
+  const base = await git(source, 'merge-base', head, baseRef);
+  const files = (await git(source, 'diff', '--name-only', base, head)).split('\n').filter(Boolean);
+  const diff = numberDiff(await git(source, 'diff', '--no-color', base, head, '--', ...DIFF_PATHS));
+  return {
+    number,
+    url: view.url,
+    title: view.title,
+    body: view.body ?? '',
+    baseRef: view.baseRefName,
+    head,
+    base,
+    files,
+    diff: diff.text.length > DIFF_LIMIT ? `${diff.text.slice(0, DIFF_LIMIT)}\n(cut: the diff is longer)` : diff.text,
+    lines: diff.lines,
+  };
+}
+
+/**
+ * Starts the app from one commit of the pull request, in its own worktree,
+ * and removes the worktree after. The checkout is detached and has no work
+ * of a person in it, so the forced removal loses nothing.
+ */
+async function withBuild<T>(
+  ctx: Context,
+  name: 'head' | 'base',
+  commit: string,
+  run: (driver: Driver, vars: Vars) => Promise<T>,
+): Promise<T> {
+  const { root, source, config } = ctx;
+  const worktree = join(paths.worktrees(root), `review-${ctx.pr.number}-${name}`);
+  const remove = async () => {
+    try {
+      await lstat(worktree);
+    } catch {
+      return;
+    }
+    await git(source, 'worktree', 'remove', '--force', worktree);
+  };
+  // A review that was killed leaves its worktree behind.
+  await remove();
+  await mkdir(paths.worktrees(root), { recursive: true });
+  await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
+  let app: Awaited<ReturnType<typeof startApp>> | undefined;
+  let driver: Driver | undefined;
+  let restore = async () => {};
+  try {
+    await linkEnvFiles(source, worktree);
+    restore = await overlayBugpatrol(root, source, worktree);
+    const prepare = config.agents.fixer.retest.prepare;
+    if (prepare) {
+      ctx.log(`Preparing the ${name} worktree: ${prepare}`);
+      await exec('/bin/sh', ['-c', prepare], { cwd: worktree, timeout: 600_000, maxBuffer: 4 * 1024 * 1024 });
+    }
+    const vars = new Vars(config.app.secrets);
+    app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree });
+    driver = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+    await driver.connect();
+    return await run(driver, vars);
+  } finally {
+    try {
+      await driver?.close();
+    } finally {
+      try {
+        await app?.stop();
+      } finally {
+        await restore();
+        await remove();
+      }
+    }
+  }
+}
+
+/** The explorer tests what the diff can affect on the pull request build. Each report is a candidate. */
+async function exploreHead(ctx: Context, review: PrReview): Promise<Candidate[]> {
+  const { root, config, workspace, pr, opts } = ctx;
+  return withBuild(ctx, 'head', pr.head, async (driver, vars) => {
+    const record = await workspace.startSession('explorer');
+    review.sessions.explorer = record.id;
+    const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, ctx.log);
+    opts.onSession?.(session);
+    const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.explorer.use);
+    const maxSteps = opts.maxSteps ?? config.agents.explorer.maxSteps;
+    const guide = instructionsPath(root, config.app.instructions);
+    await session.activity(`Reviewing PR #${pr.number}`, 0, runtime.label);
+    session.emit({ kind: 'session-start', summary: `Reviewing PR #${pr.number}: ${pr.title}` });
+    try {
+      const outcome = await withSessionLogs(
+        { config, root, vars, onLog: ctx.log, workspace, session: record },
+        async () =>
+          runtime.run(
+            {
+              role: 'explorer',
+              sessionId: record.id,
+              system: explorerReviewSystem(
+                config.app.platform,
+                guide ? await readFile(guide, 'utf8') : '',
+                lessonsFor(await workspace.readMemory(), 'explorer'),
+              ),
+              prompt: explorerReviewPrompt({
+                pr,
+                screens: (await workspace.readAppMap())?.screens ?? [],
+                routines: await workspace.listRoutines(),
+                placeholders: vars.names(),
+                maxSteps,
+              }),
+              tools: explorerTools(session, { replay: { save: false } })
+                .filter((tool) => REVIEW_TOOLS.has(tool.name))
+                .map((tool) => stopOnCancellation(session, tool)),
+              maxSteps,
+              budgetUsd: config.agents.explorer.budgetUsd,
+              timeoutMs: config.agents.explorer.timeoutMs,
+            },
+            session.emit,
+          ),
+      );
+      // "No problem found" from an explorer that did not run would be a false review.
+      if (outcome.stop === 'error' || outcome.stop === 'timeout')
+        throw new InfrastructureError(
+          `The explorer did not finish (${outcome.stop}): ${outcome.error ?? outcome.summary ?? 'no result'}`,
+        );
+      const candidates = await workspace.readCandidates(record.id);
+      review.costUsd += outcome.costUsd;
+      review.tested =
+        outcome.stop === 'done' && outcome.summary
+          ? (vars.redact(outcome.summary.trim()) as string)
+          : `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
+      await workspace.endSession(record.id, {
+        steps: outcome.steps,
+        costUsd: outcome.costUsd,
+        summary: review.tested,
+        candidates: candidates.length,
+      });
+      session.emit({ kind: 'session-end', summary: `${candidates.length} candidate(s) on PR #${pr.number}` });
+      await session.idle(outcome.costUsd);
+      return candidates;
+    } catch (error) {
+      await workspace.endSession(record.id, { status: 'failed', summary: String(error) });
+      await session.idle();
+      throw error;
+    } finally {
+      opts.onSession?.();
+    }
+  });
+}
+
+/**
+ * Repeats the flow of each candidate on the merge base. A base build that
+ * does not start is not the end of the review: the judge then decides from
+ * the pull request build and the diff, and says what it could not compare.
+ */
+async function captureBase(ctx: Context, review: PrReview, candidates: Candidate[]): Promise<CaptureTarget[]> {
+  const { root, config, workspace, pr, opts } = ctx;
+  const targets: CaptureTarget[] = candidates.map((candidate) => ({
+    shot: {
+      screenId: candidate.screenId,
+      routineId: candidate.evidence.routineId,
+      before: candidate.evidence.screenshot,
+    },
+    steps: candidate.evidence.steps ?? [],
+  }));
+  try {
+    await withBuild(ctx, 'base', pr.base, async (driver, vars) => {
+      const record = await workspace.startSession('explorer');
+      review.sessions.base = record.id;
+      const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, ctx.log);
+      opts.onSession?.(session);
+      const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.explorer.use);
+      const guide = instructionsPath(root, config.app.instructions);
+      const summary = `Repeating ${targets.length} flow(s) on the base of PR #${pr.number}`;
+      await session.activity(summary, 0, runtime.label);
+      session.emit({ kind: 'session-start', summary });
+      let cost = 0;
+      let steps = 0;
+      try {
+        const outcome = await captureTargets(session, runtime, targets, {
+          replay: { save: false },
+          system: explorerBaseSystem(
+            config.app.platform,
+            guide ? await readFile(guide, 'utf8') : '',
+            lessonsFor(await workspace.readMemory(), 'explorer'),
+          ),
+          prompt: `Pull request #${pr.number}: ${pr.title}\nFindings:\n${candidates
+            .map((candidate, index) => `${index + 1}. ${candidate.summary}`)
+            .join('\n')}\nTargets:\n${targetLines(targets)}`,
+        });
+        cost = outcome.costUsd;
+        steps = outcome.steps;
+      } finally {
+        review.costUsd += cost;
+        const reached = targets.filter((target) => target.shot.reached).length;
+        const done = `Reached ${reached} of ${targets.length} flow(s) on the base of PR #${pr.number}`;
+        await workspace.endSession(record.id, { summary: done, steps, costUsd: cost });
+        session.emit({ kind: 'session-end', summary: done });
+        await session.idle(cost);
+        opts.onSession?.();
+      }
+    });
+  } catch (error) {
+    const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
+    ctx.log(reason);
+    for (const target of targets)
+      if (!target.shot.after) {
+        target.shot.reached = false;
+        target.shot.note = reason;
+      }
+  }
+  return targets;
+}
+
+/** The judge compares the two builds and gives each candidate a verdict. */
+async function judgeFindings(
+  ctx: Context,
+  review: PrReview,
+  candidates: Candidate[],
+  targets: CaptureTarget[],
+): Promise<ReviewFinding[]> {
+  const { root, config, workspace, pr, opts } = ctx;
+  const vars = new Vars(config.app.secrets);
+  const record = await workspace.startSession('judge');
+  review.sessions.judge = record.id;
+  const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, ctx.log);
+  opts.onSession?.(session);
+  const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
+  const baseNote = (index: number) => {
+    const shot = targets[index]!.shot;
+    return shot.reached ? (shot.note ?? '') : `Not reached on the base build. ${shot.note ?? ''}`.trim();
+  };
+  const verdicts = new Map<
+    string,
+    Pick<ReviewFinding, 'verdict' | 'title' | 'severity' | 'reason' | 'file' | 'line'>
+  >();
+  const tools: Tool[] = [
+    {
+      name: 'view_finding',
+      description: 'View one finding: the report, then the pull request build and the base build screenshots.',
+      inputSchema: schema({ id: string }, ['id']),
+      async run(input) {
+        const index = candidates.findIndex((candidate) => candidate.id === input.id);
+        const candidate = candidates[index];
+        if (!candidate) return { ...response('Unknown finding id'), isError: true };
+        const head = await image(root, candidate.evidence.screenshot);
+        const base = await image(root, targets[index]!.shot.after);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${candidate.id} on ${candidate.screenId ?? 'unknown screen'}: ${candidate.summary}\n${candidate.detail ?? ''}\nPull request build${head.length ? ':' : ': no screenshot.'}`,
+            },
+            ...head,
+            { type: 'text', text: `Base build${base.length ? ':' : ': no screenshot.'} ${baseNote(index)}` },
+            ...base,
+          ],
+        };
+      },
+    },
+    {
+      name: 'classify',
+      description:
+        'Give one finding its verdict, with a title of at most 80 characters and a reason. For an introduced finding, ' +
+        'add file and line when the diff shows the changed line that causes it.',
+      inputSchema: schema(
+        {
+          id: string,
+          verdict: { type: 'string', enum: ['introduced', 'pre-existing', 'not-a-bug', 'unclear'] },
+          title: string,
+          severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
+          reason: string,
+          file: string,
+          line: { type: 'integer', minimum: 1 },
+        },
+        ['id', 'verdict', 'title', 'severity', 'reason'],
+      ),
+      async run(input) {
+        if (!candidates.some((candidate) => candidate.id === input.id))
+          return { ...response('Unknown finding id'), isError: true };
+        const title = String(input.title ?? '').trim();
+        if (title.length > 80)
+          return {
+            ...response(`The title has ${title.length} characters; the limit is 80. Write a shorter title.`),
+            isError: true,
+          };
+        const file = typeof input.file === 'string' && input.file ? input.file : undefined;
+        const line = Number.isInteger(input.line) ? Number(input.line) : undefined;
+        // GitHub refuses a whole review for one comment on a line that the diff does not show.
+        if (file && !(line && pr.lines.get(file)?.has(line)))
+          return {
+            ...response(
+              `The diff does not show line ${line ?? '(none)'} of ${file}. Use a path and a line number from the diff, or leave file and line out.`,
+            ),
+            isError: true,
+          };
+        verdicts.set(String(input.id), {
+          verdict: input.verdict as ReviewVerdict,
+          title,
+          severity: input.severity as Severity,
+          reason: String(input.reason ?? '').trim(),
+          ...(file && input.verdict === 'introduced' ? { file, line } : {}),
+        });
+        const left = candidates.filter((candidate) => !verdicts.has(candidate.id)).map((candidate) => candidate.id);
+        return response(`${input.id}: ${input.verdict}. ${left.length ? `Left: ${left.join(', ')}` : 'All decided.'}`);
+      },
+    },
+    {
+      name: 'finish',
+      description: 'Finish with one sentence, when every finding has a verdict.',
+      inputSchema: schema({ summary: string }, ['summary']),
+      async run(input) {
+        return { ...response(String(input.summary ?? '')), done: true };
+      },
+    },
+  ];
+  let cost = 0;
+  let steps = 0;
+  let status: 'finished' | 'failed' = 'finished';
+  await session.activity(`Judging ${candidates.length} finding(s) on PR #${pr.number}`, 0, runtime.label);
+  session.emit({ kind: 'session-start', summary: `Judging ${candidates.length} finding(s) on PR #${pr.number}` });
+  try {
+    const outcome = await runtime.run(
+      {
+        role: 'judge',
+        sessionId: record.id,
+        system: judgeReviewSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+        prompt: `PULL REQUEST #${pr.number}: ${pr.title}\n${pr.body.trim() || '(no description)'}\n\nDIFF (each line has its sign, then its line number in the new file)\n${pr.diff}\n\nFINDINGS\n${candidates
+          .map(
+            (candidate, index) =>
+              `- ${candidate.id} [${candidate.severity}] on ${candidate.screenId ?? 'unknown screen'}: ${candidate.summary}. ` +
+              `Base build: ${targets[index]!.shot.reached ? 'reached' : 'not reached'}.`,
+          )
+          .join('\n')}`,
+        tools,
+        maxSteps: Math.max(config.agents.judge.maxSteps, candidates.length * 2 + 10),
+        budgetUsd: config.agents.judge.budgetUsd,
+        timeoutMs: config.agents.judge.timeoutMs,
+      },
+      session.emit,
+    );
+    cost = outcome.costUsd;
+    steps = outcome.steps;
+  } catch (error) {
+    status = 'failed';
+    throw error;
+  } finally {
+    review.costUsd += cost;
+    const count = [...verdicts.values()].filter((item) => item.verdict === 'introduced').length;
+    const summary = `PR #${pr.number}: ${count} introduced problem(s) in ${candidates.length} finding(s)`;
+    await workspace.endSession(record.id, { status, summary, steps, costUsd: cost });
+    session.emit({ kind: 'session-end', summary });
+    await session.idle(cost);
+    opts.onSession?.();
+  }
+  return candidates.map((candidate, index) => ({
+    candidateId: candidate.id,
+    screenId: candidate.screenId,
+    // A finding that the judge did not reach is never shown as the pull request's fault.
+    ...(verdicts.get(candidate.id) ?? {
+      verdict: 'unclear' as const,
+      title: candidate.summary.slice(0, 80),
+      severity: candidate.severity,
+      reason: 'The judge gave no verdict.',
+    }),
+    steps: [
+      ...(candidate.evidence.routineId ? [`Run the routine ${candidate.evidence.routineId}`] : []),
+      ...(candidate.evidence.steps ?? []).map(stepWords),
+    ],
+    head: candidate.evidence.screenshot,
+    base: targets[index]!.shot.after,
+    baseNote: baseNote(index) || undefined,
+  }));
+}
+
+/**
+ * A later `bugpatrol judge` reads the candidates of each recent explorer
+ * session. It must not file a problem that exists only on this pull request
+ * as an issue of the main branch, so the review decides those candidates
+ * here. A pre-existing problem stays open for that judge: the base build has it.
+ */
+async function settleCandidates(ctx: Context, sessionId: string, findings: ReviewFinding[]): Promise<void> {
+  const lines = findings
+    .filter((finding) => finding.verdict !== 'pre-existing')
+    .map((finding) =>
+      JSON.stringify({
+        candidateId: finding.candidateId,
+        decision: 'dismiss',
+        reason: `Review of PR #${ctx.pr.number}: ${finding.verdict}`,
+        at: new Date().toISOString(),
+      }),
+    );
+  if (lines.length)
+    await appendFile(join(paths.session(ctx.root, sessionId), 'decisions.jsonl'), `${lines.join('\n')}\n`);
+}
+
+async function runReview(ctx: Context): Promise<PrReview> {
+  const { workspace, pr } = ctx;
+  const review: PrReview = {
+    version: 1,
+    pr: { number: pr.number, url: pr.url, title: pr.title },
+    head: pr.head,
+    base: pr.base,
+    baseRef: pr.baseRef,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    sessions: {},
+    findings: [],
+    costUsd: 0,
+  };
+  await workspace.saveReview(review);
+  try {
+    if (!pr.files.length) {
+      review.tested = `The pull request changes no file against \`${pr.baseRef}\`.`;
+    } else {
+      const candidates = await exploreHead(ctx, review);
+      // With no report there is nothing to compare, so the base build does not start.
+      if (candidates.length) {
+        const targets = await captureBase(ctx, review, candidates);
+        review.findings = await judgeFindings(ctx, review, candidates, targets);
+        await settleCandidates(ctx, review.sessions.explorer!, review.findings);
+      }
+    }
+    review.status = 'finished';
+  } catch (error) {
+    review.status = 'failed';
+    review.error = String(error);
+    throw error;
+  } finally {
+    review.endedAt = new Date().toISOString();
+    await workspace.saveReview(review);
+  }
+  return review;
+}
+
+/** The marked reviews on the pull request that no later review replaced yet. */
+async function openReviews(gh: Gh, reviews: string): Promise<{ id: string; commit: string }[]> {
+  const select = `.[] | select(.body | contains("${REVIEW_MARKER}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
+  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id)"`]))
+    .split('\n')
+    .filter(Boolean)
+    .map((row) => {
+      const [id, commit] = row.split(' ');
+      return { id: id!, commit: commit! };
+    });
+}
+
+/**
+ * GitHub keeps a submitted review for good, so an old review gets a one-line
+ * body, and Bugpatrol deletes its line comments. A comment that a person
+ * answered stays: the answer is theirs.
+ */
+async function supersede(ctx: Context, gh: Gh, old: { id: string }[], head: string): Promise<void> {
+  const pulls = `repos/${ctx.repo}/pulls`;
+  const ids = new Set(old.map((review) => review.id));
+  for (const id of ids)
+    await gh(['api', '-X', 'PUT', `${pulls}/${ctx.pr.number}/reviews/${id}`, '--input', '-'], {
+      input: JSON.stringify({ body: supersededBody(head) }),
+    });
+  const rows = (
+    await gh([
+      'api',
+      '--paginate',
+      `${pulls}/${ctx.pr.number}/comments`,
+      '--jq',
+      '.[] | "\\(.id) \\(.pull_request_review_id) \\(.in_reply_to_id)"',
+    ])
+  )
+    .split('\n')
+    .filter(Boolean)
+    .map((row) => row.split(' ') as [string, string, string]);
+  const answered = new Set(rows.map(([, , parent]) => parent));
+  for (const [id, review, parent] of rows)
+    if (ids.has(review) && parent === 'null' && !answered.has(id))
+      await gh(['api', '-X', 'DELETE', `${pulls}/comments/${id}`]);
+}
+
+/**
+ * Posts a pull request review with the event COMMENT, which never blocks a
+ * merge. A new test of the pull request posts a new review and replaces the
+ * older ones. The same result on the same commit only updates the body.
+ */
+async function publishReview(ctx: Context, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
+  const { root, config, repo, pr } = ctx;
+  const redact = (text: string) => new Vars(config.app.secrets).redact(text) as string;
+  const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
+  if (ctx.opts.dryRun) {
+    const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      redact(
+        [
+          rendered.body,
+          ...rendered.comments.map(
+            (comment) => `---\n\nOn \`${comment.path}\` line ${comment.line}:\n\n${comment.body}`,
+          ),
+        ].join('\n\n'),
+      ),
+    );
+    ctx.log(`Wrote the review of PR #${pr.number} to ${file}. Nothing went to GitHub.`);
+    return;
+  }
+  const branch = config.agents.github.assetsBranch;
+  const urls = new Map<string, string>();
+  const shown = review.findings
+    .filter((finding) => finding.verdict === 'introduced')
+    .flatMap((finding) => [finding.head, finding.base])
+    .filter((path): path is string => Boolean(path));
+  if (shown.length) await ensureAssetsBranch(gh, repo, branch);
+  for (const path of new Set(shown)) {
+    try {
+      urls.set(path, await uploadImage(gh, repo, branch, resolve(root, path), `pr-${pr.number}`));
+    } catch (error) {
+      ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
+    }
+  }
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff);
+  const body = limitBody(redact(rendered.body));
+  const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
+  const open = await openReviews(gh, reviews);
+  const current = open.find((item) => item.commit === review.head);
+  let posted: { html_url: string };
+  if (current && !tested) {
+    posted = JSON.parse(
+      await gh(['api', '-X', 'PUT', `${reviews}/${current.id}`, '--input', '-'], { input: JSON.stringify({ body }) }),
+    );
+  } else {
+    posted = JSON.parse(
+      await gh(['api', '-X', 'POST', reviews, '--input', '-'], {
+        input: JSON.stringify({
+          commit_id: review.head,
+          event: 'COMMENT',
+          body,
+          comments: rendered.comments.map((comment) => ({
+            path: comment.path,
+            line: comment.line,
+            side: 'RIGHT',
+            body: limitBody(redact(comment.body)),
+          })),
+        }),
+      }),
+    );
+    try {
+      await supersede(ctx, gh, open, review.head);
+    } catch (error) {
+      ctx.log(`Could not replace the older review(s) of PR #${pr.number}: ${String(error).split('\n')[0]}`);
+    }
+  }
+  review.posted = { url: posted.html_url, at: new Date().toISOString() };
+  await ctx.workspace.saveReview(review);
+  ctx.log(`${current && !tested ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
+}
+
+/**
+ * A differential review of one pull request: the explorer tests what the
+ * diff can affect on the pull request build, repeats each reported flow on
+ * the merge base, and the judge keeps only what the pull request introduces.
+ * The result is a pull request review that comments and never blocks a merge (ADR 0005, section 6).
+ */
+export async function reviewPullRequest(
+  root: string,
+  config: BugpatrolConfig,
+  number: number,
+  opts: ReviewOptions = {},
+): Promise<PrReview> {
+  if (!opts.dryRun && !config.agents.github.enabled)
+    throw new ConfigError(
+      'GitHub is off. Set agents.github.enabled: true in .bugpatrol/bugpatrol.yml, ' +
+        'or run `bugpatrol review <pr> --dry-run` to write the review to .bugpatrol/runs/reviews/ only.',
+    );
+  const gh = opts.gh ?? defaultGh;
+  const ready = await ghReady(gh);
+  if (!ready.ok) throw new ConfigError(ready.reason.replace('GitHub publish skipped', 'Review stopped'));
+  const workspace = new Workspace(root);
+  const patrol = activePatrolPid((await workspace.readAgents()).patrol);
+  if (patrol)
+    throw new ConfigError(
+      `A patrol runs (pid ${patrol}), and it uses the app. Stop the patrol, or review when it waits for a new commit.`,
+    );
+  const source = resolve(root, config.app.source);
+  const log = opts.onLog ?? (() => {});
+  const { repo } = await resolveRepo(gh, config, source);
+  try {
+    const pr = await loadPullRequest(gh, repo, source, number, Boolean(opts.allowFork));
+    const ctx: Context = { root, source, config, workspace, repo, pr, opts, log };
+    const last = await workspace.readReview(number);
+    let review: PrReview;
+    if (last?.status === 'finished' && last.head === pr.head && !opts.force) {
+      log(`PR #${number} has a review of ${short(pr.head)}: published it again. Use --force to test the commit again.`);
+      review = last;
+    } else {
+      log(`Reviewing PR #${number} at ${short(pr.head)} against ${short(pr.base)} on ${pr.baseRef}.`);
+      review = await runReview(ctx);
+    }
+    await publishReview(ctx, gh, review, review !== last);
+    return review;
+  } finally {
+    // The ref of a pull request that is not there yet deletes as a no-op.
+    await git(source, 'update-ref', '-d', headRefOf(number));
+  }
+}

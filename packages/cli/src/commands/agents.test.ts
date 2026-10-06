@@ -42,11 +42,24 @@ describe('agent command flags', () => {
     expect(parseAgentFlags('retest', ['--issue', 'x'])).toEqual({ issue: ['x'] });
     expect(parseAgentFlags('patrol', ['--once'])).toEqual({ once: true });
     expect(parseAgentFlags('replay', ['enter-app'])).toEqual({ id: 'enter-app' });
+    expect(parseAgentFlags('review', ['12', '--dry-run', '--steps', '40'])).toEqual({
+      pr: 12,
+      dryRun: true,
+      steps: 40,
+    });
+    expect(parseAgentFlags('review', ['https://github.com/o/r/pull/34', '--force', '--allow-fork'])).toEqual({
+      pr: 34,
+      force: true,
+      allowFork: true,
+    });
   });
 
   it('rejects unknown flags and invalid step counts', () => {
     expect(() => parseAgentFlags('explore', ['--steps', '0'])).toThrow();
     expect(() => parseAgentFlags('patrol', ['--bad'])).toThrow();
     expect(() => parseAgentFlags('replay', [])).toThrow();
+    expect(() => parseAgentFlags('review', [])).toThrow(/pull request number or URL/);
+    expect(() => parseAgentFlags('review', ['--dry-run'])).toThrow(/pull request number or URL/);
+    expect(() => parseAgentFlags('review', ['12', '--goal', 'x'])).toThrow(/Unknown flag/);
   });
 });

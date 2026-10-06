@@ -87,6 +87,7 @@ export const paths = {
   fixes: (root: string) => data(root, 'fixes'),
   fix: (root: string, id: string) => data(root, 'fixes', `${recordId(id)}.json`),
   publish: (root: string) => data(root, 'publish'),
+  review: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}.json`),
   sessions: (root: string) => data(root, 'sessions'),
   session: (root: string, id: string) => data(root, 'sessions', recordId(id)),
   agents: (root: string) => data(root, 'agents.json'),

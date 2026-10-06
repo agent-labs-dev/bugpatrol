@@ -90,11 +90,16 @@ When a fix does not work in the running app, the fixer's next attempt must first
 
 The judge writes a short summary. Bugpatrol adds the full report: the steps, the screenshots, the fix, and the before and after table. It uploads the images to the orphan `bugpatrol-assets` branch, so the images never enter the PR diff. PR titles use the Conventional Commits form, for example `fix(app): expand the sidebar in a narrow window`. When the team closes a PR without a merge, Bugpatrol does not propose that change again. Bugpatrol never force-pushes and never uses `--no-verify`.
 
+## Pull request review
+
+`bugpatrol review <pr>` uses the same agents on a pull request of your team. The explorer tests what the diff can affect on the pull request build. Bugpatrol then starts the app from the merge base, and the explorer repeats the flow of each report there. The judge compares the two builds. The result is a GitHub review: each problem that the pull request introduces is a comment on the changed line that causes it. A review never blocks a merge, and it writes nothing to the app map, the routines, or the memory. Refer to [GitHub](github.md#7-review-a-pull-request).
+
 ## Safety
 
 - The fixer works only in its own worktree.
 - A human decision (a dismissal, a closed PR) is never overwritten.
 - Secrets never reach a model or a log.
 - `app.instructions` can list what the explorer must never do.
+- A review runs the code of a pull request, so it refuses a pull request from a fork unless you add `--allow-fork`.
 
 The full design is in [ADR 0005](adr/0005-agents-drivers-and-the-patrol.md).

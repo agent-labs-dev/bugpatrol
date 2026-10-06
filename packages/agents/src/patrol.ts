@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { BugpatrolConfig } from '@bugpatrol/core';
+import type { AgentsFile, BugpatrolConfig } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
@@ -76,6 +76,13 @@ function alive(pid: number): boolean {
   }
 }
 
+/** The pid of a patrol that another live process runs. One machine runs one app at a time. */
+export function activePatrolPid(patrol: AgentsFile['patrol']): number | undefined {
+  return patrol?.state === 'running' && patrol.pid && patrol.pid !== process.pid && alive(patrol.pid)
+    ? patrol.pid
+    : undefined;
+}
+
 function wait(minutes: number): Promise<void> {
   return new Promise<void>((done) => {
     const finish = () => {
@@ -124,8 +131,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   const workspace = new Workspace(root);
   const previous = (await workspace.readAgents()).patrol;
   // A cron job can start a patrol while the last one still runs.
-  if (previous?.state === 'running' && previous.pid && previous.pid !== process.pid && alive(previous.pid)) {
-    options.onLog?.(`A patrol already runs (pid ${previous.pid}): did not start another.`);
+  const running = activePatrolPid(previous);
+  if (running) {
+    options.onLog?.(`A patrol already runs (pid ${running}): did not start another.`);
     return { problems };
   }
   const runtime = options.createRuntime ?? createRuntime;

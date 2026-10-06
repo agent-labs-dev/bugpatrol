@@ -432,6 +432,22 @@ Do these steps in order:
 
 To read the state of the PRs and issues back from GitHub, run `npx bugpatrol@latest github sync`. A PR that the team closes without a merge becomes a lesson, and an issue that the team closes as not planned becomes a dismissal. Full reference: https://github.com/agent-labs-dev/bugpatrol/blob/main/docs/github.md
 
+### Optional: review a pull request
+
+`review` tests one pull request of the team in the running app. It starts the app from the pull request commit and from its merge base, repeats the same flows on both, and posts a GitHub review. Each problem that the pull request introduces is a comment on the changed line that causes it. The review never blocks the merge.
+
+```bash
+npx bugpatrol@latest review <pr> --dry-run   # write the review to .bugpatrol/runs/reviews/pr-<pr>.md
+npx bugpatrol@latest review <pr>             # post the review; it replaces the review of an older commit
+```
+
+- It needs a logged-in `gh`. To post the review, it also needs `agents.github.enabled: true`.
+- It runs the code of the pull request on this machine, with the secrets of the app. It refuses a pull request from a fork. Add `--allow-fork` only after the user read the diff and said yes.
+- It does not start while a patrol runs on the same machine.
+- Run `--dry-run` first, show the user the file, and post only after a yes.
+
+Full reference: https://github.com/agent-labs-dev/bugpatrol/blob/main/docs/github.md#7-review-a-pull-request
+
 ### Optional: run all day
 
 ```bash
@@ -481,6 +497,7 @@ To summarize the results for the user, read these files:
 | --- | --- |
 | `.bugpatrol/runs/issues/<id>.json` | One issue: `title`, `severity`, `status`, `body` (the judge's report), `judgement.reason`, and `evidence` (screenshots) |
 | `.bugpatrol/runs/fixes/<id>.json` | One fix: `status`, `branch`, `diff`, `retests`, and `pr` |
+| `.bugpatrol/runs/reviews/pr-<number>.json` | The last review of one pull request: `findings` with a `verdict` each, and `posted.url` |
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session and its screenshots |
 | `.bugpatrol/runs/appmap.json` | The screens that the explorer found |
 | `.bugpatrol/runs/memory.json` | The lessons |

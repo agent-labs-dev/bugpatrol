@@ -7,6 +7,7 @@ import {
   pendingCandidates,
   replayRoutine,
   retestFix,
+  reviewPullRequest,
   runExplorer,
   runFixCycle,
   runJudge,
@@ -45,8 +46,19 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
     }
     return { id: args[0]! };
   }
+  if (command === 'review') {
+    const [target, ...rest] = args;
+    // A number, or the URL of the pull request.
+    const number = Number(/^(?:.*\/pull\/)?(\d+)\/?$/.exec(target ?? '')?.[1]);
+    if (!Number.isInteger(number) || number < 1) {
+      throw new ConfigError('review needs a pull request number or URL');
+    }
+    flags.pr = number;
+    args = rest;
+  }
   const values: Record<string, string[]> = {
     explore: ['--goal', '--steps'],
+    review: ['--steps'],
     judge: ['--session'],
     fix: ['--issue'],
     retest: ['--issue'],
@@ -65,8 +77,12 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
       flags.wait = true;
       continue;
     }
-    if (command === 'publish' && flag === '--dry-run') {
+    if ((command === 'publish' || command === 'review') && flag === '--dry-run') {
       flags.dryRun = true;
+      continue;
+    }
+    if (command === 'review' && (flag === '--force' || flag === '--allow-fork')) {
+      flags[flag === '--force' ? 'force' : 'allowFork'] = true;
       continue;
     }
     if (!values[command]!.includes(flag)) {
@@ -107,6 +123,7 @@ function rolesFor(command: string, config: BugpatrolConfig): AgentRole[] {
     case 'ci':
       return ['fixer'];
     case 'retest':
+    case 'review':
       return ['explorer', 'judge'];
     case 'fix':
       return ['fixer', 'explorer', 'judge'];
@@ -206,6 +223,36 @@ export async function runAgentCommand(
     log(
       `${flags.dryRun ? 'Wrote' : 'Opened'} ${count('pr')} PR(s) and ${count('issue')} issue(s); skipped ${count('skipped')}.`,
     );
+    return;
+  }
+  if (command === 'review') {
+    let activeSession: AgentSession | undefined;
+    const onSignal = () => {
+      if (activeSession) activeSession.cancelled = true;
+      log('Interrupt received; tearing down after the current operation.');
+    };
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+    try {
+      const review = await reviewPullRequest(root, config, flags.pr as number, {
+        onLog: log,
+        onSession: (session) => {
+          activeSession = session;
+        },
+        dryRun: Boolean(flags.dryRun),
+        force: Boolean(flags.force),
+        allowFork: Boolean(flags.allowFork),
+        maxSteps: flags.steps as number | undefined,
+      });
+      const count = (verdict: string) => review.findings.filter((finding) => finding.verdict === verdict).length;
+      log(
+        `PR #${review.pr.number}: ${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
+          `${count('unclear')} not compared, ${count('not-a-bug')} not a bug.`,
+      );
+    } finally {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    }
     return;
   }
   const vars = new Vars(config.app.secrets);
