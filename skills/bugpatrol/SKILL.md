@@ -239,7 +239,7 @@ Setup command fields:
 
 ### 2.5 Write `.bugpatrol/instructions.md`
 
-This file is plain English for the explorer. `init` writes a template. Replace it with a note to a new human tester. Include:
+This file is plain English for the explorer. `init` writes a template. Replace it with a note to a new human tester. This is a first draft from the repo: you correct it in step 3 of [Run it](#3-run-it), after the explorer has seen the app. Include:
 
 - One or two sentences on what the app is and its main areas.
 - How to sign in. Use `{{NAME}}` placeholders for secrets. Never write a real password in this file.
@@ -324,7 +324,18 @@ Run each command in the project. Bugpatrol finds `.bugpatrol/` in the current fo
 
    The command runs `setup`, explores, reports, and runs `teardown`. It can take several minutes. Read the output. If setup fails, correct `.bugpatrol/bugpatrol.yml` and run it again.
 
-3. Judge the session:
+3. Correct `.bugpatrol/instructions.md` from what the explorer saw. You wrote the first draft from the source code. Now the explorer has used the app, so the draft can be wrong or incomplete.
+
+   1. Read `.bugpatrol/runs/appmap.json` (the screens and how they connect) and the output of `npx bugpatrol@latest memory list` (the lessons). The lessons stay on this machine, because git ignores `.bugpatrol/runs/`. `instructions.md` is committed, so put there what each machine must know.
+   2. Write the file again:
+      - Name the main areas as the app shows them, and say how to get to each one.
+      - Correct the sign-in and onboarding steps to the path that worked.
+      - Add the flows that the screens show and the draft did not have.
+      - Add to the **Never do these things** list each action that you saw and that deletes data, sends a message to a real person, or costs money.
+   3. Show the new file to the user before you continue. Ask two questions: which flows matter most, and what is missing from the **Never do these things** list. The user knows these better than the repo does.
+   4. Apply the answers. Keep `{{NAME}}` placeholders for secrets.
+
+4. Judge the session:
 
    ```bash
    npx bugpatrol@latest judge
@@ -332,13 +343,13 @@ Run each command in the project. Bugpatrol finds `.bugpatrol/` in the current fo
 
    The judge reads the recent explorer sessions that have candidates, and it skips the candidates that it already decided. Its first line names the sessions and the number of new candidates. To judge one session only, add `--session <id>`.
 
-4. Show the issues:
+5. Show the issues:
 
    ```bash
    npx bugpatrol@latest issue list
    ```
 
-5. Show the dashboard to the user. The dashboard gives the user the screenshots, the steps, and the screen graph:
+6. Show the dashboard to the user. The dashboard gives the user the screenshots, the steps, and the screen graph:
 
    1. Check if the dashboard runs already:
 
