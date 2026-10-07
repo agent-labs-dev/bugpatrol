@@ -41,7 +41,15 @@
       "!**/*.tsbuildinfo",
       "!**/.bugpatrol",
       "!packages/bugpatrol/src/ui",
-      "!examples/fixture-app/*.html"
+      "!examples/fixture-app/*.html",
+      "!site/.next",
+      "!site/out",
+      "!site/next-env.d.ts"
     ]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   }
 }

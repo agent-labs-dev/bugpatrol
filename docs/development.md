@@ -75,3 +75,9 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 - [Architecture decisions](adr/): all ADRs
 - [Technical specification](spec/bugpatrol-technical-spec.md): the deterministic gate
 - [Competitive landscape](research/oss-visual-testing-landscape-2026.md): the research behind the design
+
+## The landing page
+
+`site/` is the landing page: a Next.js app with Tailwind, built as a static export. Its copy follows this README, so change both together. `pnpm --filter @bugpatrol/site dev` serves it at http://localhost:3000, and `build` writes `site/out/`. Both first copy the logo, the dashboard screenshot, and the social preview from `assets/` into `site/public/assets/`, so the README and the site share one copy of each image.
+
+The `Pages` workflow builds it with `SITE_BASE_PATH=/bugpatrol` and publishes it to GitHub Pages on each push to `main` that changes `site/` or `assets/`.
