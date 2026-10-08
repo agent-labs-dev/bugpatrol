@@ -10,7 +10,7 @@ inputs:
     description: The pull request number. Default is the pull request of the event.
     default: ${{ github.event.pull_request.number }}
   github-token:
-    description: The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on.
+    description: "The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on."
     default: ${{ github.token }}
   package:
     description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball.
