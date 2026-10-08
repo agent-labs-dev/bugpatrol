@@ -115,5 +115,12 @@ export interface Driver {
    * so every platform gets the same geometry checks.
    */
   snapshot(observation: Observation, screenId: string): ScreenSnapshot;
+  /**
+   * Starts a recording of the screen. A driver without it has no recording,
+   * and its callers keep screenshots. It throws when this host cannot record.
+   */
+  startRecording?(): Promise<void>;
+  /** Stops the recording, writes it to `name` plus the extension of its format, and returns that file. */
+  stopRecording?(name: string): Promise<string>;
   close(): Promise<void>;
 }

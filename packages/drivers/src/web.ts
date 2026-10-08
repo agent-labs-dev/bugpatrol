@@ -1,8 +1,9 @@
 import { sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
-import { type Browser, type BrowserContext, chromium, type Page } from 'playwright';
+import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
+import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
 
 export type WebOptions = {
   url: string;
@@ -22,6 +23,7 @@ export class WebDriver implements Driver {
   private readonly errors = new Map<Page, string[]>();
   private readonly failures = new Map<Page, string[]>();
   private readonly watched = new WeakSet<Page>();
+  private recording?: { cdp: CDPSession; page: Page; frames: Frame[] };
 
   constructor(protected readonly options: WebOptions) {}
 
@@ -290,6 +292,41 @@ export class WebDriver implements Driver {
 
   protected async captureProbe(): Promise<void> {
     this.probe = (await this.activePage().evaluate(PROBE_SOURCE)) as typeof this.probe;
+  }
+
+  /**
+   * Records through the CDP screencast of the page, not the video option of
+   * Playwright: that option is set when a context opens, and Electron hands
+   * over a context that is already open. Chromium draws a frame only when
+   * the screen changes, so a still screen costs nothing.
+   */
+  async startRecording(): Promise<void> {
+    if (!hasFfmpeg()) throw new Error('Recording needs ffmpeg on the PATH');
+    if (this.recording) throw new Error('A recording is already running');
+    const page = this.activePage();
+    const cdp = await page.context().newCDPSession(page);
+    const frames: Frame[] = [];
+    cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+      frames.push({ data: Buffer.from(data, 'base64'), at: Date.now() });
+      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+    });
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 80, maxWidth: 1280, maxHeight: 1280 });
+    this.recording = { cdp, page, frames };
+  }
+
+  async stopRecording(name: string): Promise<string> {
+    const recording = this.recording;
+    if (!recording) throw new Error('No recording is running');
+    this.recording = undefined;
+    const end = Date.now();
+    await recording.cdp.send('Page.stopScreencast').catch(() => {});
+    await recording.cdp.detach().catch(() => {});
+    // A window that is not drawn, for example in the background, sends no frame.
+    if (!recording.frames.length)
+      recording.frames.push({ data: await recording.page.screenshot({ type: 'jpeg' }), at: end });
+    const file = `${name}.mp4`;
+    await encodeFrames(recording.frames, file, end);
+    return file;
   }
 
   async close(): Promise<void> {
