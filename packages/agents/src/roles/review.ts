@@ -35,6 +35,7 @@ import {
 } from '../prompts.js';
 import {
   claimMedia,
+  lineReviewBody,
   numberDiff,
   renderReview,
   reviewMarker,
@@ -100,8 +101,47 @@ const REVIEW_TOOLS = new Set([
   'switch_window',
   'report_bug',
   'list_screens',
-  'finish',
 ]);
+
+/** A line of the review that a reader scans: one screen, flow, or reason. */
+const COVERAGE_LINE = 140;
+
+/** The review explorer's finish: what it tested, and what it did not reach and why, as lines of the review. */
+function coverageFinish(keep: (coverage: NonNullable<PrReview['coverage']>) => void): Tool {
+  const refuse = (message: string) => ({ ...response(message), isError: true });
+  return {
+    name: 'finish',
+    description:
+      'Finish with each screen or flow that you tested, and each one the change can affect that you did not reach, ' +
+      `with why. One short line each, under ${COVERAGE_LINE} characters.`,
+    inputSchema: schema(
+      {
+        tested: { type: 'array', items: string },
+        untested: { type: 'array', items: schema({ what: string, why: string }, ['what', 'why']) },
+      },
+      ['tested', 'untested'],
+    ),
+    async run(input) {
+      const tested = Array.isArray(input.tested) ? input.tested.map(String) : [];
+      const untested = (Array.isArray(input.untested) ? input.untested : []).map((item) => ({
+        what: String((item as { what?: unknown }).what ?? ''),
+        why: String((item as { why?: unknown }).why ?? ''),
+      }));
+      if (!tested.length && !untested.length)
+        return refuse('Name what you tested in tested, and what you did not reach in untested.');
+      const long = [...tested, ...untested.flatMap((item) => [item.what, item.why])].find(
+        (line) => line.length > COVERAGE_LINE,
+      );
+      if (long) return refuse(`Keep each line under ${COVERAGE_LINE} characters. Too long: ${long}`);
+      keep({ tested, untested });
+      const text = [
+        tested.length ? `Tested: ${tested.join('; ')}.` : '',
+        untested.length ? `Not reached: ${untested.map((item) => `${item.what} (${item.why})`).join('; ')}.` : '',
+      ];
+      return { ...response(text.filter(Boolean).join(' ')), done: true };
+    },
+  };
+}
 
 export type ReviewOptions = {
   gh?: Gh;
@@ -363,6 +403,9 @@ async function exploreHead(
               ].join('\n\n'),
               tools: [
                 ...explorerTools(session, { replay: { save: false } }).filter((tool) => REVIEW_TOOLS.has(tool.name)),
+                coverageFinish((coverage) => {
+                  review.coverage = vars.redact(coverage) as typeof coverage;
+                }),
                 ...(claimWork?.tools ?? []),
               ].map((tool) => stopOnCancellation(session, claimWork ? claimWork.meter(tool) : tool)),
               maxSteps,
@@ -382,6 +425,9 @@ async function exploreHead(
       review.costUsd += outcome.costUsd;
       const summary = outcome.summary?.trim();
       const cutShort = `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
+      if (outcome.stop === 'max-steps') review.cutShort = { by: 'max-steps', limit: maxSteps };
+      if (outcome.stop === 'budget' && config.agents.explorer.budgetUsd !== undefined)
+        review.cutShort = { by: 'budget', limit: config.agents.explorer.budgetUsd };
       review.tested =
         summary && (outcome.stop === 'done' || outcome.finished)
           ? (vars.redact(outcome.stop === 'done' ? summary : `${cutShort}\n\n${summary}`) as string)
@@ -961,6 +1007,29 @@ async function openReviews(gh: Gh, reviews: string, name?: string): Promise<{ id
     });
 }
 
+/** Creates the PR comment of this review, or edits it: one comment for each review name, for the life of the PR. */
+async function saveSticky(
+  gh: Gh,
+  repo: string,
+  pr: number,
+  marker: string,
+  body: string,
+): Promise<{ html_url: string; created: boolean }> {
+  const comments = `repos/${repo}/issues/${pr}/comments`;
+  const [id] = (await gh(['api', '--paginate', comments, '--jq', `.[] | select(.body | contains("${marker}")) | .id`]))
+    .split('\n')
+    .filter(Boolean);
+  const input = JSON.stringify({ body });
+  if (id) {
+    const edited = JSON.parse(
+      await gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${id}`, '--input', '-'], { input }),
+    ) as { html_url: string };
+    return { html_url: edited.html_url, created: false };
+  }
+  const made = JSON.parse(await gh(['api', '-X', 'POST', comments, '--input', '-'], { input })) as { html_url: string };
+  return { html_url: made.html_url, created: true };
+}
+
 /**
  * GitHub keeps a submitted review for good, so an old review gets a one-line
  * body, and Bugpatrol deletes its line comments. A comment that a person
@@ -992,9 +1061,10 @@ async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head
 }
 
 /**
- * Posts a pull request review with the event COMMENT, which never blocks a
- * merge. A new test of the pull request posts a new review and replaces the
- * older ones. The same result on the same commit only updates the body.
+ * Keeps one PR comment for the review and edits it on each push. The problems
+ * on changed lines go in a pull request review with the event COMMENT, which
+ * never blocks a merge. A new test replaces the line comments of the older
+ * reviews. The same result on the same commit only edits the PR comment.
  */
 async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
   const { root, config, repo, pr } = ctx;
@@ -1048,21 +1118,19 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   }
   const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name);
   const body = limitBody(redact(rendered.body));
-  const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
-  const open = await openReviews(gh, reviews, config.agents.review.name);
-  const current = open.find((item) => item.commit === review.head);
-  let posted: { html_url: string };
-  if (current && !tested) {
-    posted = JSON.parse(
-      await gh(['api', '-X', 'PUT', `${reviews}/${current.id}`, '--input', '-'], { input: JSON.stringify({ body }) }),
-    );
-  } else {
-    posted = JSON.parse(
+  const name = config.agents.review.name;
+  const posted = await saveSticky(gh, repo, pr.number, reviewMarker(name), body);
+  review.posted = { url: posted.html_url, at: new Date().toISOString() };
+  // A test of a new commit replaces the line comments of the older ones.
+  if (tested) {
+    const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
+    const open = await openReviews(gh, reviews, name);
+    if (rendered.comments.length)
       await gh(['api', '-X', 'POST', reviews, '--input', '-'], {
         input: JSON.stringify({
           commit_id: review.head,
           event: 'COMMENT',
-          body,
+          body: lineReviewBody(rendered.comments.length, posted.html_url, name),
           comments: rendered.comments.map((comment) => ({
             path: comment.path,
             line: comment.line,
@@ -1070,17 +1138,15 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
             body: limitBody(redact(comment.body)),
           })),
         }),
-      }),
-    );
+      });
     try {
       await supersede(ctx, gh, open, review.head);
     } catch (error) {
       ctx.log(`Could not replace the older review(s) of PR #${pr.number}: ${String(error).split('\n')[0]}`);
     }
   }
-  review.posted = { url: posted.html_url, at: new Date().toISOString() };
   await ctx.workspace.saveReview(review);
-  ctx.log(`${current && !tested ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
+  ctx.log(`${posted.created ? 'Posted' : 'Updated'} the review of PR #${pr.number}: ${posted.html_url}`);
   if (review.check) await setCheckRun(ctx, gh, review, review.check);
 }
 

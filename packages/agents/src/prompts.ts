@@ -153,7 +153,7 @@ YOUR JOB, IN ORDER
 1. Read the pull request and its diff in the prompt. Work out which screens and flows the change can affect:
    the screens that the changed files render, and the flows that use the changed logic. If the app does not
    render or run any changed file (a change to tests, CI, docs, or code outside the app), call finish at once
-   and say so. Do not look for a screen that the change cannot reach.
+   and say so in untested. Do not look for a screen that the change cannot reach.
 2. Enter the app. If the routine "enter-app" is known, use run_routine for it. To reach a known screen, use
    run_routine with its routine. A flow that starts from a routine is a flow that Bugpatrol can repeat.
 3. Test each affected screen and flow like a careful user. Use each control that the change touches. Try an
@@ -162,7 +162,9 @@ YOUR JOB, IN ORDER
    after a changed flow.
 5. Report each problem with report_bug as soon as you see it, with the problem on screen. Then continue.
 6. Do not test the rest of the app. Call finish when you tested what the change can affect, or when your steps
-   are almost gone. The summary names the screens and flows that you tested, and the ones that you did not reach.
+   are almost gone. In tested, name each screen or flow that you tested. In untested, name each one that the
+   change can affect and that you did not reach, with why. A developer scans these lines: one short line each,
+   such as "Rename a project from settings", not a paragraph.
 
 Report each problem that you see, also when it looks older than this pull request. Bugpatrol repeats the flow of
 each report on the base build, and the QA lead compares the two builds.

@@ -153,15 +153,15 @@ npx bugpatrol review 123 --dry-run      # write the review to a local file, and 
 
    | Verdict | Meaning | In the review |
    | --- | --- | --- |
-   | Introduced | The pull request build shows the problem, and the base build does not | A comment on the changed line that causes it, with both screenshots and the steps. When the judge finds no such line in the diff, a section of the review body |
-   | Already on the base branch | The base build shows the problem too | A folded list. A later `bugpatrol judge` can file it as a normal issue |
-   | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A folded list |
-   | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A folded list |
+   | Introduced | The pull request build shows the problem, and the base build does not | A line in the PR comment. On the changed line that causes it, a comment with both screenshots and the steps. When the judge finds no such line in the diff, the PR comment holds the screenshots and the steps |
+   | Already on the base branch | The base build shows the problem too | A row of the folded "Other findings" table. A later `bugpatrol judge` can file it as a normal issue |
+   | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A row of "Other findings" |
+   | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A row of "Other findings" |
 
-5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check, unless you turn on [blocking](#block-a-merge-on-a-disproved-claim).
-6. A new test of the pull request posts a new review. Bugpatrol then replaces the body of each older review with one line, and it deletes the line comments of that review. A comment that a person answered stays.
+5. Bugpatrol keeps one comment on the pull request and edits it on each push. The comment starts with the number of problems that the pull request introduces and the two commits that it compared. Then come a hint for the next run when one would help (for example, raise `agents.explorer.maxSteps` when the explorer used all its steps), the problems, the claims as a table, what the explorer tested and did not reach, one line each, and the other findings.
+6. The comments on changed lines go in a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check, unless you turn on [blocking](#block-a-merge-on-a-disproved-claim). A new test of the pull request replaces the body of each older review with one line, and it deletes the line comments of that review. A comment that a person answered stays.
 
-`.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it updates the body of the review that the commit has, or it posts the review when the commit has none. Use `--force` to test the same commit again.
+`.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it edits the PR comment, or posts it when the pull request has none. Use `--force` to test the same commit again.
 
 What you must know before you run it:
 
@@ -169,8 +169,8 @@ What you must know before you run it:
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
 - **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol. After the merge, `bugpatrol promote <number> <claim>` keeps a proven claim's routine in `.bugpatrol/routines/` for the patrol to replay.
-- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch. With `agents.review.block` on, the token also needs `checks: write`.
-- **Two reviews of one pull request need a name each.** If two configs review the same pull request, for example two apps of a monorepo, set `agents.review.name` in each. A named review only replaces older reviews with the same name, and its check run is `Bugpatrol claim check (<name>)`.
+- **Bugpatrol finds its comment and its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the same comment is still edited. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch. With `agents.review.block` on, the token also needs `checks: write`.
+- **Two reviews of one pull request need a name each.** If two configs review the same pull request, for example two apps of a monorepo, set `agents.review.name` in each. A named review has its own PR comment, only replaces older reviews with the same name, and its check run is `Bugpatrol claim check (<name>)`.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 

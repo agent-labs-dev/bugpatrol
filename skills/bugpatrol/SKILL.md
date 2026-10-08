@@ -449,7 +449,7 @@ To read the state of the PRs and issues back from GitHub, run `npx bugpatrol@lat
 
 ```bash
 npx bugpatrol@latest review <pr> --dry-run   # write the review to .bugpatrol/runs/reviews/pr-<pr>.md
-npx bugpatrol@latest review <pr>             # post the review; it replaces the review of an older commit
+npx bugpatrol@latest review <pr>             # post the review; it edits the same PR comment on each push
 ```
 
 - It needs a logged-in `gh`. To post the review, it also needs `agents.github.enabled: true`.
