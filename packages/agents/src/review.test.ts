@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
+import { type Platform, type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
 import type { UiElement } from '@bugpatrol/drivers';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from './github.js';
@@ -652,16 +652,22 @@ function builds(root: string, make: (build: 'head' | 'base', index: number) => F
   return { drivers, prepare, createDriver };
 }
 
-const claimConfig = (prepare: string, github: Record<string, unknown> = { enabled: false }) =>
+const claimConfig = (
+  prepare: string,
+  github: Record<string, unknown> = { enabled: false },
+  review: Record<string, unknown> = {},
+) =>
   parseConfig({
     version: 1,
     app: { source: 'source', connect: { url: 'fake://home' } },
-    agents: { github, review: { claims: true }, fixer: { retest: { prepare } } },
+    agents: { github, review: { claims: true, ...review }, fixer: { retest: { prepare } } },
   });
 
 type ClaimPlan = {
   /** `flow` turns on the dark mode switch and saves the flow. `skip` and `note` save no flow. */
   explore: Record<string, 'flow' | 'skip' | 'note'>;
+  /** The declared benchmark that the judge picks for each claim. */
+  benches?: Record<string, string>;
   verdicts: Record<string, { verdict: string; reason: string; saw?: string }>;
 };
 
@@ -698,6 +704,13 @@ function claimAgents(plan: ClaimPlan, before?: (task: RoleTask) => Promise<void>
           }
         }
         await tool(task, 'finish').run({ summary: 'Tested the dark mode switch.' });
+      } else if (tool(task, 'pick_bench')) {
+        // The judge cannot name a benchmark that the config does not declare.
+        const invented = await tool(task, 'pick_bench').run({ claim: 'claim-1', bench: 'invented' });
+        expect(invented.isError).toBe(true);
+        for (const [claim, bench] of Object.entries(plan.benches ?? {}))
+          expect((await tool(task, 'pick_bench').run({ claim, bench })).isError).toBeFalsy();
+        await tool(task, 'finish').run({ summary: 'Picked.' });
       } else if (tool(task, 'view_claim')) {
         for (const [claim, verdict] of Object.entries(plan.verdicts)) {
           expect((await tool(task, 'view_claim').run({ claim })).isError).toBeFalsy();
@@ -949,6 +962,49 @@ describe('claim check', { timeout: 30_000 }, () => {
     }
   });
 
+  it('finds what the machine can run before it explores, and posts the review when the app platform is missing', async () => {
+    const f = await fixture();
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { platform: 'android', source: 'source', connect: { url: 'fake://home' } },
+        agents: { github: { enabled: true, repo: 'o/r' }, review: { claims: true } },
+      });
+      const github = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.', 'Export works.') });
+      const agents = claimAgents({ explore: {}, verdicts: {} });
+      const asked: Platform[][] = [];
+      const drivers: FakeDriver[] = [];
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: agents.createRuntime,
+        createDriver: () => {
+          const driver = screens();
+          drivers.push(driver);
+          return driver;
+        },
+        capabilities: async (platforms) => {
+          asked.push(platforms);
+          expect(agents.tasks).toHaveLength(0);
+          return { android: 'No Android emulator runs on this machine.' };
+        },
+      });
+      expect(asked).toEqual([['android']]);
+      // Bugpatrol never starts the app, an emulator or a model for a platform the machine cannot run.
+      expect(agents.tasks).toHaveLength(0);
+      expect(drivers).toHaveLength(0);
+      expect(review.status).toBe('finished');
+      expect(review.claims).toMatchObject([
+        { claim: { id: 'claim-1' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
+        { claim: { id: 'claim-2' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
+      ]);
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('Claims that Bugpatrol could not test (2)');
+      expect(sent!.body).toContain('No Android emulator runs on this machine.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('shows the step screenshots and a link to the full video when the GIF cannot be made', async () => {
     const f = await fixture({ enabled: false });
     try {
@@ -980,6 +1036,51 @@ describe('claim check', { timeout: 30_000 }, () => {
     }
   });
 
+  it('gives a claim for a platform the machine cannot run the reason, and tests the rest', async () => {
+    const f = await fixture({ enabled: false }, { claims: true });
+    try {
+      const tasks: RoleTask[] = [];
+      const runtime: Runtime = {
+        label: 'scripted',
+        async run(task) {
+          tasks.push(task);
+          if (tool(task, 'add_claim')) {
+            for (const platform of ['web', 'ios'])
+              await tool(task, 'add_claim').run({
+                text: `The save button saves on ${platform}.`,
+                platform,
+                source: 'body',
+                testable: true,
+              });
+            await tool(task, 'finish').run({ summary: 'Two claims.' });
+          } else await tool(task, 'finish').run({ summary: 'Reached nothing.' });
+          return { stop: 'done', steps: 1, costUsd: 0 };
+        },
+      };
+      const { gh } = fakeGh();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: () => runtime,
+        createDriver: screens,
+        dryRun: true,
+        capabilities: async () => ({ ios: 'iOS needs macOS and a booted simulator, and this machine runs Linux.' }),
+      });
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
+      expect(tasks[1]!.prompt).toContain('The save button saves on web.');
+      expect(tasks[1]!.prompt).not.toContain('The save button saves on ios.');
+      expect(review.claims).toMatchObject([
+        { claim: { platform: 'web' }, verdict: 'untested', reason: 'The explorer did not reach this claim.' },
+        {
+          claim: { platform: 'ios' },
+          verdict: 'untested',
+          reason: 'iOS needs macOS and a booted simulator, and this machine runs Linux.',
+        },
+      ]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('stops with an error when a build does not start for a claim replay, and gives no verdict', async () => {
     const f = await fixture();
     try {
@@ -1001,6 +1102,135 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(record!.claims?.some((finding) => finding.verdict !== 'untested') ?? false).toBe(false);
       expect(existsSync(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'))).toBe(false);
       expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Reads `time: <n> ms` from the output of a benchmark. */
+const TIME = 'time: (\\d+(?:\\.\\d+)?) ms';
+
+describe('claim check with benchmarks', { timeout: 30_000 }, () => {
+  it('runs a picked benchmark on the two builds in turn, and overlapping spreads give at most partly-proven', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      // Each run prints the next number of a counter that both builds share, so the order of the runs shows.
+      const counter = JSON.stringify(join(f.root, 'counter.txt'));
+      const config = claimConfig(
+        app.prepare,
+        { enabled: true, repo: 'o/r' },
+        {
+          benches: [
+            {
+              name: 'settings-load',
+              command: `n=$(cat ${counter} 2>/dev/null || echo 0); echo $((n + 1)) > ${counter}; echo "time: $((10 + n)) ms"`,
+              metric: 'load time in ms',
+              parse: TIME,
+              runs: 3,
+            },
+            { name: 'broken', command: 'echo "no timing here"', metric: 'load time in ms', parse: TIME },
+          ],
+        },
+      );
+      const github = fakeGh({
+        body: claimsBody('The settings page loads faster.', 'The home page loads faster.', 'Dark mode works.'),
+      });
+      const agents = claimAgents({
+        explore: { 'claim-3': 'flow' },
+        benches: { 'claim-1': 'settings-load', 'claim-2': 'broken' },
+        verdicts: {
+          'claim-1': { verdict: 'proven', reason: 'The pull request build is faster.' },
+          'claim-3': { verdict: 'proven', reason: 'The page goes dark.' },
+        },
+      });
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+      });
+
+      // The judge picks the benchmarks before the explorer runs, and the explorer gets only the other claims.
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer', 'judge']);
+      expect(agents.tasks[0]!.prompt).toContain('settings-load: load time in ms');
+      const toTest = agents.tasks[1]!.prompt.slice(agents.tasks[1]!.prompt.indexOf('CLAIMS TO TEST'));
+      expect(toTest).toContain('claim-3: Dark mode works.');
+      expect(toTest).not.toContain('claim-1');
+
+      const byId = Object.fromEntries(review.claims!.map((finding) => [finding.claim.id, finding]));
+      // A, B, A, B: the base build runs first, then the pull request build, three times.
+      expect(byId['claim-1']).toMatchObject({
+        verdict: 'partly-proven',
+        evidence: 'bench',
+        bench: {
+          name: 'settings-load',
+          runs: 3,
+          base: { values: [10, 12, 14], median: 12, min: 10, max: 14 },
+          head: { values: [11, 13, 15], median: 13, min: 11, max: 15 },
+        },
+      });
+      expect(byId['claim-1']!.reason).toContain('The spreads of the two builds overlap');
+      // A benchmark whose output does not match its parse rule tests nothing.
+      expect(byId['claim-2']).toMatchObject({ verdict: 'untested' });
+      expect(byId['claim-2']!.evidence).toBeUndefined();
+      expect(byId['claim-2']!.reason).toContain('broken');
+      expect(byId['claim-3']).toMatchObject({ verdict: 'proven', evidence: 'replay' });
+
+      // The judge sees the numbers of both builds.
+      const view = await tool(agents.tasks[2]!, 'view_claim').run({ claim: 'claim-1' });
+      const text = view.content.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
+      expect(text).toContain('median 12');
+      expect(text).toContain('median 13');
+
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('#### The settings page loads faster.');
+      expect(sent!.body).toContain('Evidence: a benchmark on both builds.');
+      expect(sent!.body).toContain('| Median | 12 | 13 |');
+      expect(sent!.body).toContain('| Spread | 10 to 14 | 11 to 15 |');
+      expect((await git(f.source, 'worktree', 'list')).split('\n')).toHaveLength(1);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the verdict of the judge when one build is slower beyond the noise', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      // A real timing: the pull request build waits 150 ms more.
+      const script = join(f.root, 'bench.mjs');
+      await writeFile(
+        script,
+        [
+          "import { readFileSync } from 'node:fs';",
+          'const start = performance.now();',
+          "if (readFileSync('settings.txt', 'utf8').includes('broken')) await new Promise((done) => setTimeout(done, 150));",
+          'console.log(`time: ${(performance.now() - start).toFixed(1)} ms`);',
+        ].join('\n'),
+      );
+      const config = claimConfig(app.prepare, undefined, {
+        benches: [{ name: 'settings-load', command: `node ${JSON.stringify(script)}`, metric: 'ms', parse: TIME }],
+      });
+      const { gh } = fakeGh({ body: claimsBody('The settings page loads faster.') });
+      const agents = claimAgents({
+        explore: {},
+        benches: { 'claim-1': 'settings-load' },
+        verdicts: {
+          'claim-1': { verdict: 'not-proven', reason: 'The pull request build is slower.', saw: 'About 150 ms more.' },
+        },
+      });
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+        dryRun: true,
+      });
+      const [finding] = review.claims!;
+      expect(finding).toMatchObject({ verdict: 'not-proven', evidence: 'bench', saw: 'About 150 ms more.' });
+      // The default count of runs.
+      expect(finding!.bench!.head.values).toHaveLength(5);
+      expect(finding!.bench!.head.min).toBeGreaterThan(finding!.bench!.base.max);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

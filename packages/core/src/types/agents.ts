@@ -365,6 +365,21 @@ export type ClaimReplay = {
   recording?: { file: string; gif?: string };
 };
 
+/** The numbers of one benchmark on one build. The spread is from `min` to `max`. */
+export type BenchBuild = { values: number[]; median: number; min: number; max: number };
+
+/** One declared benchmark, run on both builds in turn. */
+export type ClaimBench = {
+  name: string;
+  command: string;
+  metric: string;
+  better: 'lower' | 'higher';
+  /** Runs on each build. */
+  runs: number;
+  head: BenchBuild;
+  base: BenchBuild;
+};
+
 /** One claim of a pull request, with the verdict of the claim check. */
 export type ClaimFinding = {
   claim: Claim;
@@ -382,6 +397,8 @@ export type ClaimFinding = {
   steps?: string[];
   head?: ClaimReplay;
   base?: ClaimReplay;
+  /** The benchmark that measured a speed claim. */
+  bench?: ClaimBench;
 };
 
 /** `reviews/pr-<number>.json`: the last review of one pull request. */
@@ -405,6 +422,8 @@ export type PrReview = {
     headReplay?: string;
     baseReplay?: string;
     claimJudge?: string;
+    /** The judge that picked the benchmarks. */
+    benches?: string;
   };
   /** The explorer's own account of what it tested. */
   tested?: string;

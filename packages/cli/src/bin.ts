@@ -9,6 +9,7 @@ import { doctorExitCode, runChecks } from './commands/doctor.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
+import { runPromoteCommand } from './commands/promote.js';
 import { exitCodeForError, runCommand } from './commands/run.js';
 import { formatRunSummary, parseRunFlags } from './commands/run-cli.js';
 import { commandHelp, USAGE } from './usage.js';
@@ -100,6 +101,11 @@ try {
     case 'replay': {
       const config = readConfig();
       await runAgentCommand(command, args, root, config, (message) => process.stdout.write(`${message}\n`));
+      break;
+    }
+
+    case 'promote': {
+      await runPromoteCommand(args, root, readConfig(), (line) => process.stdout.write(`${line}\n`));
       break;
     }
 

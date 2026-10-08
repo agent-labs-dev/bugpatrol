@@ -18,6 +18,7 @@ import {
   type Severity,
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { type Capabilities, detectCapabilities } from '../capabilities.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
@@ -44,6 +45,7 @@ import { explorerTools } from '../tools/explorer.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
+import { pickBenches, runBenches } from './benches.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
 import { type ClaimFlow, checkClaims, claimTools } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
@@ -110,6 +112,8 @@ export type ReviewOptions = {
   claims?: boolean;
   /** How long a replayed step waits for its target. */
   replayWindowMs?: number;
+  /** Finds which platforms the machine can run. Tests stub it. */
+  capabilities?: (platforms: Platform[]) => Promise<Capabilities>;
 };
 
 type PullRequest = {
@@ -220,15 +224,15 @@ async function loadPullRequest(
 }
 
 /**
- * Starts the app from one commit of the pull request, in its own worktree,
- * and removes the worktree after. The checkout is detached and has no work
- * of a person in it, so the forced removal loses nothing.
+ * Checks out one commit of the pull request in its own worktree, prepared
+ * like a build, and removes the worktree after. The checkout is detached and
+ * has no work of a person in it, so the forced removal loses nothing.
  */
-async function withBuild<T>(
+async function withWorktree<T>(
   ctx: ReviewContext,
   name: 'head' | 'base',
   commit: string,
-  run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
+  run: (worktree: string) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
   const worktree = join(paths.worktrees(root), `review-${ctx.pr.number}-${name}`);
@@ -244,8 +248,6 @@ async function withBuild<T>(
   await remove();
   await mkdir(paths.worktrees(root), { recursive: true });
   await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
-  let app: Awaited<ReturnType<typeof startApp>> | undefined;
-  let driver: Driver | undefined;
   let restore = async () => {};
   try {
     await linkEnvFiles(source, worktree);
@@ -255,29 +257,47 @@ async function withBuild<T>(
       ctx.log(`Preparing the ${name} worktree: ${prepare}`);
       await exec('/bin/sh', ['-c', prepare], { cwd: worktree, timeout: 600_000, maxBuffer: 4 * 1024 * 1024 });
     }
-    const vars = new Vars(config.app.secrets);
-    app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree });
-    const connect = async () => {
-      await driver?.close();
-      driver = undefined;
-      const next = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
-      driver = next;
-      await next.connect();
-      return next;
-    };
-    return await run(await connect(), vars, connect);
+    return await run(worktree);
   } finally {
     try {
-      await driver?.close();
+      await restore();
     } finally {
-      try {
-        await app?.stop();
-      } finally {
-        await restore();
-        await remove();
-      }
+      await remove();
     }
   }
+}
+
+/** Starts the app from one commit of the pull request, in its own worktree. */
+async function withBuild<T>(
+  ctx: ReviewContext,
+  name: 'head' | 'base',
+  commit: string,
+  run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
+): Promise<T> {
+  const { root, config } = ctx;
+  return withWorktree(ctx, name, commit, async (worktree) => {
+    let app: Awaited<ReturnType<typeof startApp>> | undefined;
+    let driver: Driver | undefined;
+    try {
+      const vars = new Vars(config.app.secrets);
+      app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree });
+      const connect = async () => {
+        await driver?.close();
+        driver = undefined;
+        const next = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+        driver = next;
+        await next.connect();
+        return next;
+      };
+      return await run(await connect(), vars, connect);
+    } finally {
+      try {
+        await driver?.close();
+      } finally {
+        await app?.stop();
+      }
+    }
+  });
 }
 
 /** The explorer tests what the diff can affect on the pull request build. Each report is a candidate. */
@@ -795,22 +815,46 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       review.claims = claims.map((claim) => notYet(claim, 'The review stopped before it tested this claim.'));
       await rm(paths.reviewDir(ctx.root, pr.number), { recursive: true, force: true });
     }
-    // Capability detection (#62) widens this to the platforms that the machine can run.
-    const toTest = (claims ?? []).filter((claim) => claim.testable && claim.platform === ctx.config.app.platform);
+    const platform = ctx.config.app.platform;
+    const testable = (claims ?? []).filter((claim) => claim.testable);
+    // Detection runs before any exploring, and only for the claim check.
+    const missing: Capabilities = testable.length
+      ? await (ctx.opts.capabilities ?? ((platforms) => detectCapabilities(ctx.config, platforms)))([
+          ...new Set(testable.map((claim) => claim.platform)),
+        ])
+      : {};
+    const toTest = testable.filter((claim) => claim.platform === platform && !missing[platform]);
+    const untestedHere = (claim: Claim) =>
+      notYet(claim, missing[claim.platform] ?? `The app runs on ${platform}, and this claim needs ${claim.platform}.`);
     if (!pr.files.length) {
       review.tested = `The pull request changes no file against \`${pr.baseRef}\`.`;
       if (claims) review.claims = claims.map((claim) => notYet(claim, 'The pull request changes no file.'));
+    } else if (missing[platform]) {
+      // The app cannot start here, so nothing else runs, and the review still posts.
+      review.tested = `Bugpatrol could not run the app on this machine. ${missing[platform]}`;
+      review.claims = claims!.map(untestedHere);
     } else {
       const flows = new Map<string, ClaimFlow>();
-      const candidates = await exploreHead(ctx, review, toTest, flows);
+      const testable = (claims ?? []).filter((claim) => claim.testable);
+      const picks =
+        testable.length && ctx.config.agents.review.benches.length
+          ? await pickBenches(ctx, review, testable)
+          : new Map<string, string>();
+      // A benchmark measures its claims; the explorer tests the others.
+      const toExplore = toTest.filter((claim) => !picks.has(claim.id));
+      const candidates = await exploreHead(ctx, review, toExplore, flows);
       if (claims) {
-        const tested = await checkClaims(ctx, review, toTest, flows, (name, commit, run) =>
+        const measured = await runBenches(ctx, picks, (run) =>
+          withWorktree(ctx, 'base', pr.base, (base) =>
+            withWorktree(ctx, 'head', pr.head, (head) => run({ head, base })),
+          ),
+        );
+        const toCheck = [...toExplore, ...testable.filter((claim) => picks.has(claim.id))];
+        const tested = await checkClaims(ctx, review, toCheck, flows, measured, (name, commit, run) =>
           withBuild(ctx, name, commit, run),
         );
         review.claims = claims.map(
-          (claim) =>
-            tested.find((finding) => finding.claim.id === claim.id) ??
-            notYet(claim, `The app runs on ${ctx.config.app.platform}, and this claim needs ${claim.platform}.`),
+          (claim) => tested.find((finding) => finding.claim.id === claim.id) ?? untestedHere(claim),
         );
       }
       // With no report there is nothing to compare, so the base build does not start.

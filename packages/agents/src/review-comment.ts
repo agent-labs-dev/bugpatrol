@@ -1,4 +1,13 @@
-import type { ClaimEvidence, ClaimFinding, ClaimSource, PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
+import type {
+  BenchBuild,
+  ClaimBench,
+  ClaimEvidence,
+  ClaimFinding,
+  ClaimSource,
+  PrReview,
+  ReviewFinding,
+  ReviewVerdict,
+} from '@bugpatrol/core';
 
 /** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
 export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
@@ -71,6 +80,22 @@ const evidenceWords: Record<ClaimEvidence, string> = {
   bench: 'a benchmark on both builds',
 };
 
+/** The median and the spread of a benchmark on each build, and the command that measured them. */
+function benchLines(bench: ClaimBench, base: string, head: string): string[] {
+  const spread = (numbers: BenchBuild) => `${numbers.min} to ${numbers.max}`;
+  return [
+    `Bugpatrol ran the benchmark \`${bench.name}\` ${bench.runs} times on each build, in turn. ${bench.metric}, ${bench.better} is better.`,
+    `| | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
+      `| Median | ${bench.base.median} | ${bench.head.median} |\n` +
+      `| Spread | ${spread(bench.base)} | ${spread(bench.head)} |`,
+    ...details('Each run', [
+      `\`${bench.command}\``,
+      `Base: ${bench.base.values.join(', ')}`,
+      `This pull request: ${bench.head.values.join(', ')}`,
+    ]),
+  ];
+}
+
 /** A claim whose builds both have a GIF shows the GIFs only. Otherwise it shows the screenshots of each step. */
 const recorded = (finding: ClaimFinding) => Boolean(finding.base?.recording?.gif && finding.head?.recording?.gif);
 
@@ -128,6 +153,7 @@ function claimLines(
       finding.reason,
       // With a replay, the screenshots show the rest.
       ...(finding.saw && (finding.verdict === 'not-proven' || !replayed) ? [`Bugpatrol saw: ${finding.saw}`] : []),
+      ...(finding.bench ? benchLines(finding.bench, base, head) : []),
       ...(finding.did
         ? [
             `${replayed ? 'What Bugpatrol did on both builds' : 'What Bugpatrol did on this pull request'}: ${finding.did}`,
