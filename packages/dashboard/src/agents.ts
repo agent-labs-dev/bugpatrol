@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import {
   type AgentEvent,
   type AgentRole,
@@ -8,10 +8,12 @@ import {
   type AppMap,
   addUsage,
   type Candidate,
+  type ClaimVerdict,
   type FixProposal,
   type Issue,
   loadConfig,
   type MemoryFile,
+  type PrReview,
   paths,
   type Routine,
   type SessionFlow,
@@ -52,6 +54,18 @@ function list(dir: string): string[] {
   }
 }
 
+/** Every file under a directory, at any depth. */
+function walk(dir: string): string[] {
+  return list(dir).flatMap((name) => {
+    const path = join(dir, name);
+    try {
+      return statSync(path).isDirectory() ? walk(path) : [path];
+    } catch {
+      return [];
+    }
+  });
+}
+
 function jsonLines<T>(file: string): T[] {
   let raw: string;
   try {
@@ -86,6 +100,23 @@ function processAlive(pid: number | undefined): boolean {
 }
 
 const STOPPED = 'Stopped: its process ended.';
+
+const verdictOrder: ClaimVerdict[] = ['proven', 'partly-proven', 'not-proven', 'untested'];
+type ReviewRow = Omit<PrReview, 'claims' | 'findings' | 'sessions' | 'tested'> & {
+  /** How many claims got each verdict. Absent when the claim check was off. */
+  verdicts?: Partial<Record<ClaimVerdict, number>>;
+  /** The problems that the pull request introduced. */
+  introduced: number;
+};
+/** A video, an animated image, or a terminal cast that a claim replay recorded. */
+type Recording = { path: string; kind: 'video' | 'image' | 'cast'; claimId?: string; build?: 'head' | 'base' };
+const recordingKinds: Record<string, Recording['kind']> = {
+  '.mp4': 'video',
+  '.webm': 'video',
+  '.gif': 'image',
+  '.webp': 'image',
+  '.cast': 'cast',
+};
 
 export class AgentReader {
   constructor(
@@ -280,6 +311,56 @@ export class AgentReader {
     }));
     if (screens.length) screens.push({ id: '__start', name: 'App start', virtual: true, openIssues: 0 });
     return { ...map, screens, edges, entryId: screens.length ? '__start' : undefined };
+  }
+
+  /** Every stored review, newest first, as one row each: the claims become a count per verdict. */
+  reviews(): ReviewRow[] {
+    return this.reviewRecords()
+      .map(({ claims, findings, sessions: _, tested: __, ...review }) => {
+        const verdicts = claims && Object.fromEntries(verdictOrder.map((verdict) => [verdict, 0]));
+        for (const finding of claims ?? []) verdicts![finding.verdict] = (verdicts![finding.verdict] ?? 0) + 1;
+        const introduced = findings.filter((finding) => finding.verdict === 'introduced').length;
+        return { ...review, ...(verdicts ? { verdicts } : {}), introduced };
+      })
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  /**
+   * One review and the recordings in its run directory. A recording names its
+   * claim and build in its path (`claim-1/head.mp4`), so the page can put it
+   * next to that claim. One that names neither still shows, on its own.
+   */
+  review(pr: number): { review: PrReview; recordings: Recording[] } | undefined {
+    const review = this.reviewRecords().find((entry) => entry.pr.number === pr);
+    if (!review) return undefined;
+    const recordings = walk(paths.reviewDir(this.root, pr))
+      .map((file) => ({ file, kind: recordingKinds[extname(file).toLowerCase()] }))
+      .filter((entry): entry is { file: string; kind: Recording['kind'] } => Boolean(entry.kind))
+      .map(({ file, kind }) => {
+        const path = relative(this.root, file).split(sep).join('/');
+        const inside = relative(paths.reviewDir(this.root, pr), file);
+        const claimId = inside.match(/\bclaim-\d+(?!\d)/)?.[0];
+        const build = inside.match(/\b(head|base)\b/)?.[1] as Recording['build'];
+        return { path, kind, ...(claimId ? { claimId } : {}), ...(build ? { build } : {}) };
+      })
+      .sort((a, b) => a.path.localeCompare(b.path));
+    return { review, recordings };
+  }
+
+  private reviewRecords(): PrReview[] {
+    const dir = dirname(paths.review(this.root, 0));
+    return list(dir)
+      .filter((name) => /^pr-\d+\.json$/.test(name))
+      .map((name) => readJson<PrReview>(join(dir, name)))
+      .filter((review): review is PrReview =>
+        Boolean(
+          review?.pr &&
+            Number.isInteger(review.pr.number) &&
+            review.head &&
+            review.startedAt &&
+            Array.isArray(review.findings),
+        ),
+      );
   }
 
   /** Each role as the config sets it, in the same form as the runtime labels. */

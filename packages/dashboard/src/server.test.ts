@@ -44,6 +44,13 @@ describe('resolveArtifactPath', () => {
     expect(resolveArtifactPath(root, '.env')).toBeUndefined();
   });
 
+  it('serves the recordings of a review', () => {
+    for (const name of ['clip.mp4', 'clip.webm', 'clip.gif', 'clip.cast']) {
+      writeFileSync(join(root, '.bugpatrol', 'runs', 'latest', name), 'x');
+      expect(resolveArtifactPath(root, `.bugpatrol/runs/latest/${name}`)).toBeDefined();
+    }
+  });
+
   it('rejects a non-artifact extension even inside .bugpatrol', () => {
     expect(resolveArtifactPath(root, '.bugpatrol/notes.txt')).toBeUndefined();
   });
