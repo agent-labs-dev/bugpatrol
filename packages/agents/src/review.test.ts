@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { type Platform, type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
-import type { UiElement } from '@bugpatrol/drivers';
+import { createDriver, type UiElement } from '@bugpatrol/drivers';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from './github.js';
 import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER } from './review-comment.js';
@@ -1706,6 +1708,126 @@ describe('CLI claim', { timeout: 60_000 }, () => {
       });
       expect(review.check).toMatchObject({ conclusion: 'neutral' });
     } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('API claim', { timeout: 60_000 }, () => {
+  const SECRET = 'api-secret-7c2e51';
+
+  it('checks status and body on both builds with no model, and shows both HTTP transcripts as terminal recordings', async () => {
+    const f = await fixture();
+    // The API of each build: the pull request build answers 404 for a missing project, the base build 200.
+    const server = createServer((request, response) => {
+      const source = String(request.headers['x-source']);
+      const fixed = readFileSync(join(source, 'settings.txt'), 'utf8').includes('broken');
+      const token = String(request.headers.authorization).replace('Bearer ', '');
+      response.writeHead(fixed ? 404 : 200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(fixed ? { error: 'no such project', echo: token } : { id: 'missing', echo: token }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No API port');
+    process.env.BUGPATROL_API_TOKEN = SECRET;
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: {
+          platform: 'api',
+          source: 'source',
+          secrets: ['BUGPATROL_API_TOKEN'],
+          connect: {
+            url: `http://127.0.0.1:${address.port}`,
+            headers: { Authorization: 'Bearer {{BUGPATROL_API_TOKEN}}' },
+          },
+        },
+        agents: { github: { enabled: true, repo: 'o/r' }, review: { claims: true } },
+      });
+      const github = fakeGh({ body: claimsBody('GET /projects/:id returns 404 for a missing project.') });
+      const tasks: RoleTask[] = [];
+      const runtime: Runtime = {
+        label: 'scripted',
+        async run(task) {
+          tasks.push(task);
+          await tool(task, 'start_claim').run({ claim: 'claim-1' });
+          await tool(task, 'request').run({ method: 'GET', url: '/projects/missing' });
+          expect(
+            (await tool(task, 'save_claim').run({ claim: 'claim-1', did: 'x', saw: 'y', status: 'missing' })).isError,
+          ).toBe(true);
+          await tool(task, 'save_claim').run({
+            claim: 'claim-1',
+            did: 'Asked for a project that does not exist.',
+            saw: 'The API answers 404.',
+            status: 404,
+            body_includes: ['no such project'],
+          });
+          await tool(task, 'finish').run({ summary: 'Asked for a missing project.' });
+          return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Asked for a missing project.' };
+        },
+      };
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: () => runtime,
+        // Tells the API which build sends the request. Headers stay out of the recording.
+        createDriver: (config, vars, redact, source) =>
+          createDriver(
+            {
+              ...config,
+              app: {
+                ...config.app,
+                connect: { ...config.app.connect, headers: { ...config.app.connect.headers, 'x-source': source! } },
+              },
+            },
+            vars,
+            redact,
+            source,
+          ),
+      });
+      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(review.claims).toMatchObject([
+        {
+          verdict: 'proven',
+          evidence: 'assertion',
+          head: {
+            ok: true,
+            assertions: [
+              { assertion: { kind: 'status', value: 404 }, ok: true, actual: '404' },
+              { assertion: { kind: 'body-includes', value: 'no such project' }, ok: true },
+            ],
+          },
+          base: {
+            ok: true,
+            assertions: [
+              { assertion: { kind: 'status', value: 404 }, ok: false, actual: '200' },
+              { assertion: { kind: 'body-includes', value: 'no such project' }, ok: false },
+            ],
+          },
+        },
+      ]);
+      const [finding] = review.claims!;
+      for (const build of ['head', 'base'] as const) {
+        const recording = finding![build]!.recording!;
+        expect(recording.file).toBe(`.bugpatrol/runs/reviews/pr-7/claim-1/${build}.cast`);
+        expect(recording.gif).toBe(`.bugpatrol/runs/reviews/pr-7/claim-1/${build}.gif`);
+        const cast = await readFile(join(f.root, recording.file), 'utf8');
+        expect(cast).toContain('GET /projects/missing');
+        expect(cast).toContain(build === 'head' ? '404' : '200');
+        expect(cast).toContain('{{BUGPATROL_API_TOKEN}}');
+        expect(cast).not.toContain(SECRET);
+        expect((await readFile(join(f.root, recording.gif!))).subarray(0, 6).toString()).toBe('GIF89a');
+      }
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('Evidence: an exact check on both builds.');
+      expect(sent!.body).toContain('Terminal recording</a>');
+      expect(sent!.body).toContain('| The status is 404 | Failed, the status is 200 | Passed |');
+      expect(sent!.body).toContain('| The body has "no such project" | Failed | Passed |');
+      expect(sent!.body).not.toContain(SECRET);
+    } finally {
+      delete process.env.BUGPATROL_API_TOKEN;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(f.root, { recursive: true, force: true });
     }
   });

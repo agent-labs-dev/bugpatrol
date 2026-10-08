@@ -27,25 +27,23 @@ export function bugMisses(check: BugCheck, screen: Observation, errors: string[]
 }
 
 /**
- * Checks the assertions of a routine against the last command on a screen.
- * Each one is exact, so the same output gives the same result on each run.
+ * Checks the assertions of a routine against the last command or the last
+ * response on a screen. Each one is exact, so the same output gives the same
+ * result on each run.
  */
 export function checkAssertions(assertions: Assertion[], screen: Observation): AssertionResult[] {
-  const terminal = screen.terminal;
-  const output = terminal?.output ?? '';
+  const { terminal, http } = screen;
   return assertions.map((assertion) => {
-    if (assertion.kind === 'exit-code')
-      return {
-        assertion,
-        ok: terminal?.exitCode === assertion.value,
-        actual: terminal?.exitCode === undefined ? 'none' : String(terminal.exitCode),
-      };
-    const has = output.includes(assertion.value);
-    return { assertion, ok: assertion.kind === 'output-includes' ? has : !has };
+    const code = assertion.kind === 'status' ? http?.status : terminal?.exitCode;
+    if (assertion.kind === 'exit-code' || assertion.kind === 'status')
+      return { assertion, ok: code === assertion.value, actual: code === undefined ? 'none' : String(code) };
+    const text = (assertion.kind.startsWith('body') ? http?.body : terminal?.output) ?? '';
+    const has = text.includes(assertion.value);
+    return { assertion, ok: assertion.kind.endsWith('includes') ? has : !has };
   });
 }
 
-/** An assertion as a sentence, or with `failed`, what the command did instead. */
+/** An assertion as a sentence, or with `failed`, what the command or the API did instead. */
 export function assertionWords(result: Pick<AssertionResult, 'assertion' | 'actual'>, failed = false): string {
   const { assertion } = result;
   if (assertion.kind === 'exit-code')
@@ -54,9 +52,16 @@ export function assertionWords(result: Pick<AssertionResult, 'assertion' | 'actu
         ? 'the command did not exit'
         : `the exit code is ${result.actual}`
       : `The exit code is ${assertion.value}`;
-  const has = assertion.kind === 'output-includes';
-  if (failed) return `the output ${has ? 'lacks' : 'has'} "${assertion.value}"`;
-  return `The output ${has ? 'has' : 'does not have'} "${assertion.value}"`;
+  if (assertion.kind === 'status')
+    return failed
+      ? result.actual === 'none'
+        ? 'no response came'
+        : `the status is ${result.actual}`
+      : `The status is ${assertion.value}`;
+  const what = assertion.kind.startsWith('body') ? 'body' : 'output';
+  const has = assertion.kind.endsWith('includes');
+  if (failed) return `the ${what} ${has ? 'lacks' : 'has'} "${assertion.value}"`;
+  return `The ${what} ${has ? 'has' : 'does not have'} "${assertion.value}"`;
 }
 
 /** Replay issue-local steps from the current screen; the first failure stops the path. */

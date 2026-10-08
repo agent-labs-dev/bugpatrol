@@ -1,5 +1,6 @@
 import type { HttpMethod } from '@bugpatrol/core';
 import { z } from 'zod';
+import { type Cast, writeCast } from './cast.js';
 import type { ActResult, DriverAction, Observation } from './types.js';
 import { WebDriver } from './web.js';
 
@@ -46,6 +47,30 @@ function redactCredentials(text: string): string {
   }
 }
 
+/** The terminal that a recording of requests plays in: wide enough for indented JSON. */
+const CAST = { width: 100, height: 30 };
+
+/** One request of a recording and its answer: a response, or why there was none. All text is redacted. */
+type Exchange = { request: string; body?: string } & (
+  | { status: number; contentType: string | null; response: string }
+  | { error: string }
+);
+
+/** An exchange as terminal output: the request line, its body, then the status line and the response body. */
+function exchangeText(exchange: Exchange): string {
+  const lines = [`\u001b[1;36m>\u001b[0m ${exchange.request}`];
+  if (exchange.body) lines.push(exchange.body);
+  if ('error' in exchange) lines.push(`\u001b[1;31m< ${exchange.error}\u001b[0m`);
+  else {
+    const color = exchange.status >= 400 ? 31 : exchange.status >= 300 ? 33 : 32;
+    lines.push(
+      `\u001b[1;${color}m< ${exchange.status}\u001b[0m ${exchange.contentType ?? '(no content type)'}`,
+      ...(exchange.response ? [exchange.response] : []),
+    );
+  }
+  return `${lines.join('\n').replaceAll(/\r?\n/g, '\r\n')}\r\n\r\n`;
+}
+
 /** A screenshot here is explicitly a rendered HTTP transcript, never a product UI. */
 export class ApiDriver extends WebDriver {
   override readonly platform = 'api';
@@ -58,6 +83,8 @@ export class ApiDriver extends WebDriver {
    * correctly; a 5xx or no answer at all is the server's own failure.
    */
   private serverFailures: string[] = [];
+  /** While a recording runs: when it started, and the output of each request so far. */
+  private cast?: { start: number; events: Cast['events'] };
 
   constructor(private readonly api: ApiOptions) {
     super({ url: 'about:blank', viewport: api.viewport });
@@ -76,6 +103,7 @@ export class ApiDriver extends WebDriver {
   override async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'wait') return super.act(action);
     if (action.kind !== 'request') return { ok: false, error: 'Use request to exercise an API endpoint' };
+    let request: Pick<Exchange, 'request' | 'body'> | undefined;
     try {
       const pointers = captureSchema.parse(action.capture ?? {});
       const url = new URL(action.url, this.api.url);
@@ -90,6 +118,11 @@ export class ApiDriver extends WebDriver {
       for (const [name, value] of Object.entries(action.headers ?? {})) headers.set(name, value);
       if (['host', 'connection', 'proxy-authorization'].some((name) => headers.has(name)))
         throw new Error('Host, connection and proxy authorization headers cannot be overridden');
+      // Headers carry the credentials, so the recording shows the request line and body only.
+      request = {
+        request: this.api.redact(`${action.method} ${url.pathname}${url.search}`),
+        ...(action.body ? { body: this.api.redact(redactCredentials(action.body)) } : {}),
+      };
       const response = await fetch(url, {
         method: action.method,
         headers,
@@ -129,6 +162,12 @@ export class ApiDriver extends WebDriver {
         contentType: response.headers.get('content-type'),
       };
       this.location = url.href;
+      this.record({
+        ...request,
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+        response: body,
+      });
       const status = `${action.method} ${url.pathname}${url.search} → ${response.status}`;
       await this.render(
         status,
@@ -136,8 +175,29 @@ export class ApiDriver extends WebDriver {
       );
       return { ok: true, step: action, captures };
     } catch (error) {
-      return { ok: false, retryable: false, error: this.api.redact(String(error)) };
+      const message = this.api.redact(String(error));
+      if (request) this.record({ ...request, error: message });
+      return { ok: false, retryable: false, error: message };
     }
+  }
+
+  private record(exchange: Exchange): void {
+    this.cast?.events.push([(Date.now() - this.cast.start) / 1000, exchangeText(exchange)]);
+  }
+
+  /** Records the requests and responses as a terminal cast, not the screen: it needs no ffmpeg. */
+  override async startRecording(): Promise<void> {
+    if (this.cast) throw new Error('A recording is already running');
+    this.cast = { start: Date.now(), events: [] };
+  }
+
+  override async stopRecording(name: string): Promise<string> {
+    const cast = this.cast;
+    if (!cast) throw new Error('No recording is running');
+    this.cast = undefined;
+    const file = `${name}.cast`;
+    await writeCast(file, { ...CAST, events: cast.events });
+    return file;
   }
 
   private serverFailed(line: string): void {

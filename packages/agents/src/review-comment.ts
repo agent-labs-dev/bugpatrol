@@ -152,13 +152,7 @@ function claimLines(
     if (!results?.length) return [];
     const cellText = (text: string) => text.replaceAll('|', '\\|');
     const result = (item?: AssertionResult) =>
-      !item
-        ? '-'
-        : item.ok
-          ? 'Passed'
-          : item.assertion.kind === 'exit-code'
-            ? `Failed, ${assertionWords(item, true)}`
-            : 'Failed';
+      !item ? '-' : item.ok ? 'Passed' : item.actual !== undefined ? `Failed, ${assertionWords(item, true)}` : 'Failed';
     return [
       `| Check | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
         results

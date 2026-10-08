@@ -10,6 +10,7 @@ import {
   type ClaimFinding,
   type ClaimReplay,
   type ClaimVerdict,
+  type Platform,
   type PrReview,
   paths,
   type Routine,
@@ -122,17 +123,52 @@ export async function reproClaims(
   return { claims, flows };
 }
 
+/**
+ * The exact checks that save_claim takes on a platform: the input that holds
+ * a number, then the inputs that hold texts, each with its assertion kind.
+ */
+type Checks = {
+  code: [key: string, kind: 'exit-code' | 'status', example: number];
+  texts: [key: string, kind: Exclude<Assertion['kind'], 'exit-code' | 'status'>][];
+  words: string;
+};
+
+const CHECKS: Partial<Record<Platform, Checks>> = {
+  cli: {
+    code: ['exit_code', 'exit-code', 0],
+    texts: [
+      ['output_includes', 'output-includes'],
+      ['output_excludes', 'output-excludes'],
+    ],
+    words:
+      ' Add the exact checks on the last command that the claim makes: exit_code, output_includes (texts ' +
+      'that the output must have), output_excludes (texts that it must not have).',
+  },
+  api: {
+    code: ['status', 'status', 404],
+    texts: [
+      ['body_includes', 'body-includes'],
+      ['body_excludes', 'body-excludes'],
+    ],
+    words:
+      ' Add the exact checks on the last response that the claim makes: status (the HTTP status code), ' +
+      'body_includes (texts that the body must have), body_excludes (texts that it must not have).',
+  },
+};
+
 /** The assertions of save_claim, or what is wrong with them. */
-function assertionsOf(input: Record<string, unknown>, redact: (value: unknown) => string): Assertion[] | string {
+function assertionsOf(
+  checks: Checks,
+  input: Record<string, unknown>,
+  redact: (value: unknown) => string,
+): Assertion[] | string {
   const assert: Assertion[] = [];
-  if (input.exit_code !== undefined) {
-    if (!Number.isInteger(input.exit_code)) return 'exit_code is a whole number, such as 0.';
-    assert.push({ kind: 'exit-code', value: input.exit_code as number });
+  const [codeKey, codeKind, example] = checks.code;
+  if (input[codeKey] !== undefined) {
+    if (!Number.isInteger(input[codeKey])) return `${codeKey} is a whole number, such as ${example}.`;
+    assert.push({ kind: codeKind, value: input[codeKey] as number });
   }
-  for (const [key, kind] of [
-    ['output_includes', 'output-includes'],
-    ['output_excludes', 'output-excludes'],
-  ] as const) {
+  for (const [key, kind] of checks.texts) {
     const values = input[key] ?? [];
     if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !value.trim()))
       return `${key} is a list of texts.`;
@@ -154,7 +190,7 @@ export function claimTools(
   flows: Map<string, ClaimFlow>,
 ): Tool[] {
   let started: string | undefined;
-  const cli = session.config.app.platform === 'cli';
+  const checks = CHECKS[session.config.app.platform];
   const redact = (value: unknown) => session.vars.redact(String(value ?? '').trim()) as string;
   const known = (input: Record<string, unknown>) => claims.find((claim) => claim.id === input.claim);
   const unknown = () => ({
@@ -181,21 +217,19 @@ export function claimTools(
       description:
         'Save the flow since start_claim as the routine of the claim, when the screen shows the result. did: one ' +
         'sentence on what the flow does. saw: what this build shows.' +
-        (cli
-          ? ' Add the exact checks on the last command that the claim makes: exit_code, output_includes (texts ' +
-            'that the output must have), output_excludes (texts that it must not have). They give the verdict ' +
-            'on each build with no model, so check only what the claim says, never a value that changes on each run.'
+        (checks
+          ? `${checks.words} They give the verdict on each build with no model, so check only what the claim ` +
+            'says, never a value that changes on each run.'
           : ''),
       inputSchema: schema(
         {
           claim: string,
           did: string,
           saw: string,
-          ...(cli
+          ...(checks
             ? {
-                exit_code: { type: 'integer' },
-                output_includes: { type: 'array', items: string },
-                output_excludes: { type: 'array', items: string },
+                [checks.code[0]]: { type: 'integer' },
+                ...Object.fromEntries(checks.texts.map(([key]) => [key, { type: 'array', items: string }])),
               }
             : {}),
         },
@@ -206,7 +240,7 @@ export function claimTools(
         if (!claim) return unknown();
         if (started !== claim.id)
           return { ...response(`Call start_claim for ${claim.id} first, before its flow.`), isError: true };
-        const assert = cli ? assertionsOf(input, redact) : [];
+        const assert = checks ? assertionsOf(checks, input, redact) : [];
         if (typeof assert === 'string') return { ...response(assert), isError: true };
         const steps = [
           ...(await chainSteps(session.workspace, session.anchor.routineId)),

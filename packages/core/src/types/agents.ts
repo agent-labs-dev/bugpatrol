@@ -96,17 +96,24 @@ export type Routine = {
   expect?: { elements: string[] };
   /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
   bug?: BugCheck;
-  /** Claim routines only: exact checks on the last command, after the steps ran. */
+  /** Claim routines only: exact checks on the last command or response, after the steps ran. */
   assert?: Assertion[];
 };
 
-/** An exact check on the last command of a CLI routine: its exit code, or a text in its output. */
+/**
+ * An exact check at the end of a routine: on the last command of a CLI app,
+ * its exit code or a text in its output, or on the last response of an API,
+ * its status or a text in its body.
+ */
 export type Assertion =
   | { kind: 'exit-code'; value: number }
   | { kind: 'output-includes'; value: string }
-  | { kind: 'output-excludes'; value: string };
+  | { kind: 'output-excludes'; value: string }
+  | { kind: 'status'; value: number }
+  | { kind: 'body-includes'; value: string }
+  | { kind: 'body-excludes'; value: string };
 
-/** One assertion after one replay. `actual` is what the command gave, when the check is on a value. */
+/** One assertion after one replay. `actual` is what the command or the API gave, when the check is on a value. */
 export type AssertionResult = { assertion: Assertion; ok: boolean; actual?: string };
 
 /**

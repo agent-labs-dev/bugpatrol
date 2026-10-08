@@ -1,7 +1,11 @@
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ApiDriver } from './api.js';
+import { readCast } from './cast.js';
 
 describe('API driver against real HTTP and Chromium', () => {
   let server: Server;
@@ -180,6 +184,37 @@ describe('API driver against real HTTP and Chromium', () => {
     expect(failed[0]).toMatch(/^GET http:\/\/127\.0\.0\.1:\d+\/broken → 500$/);
     expect(failed[1]).toMatch(/\/slow → TimeoutError$/);
     expect((await driver.observe()).networkErrors).toEqual([]);
+  });
+  it('records each request and response as a terminal cast, with credentials redacted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-api-cast-'));
+    try {
+      await driver.startRecording();
+      await driver.act({
+        kind: 'request',
+        method: 'POST',
+        url: '/echo?page=2',
+        body: '{"message":"hello","session":"private-fixture-session"}',
+        headers: { authorization: 'Bearer second-session' },
+      });
+      await driver.act({ kind: 'request', method: 'GET', url: '/denied' });
+      await driver.act({ kind: 'request', method: 'GET', url: '/slow' });
+      const file = await driver.stopRecording(join(dir, 'head'));
+      expect(file).toBe(join(dir, 'head.cast'));
+      const text = (await readCast(file)).events.map(([, output]) => output).join('');
+      expect(text).toContain('POST /echo?page=2');
+      expect(text).toContain('hello');
+      expect(text).toContain('200');
+      expect(text).toContain('GET /denied');
+      expect(text).toContain('401');
+      expect(text).toContain('not authorized');
+      expect(text).toContain('GET /slow');
+      expect(text).toContain('TimeoutError');
+      expect(text).toContain('{{SESSION}}');
+      for (const secret of ['private-fixture-session', 'newly-minted-secret', 'second-session'])
+        expect(text).not.toContain(secret);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
   it('fails explicitly on timeouts and oversized response evidence', async () => {
     expect((await driver.act({ kind: 'request', method: 'GET', url: '/slow' })).ok).toBe(false);

@@ -211,6 +211,12 @@ Each replay records the terminal as an asciicast v2 file, `<build>.cast` next to
 
 Bugpatrol redacts the secrets of `app.secrets` from the output line by line, before the screen, the cast, the GIF, or the explorer sees it. A secret that a command prints in two pieces is still redacted, unless a line break splits it.
 
+### Claims of an API
+
+With `app.platform: api`, each step of a claim routine is one HTTP request, sent for real to the API of each build. When the explorer saves the flow of a claim, it can add exact checks on the last response: its status code, texts that the body must have, and texts that it must not have. They work like the checks of a command line app. They decide the verdict with no judge, the evidence is `assertion`, and the review shows a table of each check on both builds. A failed status check names the status that the build gave, for example `Failed, the status is 200`.
+
+Each replay records its requests and responses as an asciicast v2 file, `<build>.cast`, and the review shows its GIF for each build, drawn the same way as for a command line app, so it needs no `ffmpeg`. The terminal is 100 by 30, wide enough for indented JSON, so the GIF is 800 px wide. The recording shows the method, path, and body of each request, then the status, content type, and body of the response. A request that got no response shows why, for example a timeout. Request headers stay out of the recording, since they carry the credentials. Bugpatrol writes `[redacted]` for each JSON value whose key ends in `token`, `password`, `secret`, `authorization` or `cookie`, and replaces the value of each secret of `app.secrets` with its `{{NAME}}`, before the recording sees the text.
+
 A replay that stops partway on the pull request build makes the claim `untested`, never `not-proven`. A base build that stops partway is evidence: the judge sees where it stopped, and a new control is often missing there. An app that does not start on either build stops the review with an error, as above.
 
 To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:
