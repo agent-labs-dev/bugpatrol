@@ -15,6 +15,7 @@ describe('parseConfig', () => {
     expect(c.viewports).toHaveLength(2);
     expect(c.agents.review).toMatchObject({ claims: false, maxSteps: 150 });
     expect(c.agents.review.budgetUsd).toBeUndefined();
+    expect(c.agents.fixer).toMatchObject({ attempts: 3, retest: { attempts: 2 } });
   });
 
   it('reads declared benchmarks, and rejects a parse rule that is no regular expression or a name used twice', () => {

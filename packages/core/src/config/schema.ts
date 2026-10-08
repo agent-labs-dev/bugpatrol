@@ -389,13 +389,19 @@ export const agentsSchema = z
         enabled: z.boolean().default(false),
         /** Run after the change; a non-zero exit marks the fix failed. */
         verify: z.string().optional(),
+        /**
+         * Fix attempts on one issue before the fixer gives up on it: first
+         * fixes, reruns after a failure, and refixes. CI fixes have their own
+         * limit. `bugpatrol fix --issue` still runs an issue at the limit.
+         */
+        attempts: z.number().int().positive().default(3),
         /** After a fix, start the app from the fix worktree and repeat the issue's flow. */
         retest: z
           .object({
             enabled: z.boolean().default(true),
             /** Shell command run in the worktree before the app starts, e.g. `bun install`. */
             prepare: z.string().optional(),
-            /** Fix attempts in total; each attempt after the first gets the last verdict as feedback. */
+            /** Retest verdicts in total; a not-fixed verdict gets a refix with the verdict as feedback. */
             attempts: z.number().int().positive().default(2),
             maxSteps: z.number().int().positive().default(30),
             budgetUsd: z.number().nonnegative().optional(),

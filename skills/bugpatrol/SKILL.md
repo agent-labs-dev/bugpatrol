@@ -387,7 +387,7 @@ agents:
 ```
 
 - Set `prepare` to the install command of the repo's package manager, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each new worktree before the fixer starts and before each retest.
-- Set `verify` to the checks that a fix must pass. The `claude` fixer preset can edit files, but it cannot run commands, so Bugpatrol runs `verify` itself. If `verify` fails, the fix fails, and the fixer gets a lesson with the error.
+- Set `verify` to the checks that a fix must pass. The `claude` fixer preset can edit files, but it cannot run commands, so Bugpatrol runs `verify` itself. If `verify` fails, the fix fails, and the fixer gets a lesson with the error. The next fix attempt gets the full output and repairs the same change. After `fixer.attempts` (default 3), the fixer gives up on the issue.
 
 ```bash
 npx bugpatrol@latest fix                     # fix the worst open issues, then retest each fix

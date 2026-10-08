@@ -19,6 +19,11 @@ async function fixture() {
   const worktree = join(root, 'wt');
   await git(worktree, 'config', 'user.email', 'test@example.com');
   await git(worktree, 'config', 'user.name', 'Test');
+  await writeFile(join(worktree, 'app.ts'), 'export const x = 0;\n');
+  await git(worktree, 'add', '-A');
+  await git(worktree, 'commit', '-q', '-m', 'initial');
+  await git(worktree, 'push', '-q', '-u', 'origin', 'HEAD');
+  await git(root, 'clone', '-q', join(root, 'origin.git'), 'source');
   await git(worktree, 'checkout', '-q', '-b', 'bugpatrol/fix-iss_1');
   await writeFile(join(worktree, 'app.ts'), 'export const x = 1;\n');
   await git(worktree, 'add', '-A');
@@ -30,18 +35,19 @@ async function fixture() {
     issueId: 'iss_1',
     status: 'proposed',
     runtime: 'cli:claude',
-    repo: worktree,
+    repo: join(root, 'source'),
     branch: 'bugpatrol/fix-iss_1',
     worktree,
     startedAt: '',
     commit: await git(worktree, 'rev-parse', 'HEAD'),
     pr: { number: 7, url: 'https://github.com/o/r/pull/7', draft: true, state: 'open' },
+    attempts: [{ n: 1, kind: 'first', outcome: 'proposed', startedAt: '' }],
   };
   await new Workspace(root).saveFix(fix);
   const config = parseConfig({
     version: 1,
     app: { connect: { url: 'http://x' } },
-    agents: { fixer: { enabled: true }, github: { enabled: true, repo: 'o/r', ci: { attempts: 2 } } },
+    agents: { fixer: { enabled: true, attempts: 1 }, github: { enabled: true, repo: 'o/r', ci: { attempts: 2 } } },
   });
   return { root, worktree, config };
 }
@@ -92,7 +98,12 @@ describe('watchCi', () => {
       expect(result.problems).toEqual([]);
       expect(prompts[0]).toContain('Error: expected 2, got 1');
       const fix = (await new Workspace(f.root).listFixes())[0]!;
-      expect(fix.ci).toMatchObject({ state: 'passed', attempts: 1 });
+      expect(fix.ci).toMatchObject({ state: 'passed' });
+      expect(fix.attempts?.map((item) => [item.n, item.kind, item.outcome])).toEqual([
+        [1, 'first', 'proposed'],
+        [2, 'ci', 'proposed'],
+      ]);
+      expect(await new Workspace(f.root).readFixAttemptDiff('fix_iss_1', 2)).toContain('+export const x = 2;');
       expect(await git(f.worktree, 'rev-parse', 'origin/bugpatrol/fix-iss_1')).toBe(fix.commit);
       expect(await git(f.worktree, 'log', '-1', '--format=%s')).toBe('fix: pass the CI checks');
     } finally {
@@ -120,7 +131,28 @@ describe('watchCi', () => {
       });
       expect(runs).toBe(2);
       expect(result.problems).toEqual([expect.stringContaining('A person must look')]);
-      expect((await new Workspace(f.root).listFixes())[0]!.ci).toMatchObject({ state: 'gave-up', attempts: 2 });
+      const fix = (await new Workspace(f.root).listFixes())[0]!;
+      expect(fix.ci).toMatchObject({ state: 'gave-up' });
+      expect(fix.attempts?.map((item) => item.kind)).toEqual(['first', 'ci', 'ci']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up at once when the worktree of the fix is gone', async () => {
+    const f = await fixture();
+    try {
+      await rm(f.worktree, { recursive: true, force: true });
+      const result = await watchCi(f.root, f.config, {
+        gh: fakeGh([[failed]]),
+        createRuntime: () => {
+          throw new Error('must not run');
+        },
+        wait: true,
+        sleep: async () => {},
+      });
+      expect(result.problems).toEqual([expect.stringContaining('the worktree of iss_1 is gone')]);
+      expect((await new Workspace(f.root).listFixes())[0]?.ci).toMatchObject({ state: 'gave-up' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -135,7 +167,7 @@ describe('watchCi', () => {
           throw new Error('no fixer');
         },
       });
-      expect((await new Workspace(f.root).listFixes())[0]!.ci).toMatchObject({ state: 'pending', attempts: 0 });
+      expect((await new Workspace(f.root).listFixes())[0]!.ci).toMatchObject({ state: 'pending' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -154,7 +186,7 @@ describe('watchCi', () => {
         },
       });
       expect(logs.join('\n')).toContain('The fixer is off');
-      expect((await new Workspace(f.root).listFixes())[0]?.ci).toMatchObject({ state: 'failed', attempts: 0 });
+      expect((await new Workspace(f.root).listFixes())[0]?.ci).toMatchObject({ state: 'failed' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

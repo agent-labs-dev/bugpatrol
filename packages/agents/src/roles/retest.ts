@@ -5,6 +5,7 @@ import {
   type BugpatrolConfig,
   type Candidate,
   type FixProposal,
+  fixerAttempts,
   type Issue,
   judgedRetests,
   type Retest,
@@ -111,6 +112,7 @@ export async function retestFix(
   const targets = await loadRetestTargets(workspace, issue);
   const retest: Retest = {
     attempt,
+    fixAttempt: [...(fix.attempts ?? [])].reverse().find((item) => item.outcome === 'proposed')?.n,
     outcome: 'unclear',
     reason: '',
     shots: targets.map((target) => target.shot),
@@ -313,16 +315,19 @@ function needsRetest(fix: FixProposal): boolean {
 
 /**
  * Records a retest on its fix and sets the fix status. Only a verdict counts
- * as an attempt: a retest that stopped on an error keeps the fix in
- * 'retesting', so the next cycle tries again. An unclear verdict also retests
- * the same change while attempts are left; a not-fixed verdict gets a refix.
+ * against `retest.attempts`: a retest that stopped on an error keeps the fix
+ * in 'retesting', so the next cycle tries again. An unclear verdict also
+ * retests the same change while retests are left; a not-fixed verdict gets a
+ * refix while fix attempts are left too.
  */
 export function applyRetest(config: BugpatrolConfig, fix: FixProposal, result: Retest): void {
   fix.retests = [...(fix.retests ?? []), result];
-  const attemptsLeft = judgedRetests(fix.retests).length < config.agents.fixer.retest.attempts;
+  const retestsLeft = judgedRetests(fix.retests).length < config.agents.fixer.retest.attempts;
+  const refixLeft = fixerAttempts(fix.attempts).length < config.agents.fixer.attempts;
   if (result.outcome === 'fixed') fix.status = 'verified';
   else if (result.outcome === 'error') fix.status = 'retesting';
-  else if ((result.outcome === 'not-fixed' || result.outcome === 'unclear') && attemptsLeft) fix.status = 'retesting';
+  else if (result.outcome === 'not-fixed' && retestsLeft && refixLeft) fix.status = 'retesting';
+  else if (result.outcome === 'unclear' && retestsLeft) fix.status = 'retesting';
   else fix.status = 'proposed';
 }
 
