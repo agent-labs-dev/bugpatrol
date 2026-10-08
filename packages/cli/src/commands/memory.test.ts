@@ -23,4 +23,17 @@ describe('bugpatrol memory', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('rejects a lesson over 200 characters and saves nothing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-memory-cli-'));
+    try {
+      const text = 'Check the guide before you report a layout bug. '.repeat(5);
+      await expect(runMemoryCommand(['add', '--role', 'judge', text], root, () => {})).rejects.toThrow(
+        'The lesson has 239 characters, and the limit is 200.',
+      );
+      expect((await new Workspace(root).readMemory()).lessons).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

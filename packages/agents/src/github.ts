@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { type BugpatrolConfig, type FixProposal, type Issue, judgedRetests } from '@bugpatrol/core';
+import { type BugpatrolConfig, type FixProposal, fitLesson, type Issue, judgedRetests } from '@bugpatrol/core';
 import { commitFix } from './roles/fixer.js';
 import { dismissedFingerprints, Workspace } from './workspace.js';
 
@@ -183,7 +183,7 @@ export async function syncGitHub(
               role: role as 'judge' | 'fixer',
               source: 'rejected-pr' as const,
               scope: issue.screenId,
-              text: lesson,
+              text: fitLesson(lesson),
             })),
           );
           const record = await workspace.startSession('judge');
@@ -229,7 +229,7 @@ export async function syncGitHub(
             role: 'judge',
             source: 'human',
             scope: issue.screenId,
-            text: `Not a bug: ${issue.title} — ${reason}`.slice(0, 200),
+            text: fitLesson(`Not a bug: ${issue.title} — ${reason}`),
           },
         ]);
       } else if (state === 'closed' && stateReason === 'completed') {
@@ -345,7 +345,7 @@ export async function createPr(
           {
             role: 'fixer',
             source: 'commit-hook',
-            text: `The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`.slice(0, 200),
+            text: fitLesson(`The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`),
           },
         ]);
       throw new Error(committed.reason);
