@@ -81,6 +81,8 @@ const evidenceWords: Record<ClaimEvidence, string> = {
   explored: 'the explorer and the judge, with no replay',
   bench: 'a benchmark on both builds',
 };
+/** A flow that both builds replayed, and whose verdict the judge read from the screens. */
+const judgedReplay = 'the judge, from the screens of a replay of the same steps on both builds';
 
 /** The median and the spread of a benchmark on each build, and the command that measured them. */
 function benchLines(bench: ClaimBench, base: string, head: string): string[] {
@@ -184,7 +186,9 @@ function claimLines(
     return [
       `#### ${finding.claim.text}`,
       `\`${finding.verdict}\` · From ${sourceWords(finding.claim.source)}.` +
-        (finding.evidence ? ` Evidence: ${evidenceWords[finding.evidence]}.` : ''),
+        (finding.evidence
+          ? ` Evidence: ${finding.evidence === 'explored' && replayed ? judgedReplay : evidenceWords[finding.evidence]}.`
+          : ''),
       finding.reason,
       // With a replay, the screenshots show the rest.
       ...(finding.saw && (finding.verdict === 'not-proven' || !replayed) ? [`Bugpatrol saw: ${finding.saw}`] : []),

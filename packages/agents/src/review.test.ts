@@ -767,7 +767,7 @@ describe('claim check', { timeout: 30_000 }, () => {
         {
           claim: { id: 'claim-1' },
           verdict: 'proven',
-          evidence: 'replay',
+          evidence: 'explored',
           reason: 'The pull request build goes dark, and the base build stays light.',
           did: 'Opened the home page and turned on the dark mode switch.',
           routine: '.bugpatrol/runs/reviews/pr-7/routines/claim-1.json',
@@ -803,7 +803,9 @@ describe('claim check', { timeout: 30_000 }, () => {
       const [sent] = github.posted();
       expect(sent!.body).toContain('#### The dark mode switch makes the page dark.');
       expect(sent!.body).toContain('`proven`');
-      expect(sent!.body).toContain('Evidence: a replay of the same steps on both builds, with no model.');
+      expect(sent!.body).toContain(
+        'Evidence: the judge, from the screens of a replay of the same steps on both builds.',
+      );
       expect(sent!.body).toContain('Opened the home page and turned on the dark mode switch.');
       expect(sent!.body).toContain(`\`${f.head.slice(0, 7)}\``);
       expect(sent!.body).toContain(`\`${f.base.slice(0, 7)}\``);
@@ -879,7 +881,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       const byId = Object.fromEntries(review.claims!.map((finding) => [finding.claim.id, finding]));
       expect(byId['claim-1']).toMatchObject({
         verdict: 'not-proven',
-        evidence: 'replay',
+        evidence: 'explored',
         saw: 'The header kept its light background.',
       });
       // A replay that fails partway is untested, never not-proven.
@@ -1180,7 +1182,7 @@ describe('claim check with benchmarks', { timeout: 30_000 }, () => {
       expect(byId['claim-2']).toMatchObject({ verdict: 'untested' });
       expect(byId['claim-2']!.evidence).toBeUndefined();
       expect(byId['claim-2']!.reason).toContain('broken');
-      expect(byId['claim-3']).toMatchObject({ verdict: 'proven', evidence: 'replay' });
+      expect(byId['claim-3']).toMatchObject({ verdict: 'proven', evidence: 'explored' });
 
       // The judge sees the numbers of both builds.
       const view = await tool(agents.tasks[2]!, 'view_claim').run({ claim: 'claim-1' });
@@ -1276,7 +1278,7 @@ describe('blocking claim check', { timeout: 30_000 }, () => {
     return { done, checks, gh };
   };
 
-  it('fails the check on a replayed disproof that a second replay repeats, and names the claim and the evidence', async () => {
+  it('never fails the check on a disproof that the judge read from the screens of a replay', async () => {
     const f = await fixture();
     try {
       const app = builds(f.root);
@@ -1287,49 +1289,13 @@ describe('blocking claim check', { timeout: 30_000 }, () => {
         { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
       );
       const review = await done;
-      // The explorer, the first replay, and the second replay on the pull request build.
-      expect(app.drivers.head).toHaveLength(3);
-      expect(review.claims![0]).toMatchObject({
-        verdict: 'not-proven',
-        evidence: 'replay',
-        head: { ok: true },
-        again: { ok: true },
-      });
-      const [check] = checks();
-      expect(checks()).toHaveLength(1);
-      expect(check).toMatchObject({
-        name: 'Bugpatrol claim check',
-        head_sha: f.head,
-        status: 'completed',
-        conclusion: 'failure',
-      });
-      expect(check!.output.title).toContain('1 claim disproved');
-      expect(check!.output.summary).toContain('claim-1: The dark mode switch makes the header dark.');
-      expect(check!.output.summary).toContain('The header kept its light background.');
-      expect(check!.output.summary).toContain('.bugpatrol/runs/reviews/pr-7/routines/claim-1.json');
-      expect(check!.output.summary).toContain('replayed twice');
-      expect(review.check).toMatchObject({ conclusion: 'failure', url: 'https://github.com/o/r/runs/1' });
-    } finally {
-      await rm(f.root, { recursive: true, force: true });
-    }
-  });
-
-  it('makes a disproof that a second replay does not repeat untested, as a flaky replay', async () => {
-    const f = await fixture();
-    try {
-      // The third pull request build does not go dark.
-      const app = builds(f.root, (build, index) => darkApp(build === 'head' && index === 2 ? 'base' : build));
-      const { done, checks } = run(
-        f,
-        app,
-        { block: true },
-        { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
-      );
-      const review = await done;
-      expect(review.claims![0]).toMatchObject({ verdict: 'untested', again: { ok: true } });
-      expect(review.claims![0]!.evidence).toBeUndefined();
-      expect(review.claims![0]!.reason).toMatch(/^Flaky replay/);
+      // The replay ran with no model, and the judge still picked the verdict from its screens.
+      expect(review.claims![0]).toMatchObject({ verdict: 'not-proven', evidence: 'explored', head: { ok: true } });
+      expect(review.claims![0]!.again).toBeUndefined();
+      // The explorer and the first replay only: nothing to replay a second time.
+      expect(app.drivers.head).toHaveLength(2);
       expect(checks()).toMatchObject([{ conclusion: 'neutral' }]);
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1389,7 +1355,7 @@ describe('blocking claim check', { timeout: 30_000 }, () => {
         { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
       );
       const review = await done;
-      expect(review.claims![0]).toMatchObject({ verdict: 'not-proven', evidence: 'replay' });
+      expect(review.claims![0]).toMatchObject({ verdict: 'not-proven', evidence: 'explored' });
       expect(review.claims![0]!.again).toBeUndefined();
       expect(app.drivers.head).toHaveLength(2);
       expect(checks()).toEqual([]);
@@ -1460,10 +1426,12 @@ const reproIssue = {
 describe('issue repro claim', { timeout: 30_000 }, () => {
   const reviewRepro = async (
     f: Awaited<ReturnType<typeof fixture>>,
-    fixed: { head: boolean; base: boolean },
+    fixed: { head: boolean; base: boolean } | ((build: 'head' | 'base', index: number) => boolean),
     review: Record<string, unknown> = {},
   ) => {
-    const app = builds(f.root, (build) => saveApp(fixed[build]));
+    const app = builds(f.root, (build, index) =>
+      saveApp(typeof fixed === 'function' ? fixed(build, index) : fixed[build]),
+    );
     const github = fakeGh({ body: claimsBody('Saving works again.'), issues: [reproIssue] });
     const agents = claimAgents({ explore: {}, verdicts: {} });
     const config = claimConfig(app.prepare, { enabled: true, repo: 'o/r' }, review);
@@ -1527,6 +1495,24 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       expect(check).toMatchObject({ conclusion: 'failure' });
       expect(check!.output.summary).toContain('Fixes #12: Save fails on settings');
       expect(check!.output.summary).toContain('.bugpatrol/routines/repro-a1b2c3.json');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes a disproof that a second replay does not repeat untested, as a flaky replay', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      // The third pull request build has the fix.
+      const { review } = await reviewRepro(f, (build, index) => build === 'head' && index === 2, { block: true });
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'untested',
+        reason: 'Flaky replay: the bug showed on one replay only.',
+        again: { ok: true, bug: false },
+      });
+      expect(review.claims![1]!.evidence).toBeUndefined();
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

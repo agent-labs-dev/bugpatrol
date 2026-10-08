@@ -388,8 +388,11 @@ export type Claim = {
 export type ClaimVerdict = 'proven' | 'not-proven' | 'partly-proven' | 'untested';
 
 /**
- * What a verdict rests on. Only `replay` and `assertion` are deterministic,
- * so only they may ever fail a check (ADR 0001).
+ * What a verdict rests on. `replay` is a bug check that code decides on a
+ * replay, and `assertion` an exact check or an output diff. Only those two
+ * are deterministic, so only they may ever fail a check (ADR 0001). A
+ * verdict that the judge reads, also from the screens of a replay, is
+ * `explored`.
  */
 export type ClaimEvidence = 'replay' | 'assertion' | 'explored' | 'bench';
 

@@ -275,7 +275,7 @@ function writeReviewFixture(root: string, at: (minutes: number) => string): void
           testable: true,
         },
         verdict: 'proven',
-        evidence: 'replay',
+        evidence: 'explored',
         reason: 'The new name shows in the list on this pull request and the menu item is missing on the base.',
         did: 'Opened the project menu and renamed the project on both builds.',
         routine: '.bugpatrol/runs/reviews/pr-42/routines/claim-1.json',

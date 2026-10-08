@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
   type Assertion,
@@ -704,7 +704,6 @@ export async function checkClaims(
     if (!flow) return { claim, verdict: 'untested', reason: 'The explorer did not reach this claim.' };
     if (flow.kind === 'skip') return { claim, verdict: 'untested', reason: flow.reason };
     if (flow.kind === 'repro') return reproFinding(claim, flow, headReplays.get(claim.id), baseReplays.get(claim.id));
-    const evidence: ClaimEvidence = flow.kind === 'flow' ? 'replay' : 'explored';
     const shown = {
       did: flow.did,
       ...(flow.kind === 'flow'
@@ -732,7 +731,8 @@ export async function checkClaims(
     return {
       claim,
       verdict: judged.verdict,
-      ...(judged.verdict === 'untested' ? {} : { evidence }),
+      // The judge read the verdict from the screens, so it stays a comment, replay or not (ADR 0007).
+      ...(judged.verdict === 'untested' ? {} : { evidence: 'explored' as const }),
       reason: judged.reason,
       ...((judged.saw ?? flow.saw) ? { saw: judged.saw ?? flow.saw } : {}),
       ...shown,
@@ -857,7 +857,7 @@ function reproFinding(
   };
 }
 
-/** Only a replay and an assertion give the same result on each run (ADR 0001, ADR 0007). */
+/** Only a result that code decides from a replay gives the same result on each run (ADR 0001, ADR 0007). */
 const DETERMINISTIC: ClaimEvidence[] = ['replay', 'assertion'];
 
 const disproves = (finding: ClaimFinding) =>
@@ -867,12 +867,13 @@ const disproves = (finding: ClaimFinding) =>
 const blockingDisproofs = (findings: ClaimFinding[]) =>
   findings.filter((finding) => disproves(finding) && finding.again);
 
-/** Why a second replay differs from the first, or undefined when both stopped at the same step on the same screen. */
-async function difference(
-  root: string,
-  first: ClaimReplay | undefined,
-  second: ClaimReplay,
-): Promise<string | undefined> {
+/**
+ * Why a second replay differs from the first, or undefined when both gave
+ * the same results that code decides: where the replay stopped, the bug
+ * check, the outputs and the exact checks. The screens may differ, for
+ * example by a time on the page; no verdict reads them.
+ */
+function difference(first: ClaimReplay | undefined, second: ClaimReplay): string | undefined {
   const at = (replay: ClaimReplay | undefined) =>
     replay?.ok ? 'replayed all its steps' : `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
   if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
@@ -883,23 +884,16 @@ async function difference(
     return JSON.stringify(first?.outputs) === JSON.stringify(second.outputs)
       ? undefined
       : 'the outputs of the second replay differ from the first';
-  // The exact checks are the evidence. The screen may differ, for example by a time that the command prints.
-  if (first?.assertions || second.assertions) {
-    const results = (replay?: ClaimReplay) =>
-      JSON.stringify(replay?.assertions?.map((result) => [result.ok, result.actual]));
-    return results(first) === results(second) ? undefined : 'the exact checks gave a different result';
-  }
-  const last = async (replay: ClaimReplay) =>
-    replay.shots.length ? await readFile(join(root, replay.shots.at(-1)!)) : Buffer.alloc(0);
-  if (!(await last(first)).equals(await last(second)))
-    return 'the second replay ended on a different screen than the first';
-  return undefined;
+  const results = (replay?: ClaimReplay) =>
+    JSON.stringify(replay?.assertions?.map((result) => [result.ok, result.actual]));
+  return results(first) === results(second) ? undefined : 'the exact checks gave a different result';
 }
 
 /**
- * With blocking on, each disproof from a replay runs a second time on the
+ * With blocking on, each deterministic disproof runs a second time on the
  * pull request build before it can fail the check. A second replay that
- * stops elsewhere, or ends on a different screen, makes the verdict untested.
+ * stops elsewhere, or gives another bug check, exact check or output, makes
+ * the verdict untested.
  * A same-behavior diff rests on both builds, so it also runs a second time on
  * the base build, and both must give the same outputs as before.
  */
@@ -922,7 +916,7 @@ export async function replayDisproofs(
   const differs = new Map<string, string | undefined>();
   for (const finding of findings) {
     const second = again.get(finding.claim.id);
-    if (second) differs.set(finding.claim.id, await difference(ctx.root, finding.head, second));
+    if (second) differs.set(finding.claim.id, difference(finding.head, second));
   }
   const bases = new Map(
     [...routines].filter(([claim, routine]) => routine.same && differs.has(claim) && !differs.get(claim)),
@@ -936,7 +930,7 @@ export async function replayDisproofs(
   for (const finding of findings) {
     const second = again.get(finding.claim.id);
     const secondBase = againBase.get(finding.claim.id);
-    const baseDiffers = secondBase && (await difference(ctx.root, finding.base, secondBase));
+    const baseDiffers = secondBase && difference(finding.base, secondBase);
     const why = differs.get(finding.claim.id) ?? (baseDiffers && `on the base build, ${baseDiffers}`);
     const repeated = { again: second, ...(secondBase ? { againBase: secondBase } : {}) };
     if (!second) out.push(finding);
