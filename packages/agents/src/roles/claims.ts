@@ -8,6 +8,7 @@ import {
   type ClaimCheckRun,
   type ClaimEvidence,
   type ClaimFinding,
+  type ClaimOutput,
   type ClaimReplay,
   type ClaimVerdict,
   type Platform,
@@ -17,6 +18,7 @@ import {
   type RoutineStep,
 } from '@bugpatrol/core';
 import { castGif, type Driver, inlineGif, type Observation } from '@bugpatrol/drivers';
+import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
@@ -131,6 +133,8 @@ type Checks = {
   code: [key: string, kind: 'exit-code' | 'status', example: number];
   texts: [key: string, kind: Exclude<Assertion['kind'], 'exit-code' | 'status'>][];
   words: string;
+  /** What `same` compares on the platform. */
+  same: string;
 };
 
 const CHECKS: Partial<Record<Platform, Checks>> = {
@@ -143,6 +147,7 @@ const CHECKS: Partial<Record<Platform, Checks>> = {
     words:
       ' Add the exact checks on the last command that the claim makes: exit_code, output_includes (texts ' +
       'that the output must have), output_excludes (texts that it must not have).',
+    same: 'the output and the exit code of each command',
   },
   api: {
     code: ['status', 'status', 404],
@@ -153,6 +158,7 @@ const CHECKS: Partial<Record<Platform, Checks>> = {
     words:
       ' Add the exact checks on the last response that the claim makes: status (the HTTP status code), ' +
       'body_includes (texts that the body must have), body_excludes (texts that it must not have).',
+    same: 'the status, the content type and the body of each response',
   },
 };
 
@@ -219,7 +225,9 @@ export function claimTools(
         'sentence on what the flow does. saw: what this build shows.' +
         (checks
           ? `${checks.words} They give the verdict on each build with no model, so check only what the claim ` +
-            'says, never a value that changes on each run.'
+            'says, never a value that changes on each run. When the claim says that the pull request keeps a ' +
+            'behavior (a refactor, a new pagination that returns the same data), set same to true instead of the ' +
+            `checks: Bugpatrol then compares ${checks.same} on both builds, with times and generated ids normalised.`
           : ''),
       inputSchema: schema(
         {
@@ -229,6 +237,7 @@ export function claimTools(
           ...(checks
             ? {
                 [checks.code[0]]: { type: 'integer' },
+                same: { type: 'boolean' },
                 ...Object.fromEntries(checks.texts.map(([key]) => [key, { type: 'array', items: string }])),
               }
             : {}),
@@ -242,6 +251,16 @@ export function claimTools(
           return { ...response(`Call start_claim for ${claim.id} first, before its flow.`), isError: true };
         const assert = checks ? assertionsOf(checks, input, redact) : [];
         if (typeof assert === 'string') return { ...response(assert), isError: true };
+        if (input.same !== undefined && typeof input.same !== 'boolean')
+          return { ...response('same is true or false.'), isError: true };
+        const same = input.same === true;
+        if (same && assert.length)
+          return {
+            ...response(
+              'A same-behavior claim compares the two builds as a whole. Leave out the exact checks, or set same to false.',
+            ),
+            isError: true,
+          };
         const steps = [
           ...(await chainSteps(session.workspace, session.anchor.routineId)),
           ...session.trail.slice(session.anchor.index),
@@ -254,6 +273,7 @@ export function claimTools(
           platform: session.config.app.platform,
           steps,
           ...(assert.length ? { assert } : {}),
+          ...(same ? { same } : {}),
           createdAt: now,
           updatedAt: now,
         };
@@ -268,6 +288,10 @@ export function claimTools(
           path: relative(ctx.root, file),
         });
         started = undefined;
+        if (same)
+          return response(
+            `Saved the flow of ${claim.id} (${steps.length} steps). Bugpatrol compares ${checks!.same} on both builds.`,
+          );
         if (!assert.length) return response(`Saved the flow of ${claim.id} (${steps.length} steps).`);
         const screen = session.lastObservation ?? (await session.driver!.observe());
         const results = checkAssertions(assert, screen).map(
@@ -317,12 +341,18 @@ export function claimTools(
 }
 
 /** A replay of each build, and `again`: the second replay on the pull request build. */
-type ReplayPass = 'head' | 'base' | 'again';
-const SESSION_OF = { head: 'headReplay', base: 'baseReplay', again: 'againReplay' } as const;
+type ReplayPass = 'head' | 'base' | 'again' | 'againBase';
+const SESSION_OF = {
+  head: 'headReplay',
+  base: 'baseReplay',
+  again: 'againReplay',
+  againBase: 'againBaseReplay',
+} as const;
 const WHERE_OF = {
   head: 'the pull request build',
   base: 'the base build',
   again: 'the pull request build a second time',
+  againBase: 'the base build a second time',
 } as const;
 
 /**
@@ -409,7 +439,15 @@ async function replayClaims(
         }
       }
       await shot();
-      const result = await replaySteps(session, routine.steps, { windowMs: opts.replayWindowMs, onStep: shot });
+      const outputs: ClaimOutput[] = [];
+      const result = await replaySteps(session, routine.steps, {
+        windowMs: opts.replayWindowMs,
+        async onStep(index) {
+          await shot();
+          const output = routine.same ? outputOf(routine.steps[index]!, last!) : undefined;
+          if (output) outputs.push(output);
+        },
+      });
       // The bug shows only at the end of a full replay.
       const bug = routine.bug && result.ok ? { bug: !bugMisses(routine.bug, last!, errors).length } : {};
       // Like the bug check, the assertions hold only at the end of a full replay.
@@ -424,6 +462,7 @@ async function replayClaims(
         ...(recorded ? { recording: recorded } : {}),
         ...bug,
         ...assertions,
+        ...(routine.same && result.ok ? { outputs } : {}),
       });
       session.emit({
         kind: 'session-end',
@@ -637,7 +676,7 @@ export async function checkClaims(
     // Assertions give their own verdict, with no judge.
     else if (
       flow?.kind === 'note' ||
-      (flow?.kind === 'flow' && !flow.routine.assert?.length && headReplays.get(claim.id)?.ok)
+      (flow?.kind === 'flow' && !flow.routine.assert?.length && !flow.routine.same && headReplays.get(claim.id)?.ok)
     )
       tested.push({ claim, flow, head: headReplays.get(claim.id), base: baseReplays.get(claim.id) });
   }
@@ -687,6 +726,7 @@ export async function checkClaims(
       };
     if (flow.kind === 'flow' && flow.routine.assert?.length)
       return assertionFinding(claim, replay!, baseReplays.get(claim.id), shown);
+    if (flow.kind === 'flow' && flow.routine.same) return sameFinding(claim, replay!, baseReplays.get(claim.id), shown);
     const judged = verdicts.get(claim.id);
     if (!judged) return { claim, verdict: 'untested', reason: 'The judge gave no verdict.', ...shown };
     return {
@@ -737,6 +777,45 @@ function assertionFinding(
     verdict: 'proven',
     evidence: 'assertion',
     reason: `The pull request build passes ${results.length === 1 ? 'the' : 'each of the'} ${checks}. ${onBase}`,
+    ...shown,
+  };
+}
+
+/**
+ * The verdict on a same-behavior claim, from the diff of the normalised
+ * outputs of both builds: equal outputs prove it, and any difference
+ * disproves it.
+ */
+function sameFinding(
+  claim: Claim,
+  head: ClaimReplay,
+  base: ClaimReplay | undefined,
+  shown: Pick<ClaimFinding, 'did' | 'routine' | 'steps' | 'head' | 'base'>,
+): ClaimFinding {
+  const untested = (reason: string): ClaimFinding => ({ claim, verdict: 'untested', reason, ...shown });
+  if (!base?.ok) return untested(`The replay on the base build ${stoppedWords(base)} There is nothing to compare.`);
+  const outputs = head.outputs ?? [];
+  if (!outputs.length)
+    return untested('The flow runs no command and sends no request, so there is nothing to compare.');
+  const compared = compareOutputs(base.outputs ?? [], outputs);
+  const [what, of] = outputs[0]!.step.startsWith('$ ') ? ['output', 'command'] : ['response', 'request'];
+  const count = `${outputs.length} ${of}${outputs.length === 1 ? '' : 's'}`;
+  if (!compared.parts.length)
+    return {
+      claim,
+      verdict: 'proven',
+      evidence: 'assertion',
+      reason: `The ${what} of ${outputs.length === 1 ? 'the' : 'each of the'} ${count} is the same on both builds, once normalised.`,
+      compared,
+      ...shown,
+    };
+  return {
+    claim,
+    verdict: 'not-proven',
+    evidence: 'assertion',
+    reason: `The ${what} of ${compared.parts.length} of the ${count} differs between the builds, once normalised.`,
+    saw: compared.parts.map((part) => `The ${what} of \`${part.step.replace(/^\$ /, '')}\` differs.`).join(' '),
+    compared,
     ...shown,
   };
 }
@@ -799,6 +878,11 @@ async function difference(
   if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
     return `the first replay ${at(first)}, and the second ${at(second)}`;
   if (first?.bug !== second.bug) return 'the bug showed on one replay only';
+  // The normalised outputs are the evidence of a same-behavior claim.
+  if (first?.outputs || second.outputs)
+    return JSON.stringify(first?.outputs) === JSON.stringify(second.outputs)
+      ? undefined
+      : 'the outputs of the second replay differ from the first';
   // The exact checks are the evidence. The screen may differ, for example by a time that the command prints.
   if (first?.assertions || second.assertions) {
     const results = (replay?: ClaimReplay) =>
@@ -816,6 +900,8 @@ async function difference(
  * With blocking on, each disproof from a replay runs a second time on the
  * pull request build before it can fail the check. A second replay that
  * stops elsewhere, or ends on a different screen, makes the verdict untested.
+ * A same-behavior diff rests on both builds, so it also runs a second time on
+ * the base build, and both must give the same outputs as before.
  */
 export async function replayDisproofs(
   ctx: ReviewContext,
@@ -833,15 +919,31 @@ export async function replayDisproofs(
   const again = await build('head', ctx.pr.head, (driver, vars, fresh) =>
     replayClaims(ctx, review, 'again', routines, driver, vars, fresh),
   );
+  const differs = new Map<string, string | undefined>();
+  for (const finding of findings) {
+    const second = again.get(finding.claim.id);
+    if (second) differs.set(finding.claim.id, await difference(ctx.root, finding.head, second));
+  }
+  const bases = new Map(
+    [...routines].filter(([claim, routine]) => routine.same && differs.has(claim) && !differs.get(claim)),
+  );
+  const againBase = bases.size
+    ? await build('base', ctx.pr.base, (driver, vars, fresh) =>
+        replayClaims(ctx, review, 'againBase', bases, driver, vars, fresh),
+      )
+    : new Map<string, ClaimReplay>();
   const out: ClaimFinding[] = [];
   for (const finding of findings) {
     const second = again.get(finding.claim.id);
-    const differs = second && (await difference(ctx.root, finding.head, second));
+    const secondBase = againBase.get(finding.claim.id);
+    const baseDiffers = secondBase && (await difference(ctx.root, finding.base, secondBase));
+    const why = differs.get(finding.claim.id) ?? (baseDiffers && `on the base build, ${baseDiffers}`);
+    const repeated = { again: second, ...(secondBase ? { againBase: secondBase } : {}) };
     if (!second) out.push(finding);
-    else if (!differs) out.push({ ...finding, again: second });
+    else if (!why) out.push({ ...finding, ...repeated });
     else {
       const { evidence: _evidence, ...rest } = finding;
-      out.push({ ...rest, verdict: 'untested', reason: `Flaky replay: ${differs}.`, again: second });
+      out.push({ ...rest, verdict: 'untested', reason: `Flaky replay: ${why}.`, ...repeated });
     }
   }
   return out;
@@ -859,10 +961,13 @@ export function claimCheckRun(findings: ClaimFinding[], head: string): ClaimChec
         'never fails this check. The review on the pull request has every verdict.',
     };
   const evidence = (finding: ClaimFinding) =>
-    finding.evidence === 'replay'
-      ? `the claim routine \`${finding.routine}\`, replayed twice on \`${head.slice(0, 7)}\` with no model, ` +
-        'with the same result each time.'
-      : `an exact assertion on \`${head.slice(0, 7)}\`, replayed twice with the same result.`;
+    finding.compared
+      ? `the normalised outputs of \`${head.slice(0, 7)}\` and its base, replayed twice on each build with the ` +
+        'same diff.'
+      : finding.evidence === 'replay'
+        ? `the claim routine \`${finding.routine}\`, replayed twice on \`${head.slice(0, 7)}\` with no model, ` +
+          'with the same result each time.'
+        : `an exact assertion on \`${head.slice(0, 7)}\`, replayed twice with the same result.`;
   return {
     conclusion: 'failure',
     title: `${failing.length} claim${failing.length === 1 ? '' : 's'} disproved`,

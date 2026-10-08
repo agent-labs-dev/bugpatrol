@@ -163,6 +163,21 @@ function claimLines(
           .join('\n'),
     ];
   };
+  /** Each output of a same-behavior claim that differs between the builds, then the rules that normalised them. */
+  const compared = (finding: ClaimFinding) => {
+    if (!finding.compared) return [];
+    const html = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    return [
+      ...finding.compared.parts.map((part) => {
+        const fence = part.diff.includes('```') ? '~~~~' : '```';
+        return `\`${part.step}\` on the base ${base} (\`-\`) and on this pull request ${head} (\`+\`):\n\n${fence}diff\n${part.diff}\n${fence}`;
+      }),
+      ...details(
+        'Normalised before the diff',
+        finding.compared.rules.map((rule) => `- ${html(rule)}`),
+      ),
+    ];
+  };
   const section = (finding: ClaimFinding) => {
     const replayed = Boolean(finding.head);
     const steps = finding.steps ?? [];
@@ -180,6 +195,7 @@ function claimLines(
           ]
         : []),
       ...checks(finding),
+      ...compared(finding),
       ...(replayed
         ? [
             `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +

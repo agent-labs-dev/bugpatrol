@@ -98,6 +98,12 @@ export type Routine = {
   bug?: BugCheck;
   /** Claim routines only: exact checks on the last command or response, after the steps ran. */
   assert?: Assertion[];
+  /**
+   * Claim routines only: the claim says that the pull request keeps a
+   * behavior, so each command or request must give the same output on both
+   * builds, once normalised.
+   */
+  same?: boolean;
 };
 
 /**
@@ -405,6 +411,18 @@ export type ClaimReplay = {
   bug?: boolean;
   /** The assertions of the claim routine, checked at the end of a full replay. */
   assertions?: AssertionResult[];
+  /** Same-behavior claims only: the normalised output of each command or request, in order. */
+  outputs?: ClaimOutput[];
+};
+
+/** The output of one command or one response, normalised. `step` is the command or the request line. */
+export type ClaimOutput = { step: string; text: string };
+
+/** How the outputs of the two builds compared: the normalisation rules, then each output that differs. */
+export type ClaimComparison = {
+  rules: string[];
+  /** `diff` has the lines of the base build after `- `, and the lines of the pull request build after `+ `. */
+  parts: { step: string; diff: string }[];
 };
 
 /** The numbers of one benchmark on one build. The spread is from `min` to `max`. */
@@ -441,12 +459,16 @@ export type ClaimFinding = {
   base?: ClaimReplay;
   /** The benchmark that measured a speed claim. */
   bench?: ClaimBench;
+  /** Same-behavior claims only: the diff of the normalised outputs of both builds. */
+  compared?: ClaimComparison;
   /**
    * The second replay on the pull request build. Blocking replays each
    * deterministic disproof again before it counts, and a different result
    * makes the verdict untested.
    */
   again?: ClaimReplay;
+  /** Same-behavior claims only: the second replay on the base build, so the diff itself must repeat. */
+  againBase?: ClaimReplay;
 };
 
 /**
@@ -487,6 +509,8 @@ export type PrReview = {
     benches?: string;
     /** The second replay of the disproved claims on the pull request build, when blocking is on. */
     againReplay?: string;
+    /** The second replay of the disproved same-behavior claims on the base build. */
+    againBaseReplay?: string;
   };
   /** The explorer's own account of what it tested. */
   tested?: string;

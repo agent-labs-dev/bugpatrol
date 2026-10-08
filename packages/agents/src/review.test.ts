@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +14,7 @@ import type { Gh } from './github.js';
 import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER } from './review-comment.js';
 import { reviewPullRequest } from './roles/review.js';
 import { FakeDriver } from './testing/fake-driver.js';
-import type { RoleTask, Runtime } from './types.js';
+import type { RoleTask, Runtime, Tool } from './types.js';
 import { Workspace } from './workspace.js';
 
 const exec = promisify(execFile);
@@ -1581,6 +1582,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
     });
     const github = fakeGh({ body: claimsBody('The settings command says that save is broken.') });
     const tasks: RoleTask[] = [];
+    let saved: Awaited<ReturnType<Tool['run']>> | undefined;
     const runtime: Runtime = {
       label: 'scripted',
       async run(task) {
@@ -1594,7 +1596,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
         expect(
           (await tool(task, 'save_claim').run({ claim: 'claim-1', did: 'x', saw: 'y', exit_code: 'zero' })).isError,
         ).toBe(true);
-        await tool(task, 'save_claim').run({
+        saved = await tool(task, 'save_claim').run({
           claim: 'claim-1',
           did: 'Printed the settings file.',
           saw: 'It says save is broken.',
@@ -1606,7 +1608,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
     };
     try {
       const result = await reviewPullRequest(f.root, config, 7, { gh: github.gh, createRuntime: () => runtime });
-      return { review: result, tasks, github };
+      return { review: result, tasks, github, saved: saved! };
     } finally {
       delete process.env.BUGPATROL_CLI_TOKEN;
     }
@@ -1684,6 +1686,128 @@ describe('CLI claim', { timeout: 60_000 }, () => {
       expect(review.check).toMatchObject({ conclusion: 'failure' });
       const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
       expect(check!.output.summary).toContain('an exact assertion');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('proves a same-behavior claim when the normalised outputs of both builds match, and shows the rules', async () => {
+    const f = await fixture();
+    try {
+      // A time and a generated id that differ on every run, around output that both builds share.
+      const command =
+        "python3 -c \"import uuid, datetime; print('created', datetime.datetime.now(datetime.timezone.utc).isoformat(), 'id', uuid.uuid4())\"; echo listed 3 items";
+      const { review, tasks, github } = await reviewCli(f, { same: true }, {}, command);
+      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      const [finding] = review.claims!;
+      expect(finding).toMatchObject({
+        verdict: 'proven',
+        evidence: 'assertion',
+        reason: 'The output of the 1 command is the same on both builds, once normalised.',
+        head: {
+          ok: true,
+          outputs: [{ step: `$ ${command}`, text: expect.stringContaining('created <time> id <uuid>') }],
+        },
+        base: { ok: true },
+      });
+      expect(finding!.head!.outputs).toEqual(finding!.base!.outputs);
+      expect(finding!.compared).toEqual({ rules: expect.arrayContaining(['ISO 8601 times become <time>']), parts: [] });
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('Evidence: an exact check on both builds.');
+      expect(sent!.body).toContain('Normalised before the diff');
+      expect(sent!.body).toContain('ISO 8601 times become &lt;time&gt;');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives not-proven to a same-behavior claim whose outputs differ, and shows the differing lines', async () => {
+    const f = await fixture();
+    try {
+      const { review, github } = await reviewCli(f, { same: true }, {}, 'cat settings.txt');
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'assertion',
+        reason: 'The output of 1 of the 1 command differs between the builds, once normalised.',
+        saw: 'The output of `cat settings.txt` differs.',
+        compared: { parts: [{ step: '$ cat settings.txt', diff: '- save works\n+ save is broken' }] },
+      });
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('```diff\n- save works\n+ save is broken\n```');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a blocking check on a same-behavior diff only when both builds repeat it', async () => {
+    const f = await fixture();
+    try {
+      const { review } = await reviewCli(f, { same: true }, { block: true }, 'cat settings.txt');
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'assertion',
+        again: { ok: true, outputs: [{ text: expect.stringContaining('save is broken') }] },
+        againBase: { ok: true, outputs: [{ text: expect.stringContaining('save works') }] },
+      });
+      expect(review.sessions.againBaseReplay).toBeDefined();
+      expect(review.check).toMatchObject({ conclusion: 'failure' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes a same-behavior diff that the second replay does not repeat untested', async () => {
+    const f = await fixture();
+    try {
+      // Each run prints the number of runs before it, so no two replays print the same.
+      const counter = JSON.stringify(join(f.root, 'runs.txt'));
+      const { review } = await reviewCli(
+        f,
+        { same: true },
+        { block: true },
+        `n=$(cat ${counter} 2>/dev/null || echo 0); echo $((n + 1)) > ${counter}; echo run $n`,
+      );
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'untested',
+        reason: 'Flaky replay: the outputs of the second replay differ from the first.',
+      });
+      expect(review.claims![0]!.evidence).toBeUndefined();
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes a same-behavior diff that the base build does not repeat untested', async () => {
+    const f = await fixture();
+    try {
+      // Only the base build counts its runs, so only its second replay prints another number.
+      const counter = JSON.stringify(join(f.root, 'runs.txt'));
+      const { review } = await reviewCli(
+        f,
+        { same: true },
+        { block: true },
+        `if grep -q works settings.txt; then n=$(cat ${counter} 2>/dev/null || echo 0); echo $((n + 1)) > ${counter}; echo run $n; fi; cat settings.txt`,
+      );
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'untested',
+        reason: 'Flaky replay: on the base build, the outputs of the second replay differ from the first.',
+        again: { ok: true },
+        againBase: { ok: true },
+      });
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a same-behavior claim that also has exact checks', async () => {
+    const f = await fixture();
+    try {
+      const { saved, review } = await reviewCli(f, { same: true, exit_code: 0 });
+      expect(saved.isError).toBe(true);
+      expect(saved.content[0]).toMatchObject({ text: expect.stringContaining('same') });
+      expect(review.claims![0]).toMatchObject({ verdict: 'untested' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1826,6 +1950,72 @@ describe('API claim', { timeout: 60_000 }, () => {
       expect(sent!.body).not.toContain(SECRET);
     } finally {
       delete process.env.BUGPATROL_API_TOKEN;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('API same-behavior claim', { timeout: 60_000 }, () => {
+  it('replays the same requests on both builds, and ignores generated ids, times and key order', async () => {
+    const f = await fixture();
+    // Both builds list the same projects, the pull request build with its keys in another order.
+    const server = createServer((request, response) => {
+      const head = readFileSync(join(String(request.headers['x-source']), 'settings.txt'), 'utf8').includes('broken');
+      const page = { requestId: randomUUID(), at: new Date().toISOString(), items: ['alpha', 'beta'] };
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(head ? { items: page.items, at: page.at, requestId: page.requestId } : page));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No API port');
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { platform: 'api', source: 'source', connect: { url: `http://127.0.0.1:${address.port}` } },
+        agents: { github: { enabled: true, repo: 'o/r' }, review: { claims: true } },
+      });
+      const github = fakeGh({ body: claimsBody('The new pagination returns the same projects.') });
+      const runtime: Runtime = {
+        label: 'scripted',
+        async run(task) {
+          await tool(task, 'start_claim').run({ claim: 'claim-1' });
+          await tool(task, 'request').run({ method: 'GET', url: '/projects?page=1' });
+          await tool(task, 'save_claim').run({
+            claim: 'claim-1',
+            did: 'Listed the projects.',
+            saw: 'Two.',
+            same: true,
+          });
+          await tool(task, 'finish').run({ summary: 'Listed the projects.' });
+          return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Listed the projects.' };
+        },
+      };
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: () => runtime,
+        createDriver: (config, vars, redact, source) =>
+          createDriver(
+            {
+              ...config,
+              app: { ...config.app, connect: { ...config.app.connect, headers: { 'x-source': source! } } },
+            },
+            vars,
+            redact,
+            source,
+          ),
+      });
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'proven',
+        evidence: 'assertion',
+        reason: 'The response of the 1 request is the same on both builds, once normalised.',
+        head: { outputs: [{ step: 'GET /projects?page=1', text: expect.stringContaining('"requestId": "<uuid>"') }] },
+        compared: { parts: [] },
+      });
+      expect(review.claims![0]!.head!.outputs).toEqual(review.claims![0]!.base!.outputs);
+    } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(f.root, { recursive: true, force: true });

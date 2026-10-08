@@ -217,6 +217,21 @@ With `app.platform: api`, each step of a claim routine is one HTTP request, sent
 
 Each replay records its requests and responses as an asciicast v2 file, `<build>.cast`, and the review shows its GIF for each build, drawn the same way as for a command line app, so it needs no `ffmpeg`. The terminal is 100 by 30, wide enough for indented JSON, so the GIF is 800 px wide. The recording shows the method, path, and body of each request, then the status, content type, and body of the response. A request that got no response shows why, for example a timeout. Request headers stay out of the recording, since they carry the credentials. Bugpatrol writes `[redacted]` for each JSON value whose key ends in `token`, `password`, `secret`, `authorization` or `cookie`, and replaces the value of each secret of `app.secrets` with its `{{NAME}}`, before the recording sees the text.
 
+### Claims that a behavior stays the same
+
+Some claims say that two builds behave the same, such as a refactor, or a new pagination that returns the same data. For those, on a command line app or an API, the explorer saves the claim flow with `same` set instead of exact checks. Bugpatrol replays the same commands or requests on both builds and diffs what each one gave: the exit code and the output of a command, or the status, the content type and the body of a response.
+
+Before the diff, Bugpatrol normalises each output, so a value that changes on every run does not count as a change:
+
+- JSON bodies get their keys sorted.
+- ISO 8601 times and HTTP dates become `<time>`.
+- UUIDs become `<uuid>`, and hex ids of 24 or more digits become `<hex>`.
+- Unix times in seconds or milliseconds (10 or 13 digits) become `<epoch>`.
+- Durations such as `12ms` or `1.5s` become `<duration>`.
+- Spaces at the end of a line are dropped.
+
+Equal outputs give `proven`. Any difference gives `not-proven`, and the review shows the changed lines of each output that differs, base lines after `-` and pull request lines after `+`. The review lists the rules under each claim. The evidence is `assertion`, so with blocking on a diff can fail the check, but only after Bugpatrol replays the flow a second time on both builds and each build gives the same outputs as on its first replay.
+
 A replay that stops partway on the pull request build makes the claim `untested`, never `not-proven`. A base build that stops partway is evidence: the judge sees where it stopped, and a new control is often missing there. An app that does not start on either build stops the review with an error, as above.
 
 To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:
@@ -264,7 +279,7 @@ The judge sessions of the claim check, one that writes the claims, one that pick
 
 The claim check only comments by default. To let it fail a check, set `agents.review.block: true`. Then `review` sets one check run, `Bugpatrol claim check`, on the pull request commit.
 
-Only a deterministic disproof fails that check: a `not-proven` verdict whose evidence is `replay` or `assertion`. Before it counts, Bugpatrol replays the claim routine a second time on the pull request build. If the second replay stops at another step, or ends on a different screen, the verdict becomes `untested` with the reason "Flaky replay". A verdict with `explored` or `bench` evidence never fails the check. The judge still gives the verdict, but the check fails only on a result that a replay with no model repeated ([ADR 0007](adr/0007-only-a-repeated-replay-blocks.md)).
+Only a deterministic disproof fails that check: a `not-proven` verdict whose evidence is `replay` or `assertion`. Before it counts, Bugpatrol replays the claim routine a second time on the pull request build. If the second replay stops at another step, or ends on a different screen, the verdict becomes `untested` with the reason "Flaky replay". A claim that a behavior stays the same rests on both builds, so its second replay also runs on the base build, and either build giving other outputs makes it a flaky replay. A verdict with `explored` or `bench` evidence never fails the check. The judge still gives the verdict, but the check fails only on a result that a replay with no model repeated ([ADR 0007](adr/0007-only-a-repeated-replay-blocks.md)).
 
 | Result | Check run | Exit code of `review` |
 | --- | --- | --- |
