@@ -1,6 +1,6 @@
 {
   "name": "bugpatrol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI agents that explore your app, find bugs, and fix them.",
   "license": "Apache-2.0",
   "type": "module",
