@@ -208,7 +208,15 @@ To choose the claims yourself, add a `Claims` heading to the pull request descri
 
 Bugpatrol uses each list item as written. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
 
-The two judge sessions of the claim check, one that writes the claims and one that gives the verdicts, use `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The explorer finds the claim flows in the same session that tests the diff, under `agents.explorer.maxSteps`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file, with the screenshots at their local paths. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
+### Speed claims and benchmarks
+
+A claim such as "p99 drops from 2.4s to 21ms" needs a measurement, and Bugpatrol measures only with benchmarks that you declare in `agents.review.benches` (see [Configuration](configuration.md)). Each benchmark has a command (a k6 script, a hyperfine command, a page load trace), the metric it prints, a `parse` regular expression whose first group is the number, and whether lower or higher is better.
+
+Before the explorer starts, the judge picks which declared benchmarks measure which claims. It can name a declared benchmark only, and the explorer does not test a claim that a benchmark measures. Bugpatrol then checks out both builds and runs each picked command in the worktree of each build, in turn: base, pull request, base, pull request, `runs` times on each (5 by default). Taking turns means a runner that slows down partway slows both builds alike. The command starts whatever it measures, because Bugpatrol does not start the app for a benchmark.
+
+The review shows the median and the spread (lowest to highest) of each build, and folds the command and each number below. The judge compares the numbers with the claim and gives the verdict. When the two spreads overlap, the difference may be noise, so the verdict is at most `partly-proven`: a `proven` or a `not-proven` from the judge becomes `partly-proven`. The evidence is `bench`. A benchmark never fails a check, because runner noise must never block a merge. A command that fails, or prints no number that `parse` matches, leaves its claims `untested` with the reason.
+
+The judge sessions of the claim check, one that writes the claims, one that picks the benchmarks, and one that gives the verdicts, use `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The explorer finds the claim flows in the same session that tests the diff, under `agents.explorer.maxSteps`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file, with the screenshots at their local paths. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
 
 ## Troubleshooting
 

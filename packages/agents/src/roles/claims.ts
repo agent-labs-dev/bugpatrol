@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
   type Claim,
+  type ClaimBench,
   type ClaimEvidence,
   type ClaimFinding,
   type ClaimReplay,
@@ -19,6 +20,7 @@ import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, type Workspace } from '../workspace.js';
+import { benchWords, type Measured, overlaps } from './benches.js';
 import { image } from './capture.js';
 import { stepWords } from './fixer.js';
 import type { ReviewContext } from './review.js';
@@ -228,9 +230,10 @@ async function replayClaims(
 
 type Tested = {
   claim: Claim;
-  flow: Extract<ClaimFlow, { kind: 'flow' | 'note' }>;
+  flow?: Extract<ClaimFlow, { kind: 'flow' | 'note' }>;
   head?: ClaimReplay;
   base?: ClaimReplay;
+  bench?: ClaimBench;
 };
 
 const replayWords = (replay: ClaimReplay | undefined, steps: number) =>
@@ -269,6 +272,7 @@ async function judgeClaims(
         const item = find(input);
         if (!item) return unknown;
         const { claim, flow } = item;
+        if (!flow) return response(`${claim.id}: ${claim.text}\n${benchWords(item.bench!)}`);
         const steps = flow.kind === 'flow' ? flow.routine.steps.length : 0;
         const head = await image(root, item.head?.shots.at(-1));
         const base = await image(root, item.base?.shots.at(-1));
@@ -373,14 +377,16 @@ async function judgeClaims(
 /**
  * Tests the testable claims: the explorer found their flows on the pull
  * request build, Bugpatrol replays each flow on both builds, and the judge
- * gives the verdicts. `build` starts one build and hands over a connected
- * driver; an app that does not start throws, and gives no verdict.
+ * gives the verdicts. A claim that a benchmark measured is judged from its
+ * numbers. `build` starts one build and hands over a connected driver; an
+ * app that does not start throws, and gives no verdict.
  */
 export async function checkClaims(
   ctx: ReviewContext,
   review: PrReview,
   claims: Claim[],
   flows: Map<string, ClaimFlow>,
+  measured: Map<string, Measured>,
   build: <T>(
     name: 'head' | 'base',
     commit: string,
@@ -410,11 +416,31 @@ export async function checkClaims(
   const tested: Tested[] = [];
   for (const claim of claims) {
     const flow = flows.get(claim.id);
-    if (flow?.kind === 'note' || (flow?.kind === 'flow' && headReplays.get(claim.id)?.ok))
+    const bench = measured.get(claim.id);
+    if (bench?.kind === 'bench') tested.push({ claim, bench: bench.bench });
+    else if (flow?.kind === 'note' || (flow?.kind === 'flow' && headReplays.get(claim.id)?.ok))
       tested.push({ claim, flow, head: headReplays.get(claim.id), base: baseReplays.get(claim.id) });
   }
   const verdicts = tested.length ? await judgeClaims(ctx, review, tested) : new Map();
   return claims.map((claim): ClaimFinding => {
+    const bench = measured.get(claim.id);
+    if (bench?.kind === 'failed') return { claim, verdict: 'untested', reason: bench.reason };
+    if (bench) {
+      const judged = verdicts.get(claim.id);
+      if (!judged) return { claim, verdict: 'untested', reason: 'The judge gave no verdict.', bench: bench.bench };
+      // Inside the noise, a benchmark neither proves nor disproves a claim.
+      const noise = overlaps(bench.bench) && judged.verdict !== 'untested';
+      return {
+        claim,
+        verdict: noise ? 'partly-proven' : judged.verdict,
+        ...(judged.verdict === 'untested' ? {} : { evidence: 'bench' as const }),
+        reason: noise
+          ? `${judged.reason} The spreads of the two builds overlap, so the difference may be noise.`
+          : judged.reason,
+        ...(judged.saw ? { saw: judged.saw } : {}),
+        bench: bench.bench,
+      };
+    }
     const flow = flows.get(claim.id);
     if (!flow) return { claim, verdict: 'untested', reason: 'The explorer did not reach this claim.' };
     if (flow.kind === 'skip') return { claim, verdict: 'untested', reason: flow.reason };
