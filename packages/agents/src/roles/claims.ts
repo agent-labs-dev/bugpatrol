@@ -22,7 +22,7 @@ import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
-import { short } from '../review-comment.js';
+import { short, stoppedAt } from '../review-comment.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
@@ -56,6 +56,10 @@ export type ClaimFlow =
   | { kind: 'repro'; issue: number; did: string; routine: Routine; check: BugCheck; path: string }
   | { kind: 'note'; did: string; saw: string; reason: string }
   | { kind: 'skip'; reason: string };
+
+/** A claim whose routine Bugpatrol replays on both builds. */
+type Replayed = Extract<ClaimFlow, { kind: 'flow' | 'repro' }>;
+const replayed = (flow: ClaimFlow | undefined): flow is Replayed => flow?.kind === 'flow' || flow?.kind === 'repro';
 
 /** The claim routines of a review, and their replays. A new test of the pull request starts it empty. */
 const claimRoutinePath = (root: string, pr: number, claim: string) =>
@@ -509,7 +513,7 @@ async function replayClaims(
       });
       session.emit({
         kind: 'session-end',
-        summary: `${what}: ${result.ok ? 'replayed' : `stopped at step ${(result.failedStep ?? 0) + 1}`}`,
+        summary: `${what}: ${result.ok ? 'replayed' : stoppedAt(result)}`,
       });
     }
   } catch (error) {
@@ -531,12 +535,10 @@ type Tested = {
   bench?: ClaimBench;
 };
 
+const stoppedWords = (replay: ClaimReplay | undefined) => `${stoppedAt(replay)}: ${replay?.error ?? 'no reason'}.`;
+
 const replayWords = (replay: ClaimReplay | undefined, steps: number) =>
-  !replay
-    ? 'not replayed.'
-    : replay.ok
-      ? `replayed all ${steps} step(s).`
-      : `stopped at step ${(replay.failedStep ?? 0) + 1}: ${replay.error ?? 'no reason'}.`;
+  !replay ? 'not replayed.' : replay.ok ? `replayed all ${steps} step(s).` : stoppedWords(replay);
 
 /**
  * The judge gives each tested claim a verdict. The evidence source comes
@@ -663,9 +665,7 @@ export async function checkClaims(
   const { pr, budget } = ctx;
   const routines = (keep: (claim: string) => boolean) =>
     new Map(
-      [...flows]
-        .filter(([claim, flow]) => (flow.kind === 'flow' || flow.kind === 'repro') && keep(claim))
-        .map(([claim, flow]) => [claim, (flow as Replayed).routine]),
+      [...flows].flatMap(([claim, flow]) => (replayed(flow) && keep(claim) ? [[claim, flow.routine] as const] : [])),
     );
   const head = routines(() => true);
   const headReplays =
@@ -740,7 +740,7 @@ export async function checkClaims(
       return {
         claim,
         verdict: 'untested',
-        reason: `The replay on the pull request build stopped at step ${(replay?.failedStep ?? 0) + 1}: ${replay?.error ?? 'no reason'}.`,
+        reason: `The replay on the pull request build ${stoppedWords(replay)}`,
         ...shown,
       };
     if (flow.kind === 'flow' && flow.routine.assert?.length)
@@ -759,8 +759,6 @@ export async function checkClaims(
     };
   });
 }
-
-type Replayed = Extract<ClaimFlow, { kind: 'flow' | 'repro' }>;
 
 /**
  * The verdict on a claim with assertions, from the assertions alone: they
@@ -818,7 +816,7 @@ function sameFinding(
   if (!outputs.length)
     return untested('The flow runs no command and sends no request, so there is nothing to compare.');
   const compared = compareOutputs(base.outputs ?? [], outputs);
-  const [what, of] = outputs[0]!.step.startsWith('$ ') ? ['output', 'command'] : ['response', 'request'];
+  const [what, of] = claim.platform === 'cli' ? ['output', 'command'] : ['response', 'request'];
   const count = `${outputs.length} ${of}${outputs.length === 1 ? '' : 's'}`;
   if (!compared.parts.length)
     return {
@@ -839,9 +837,6 @@ function sameFinding(
     ...shown,
   };
 }
-
-const stoppedWords = (replay: ClaimReplay | undefined) =>
-  `stopped at step ${(replay?.failedStep ?? 0) + 1}: ${replay?.error ?? 'no reason'}.`;
 
 /**
  * The verdict on an issue repro, from its bug check alone: the bug must show
@@ -894,8 +889,7 @@ const blockingDisproofs = (findings: ClaimFinding[]) =>
  * example by a time on the page; no verdict reads them.
  */
 function difference(first: ClaimReplay | undefined, second: ClaimReplay): string | undefined {
-  const at = (replay: ClaimReplay | undefined) =>
-    replay?.ok ? 'replayed all its steps' : `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
+  const at = (replay: ClaimReplay | undefined) => (replay?.ok ? 'replayed all its steps' : stoppedAt(replay));
   if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
     return `the first replay ${at(first)}, and the second ${at(second)}`;
   if (first?.bug !== second.bug) return 'the bug showed on one replay only';
@@ -928,7 +922,7 @@ export async function replayDisproofs(
   const routines = new Map<string, Routine>();
   for (const finding of findings.filter(disproves)) {
     const flow = flows.get(finding.claim.id);
-    if (flow?.kind === 'flow' || flow?.kind === 'repro') routines.set(finding.claim.id, flow.routine);
+    if (replayed(flow)) routines.set(finding.claim.id, flow.routine);
   }
   if (!routines.size) return findings;
   if (ctx.budget.late) {

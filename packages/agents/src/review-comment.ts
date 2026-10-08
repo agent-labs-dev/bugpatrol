@@ -19,6 +19,8 @@ export const SUPERSEDED_MARKER = '<!-- bugpatrol:superseded -->';
 const rank = { cosmetic: 0, minor: 1, major: 2, critical: 3 };
 /** The short hash of a commit, as GitHub shows it. */
 export const short = (commit: string) => commit.slice(0, 7);
+/** Where a replay that failed stopped, counting the steps from 1. */
+export const stoppedAt = (replay?: { failedStep?: number }) => `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
 
 function details(summary: string, lines: string[]): string[] {
   return lines.length ? [`<details><summary>${summary}</summary>\n\n${lines.join('\n')}\n\n</details>`] : [];
@@ -137,7 +139,7 @@ function claimLines(
   const cell = (path: string | undefined, fallback: string) => image(path) ?? `_${fallback}_`;
   const stopped = (finding: ClaimFinding, build: 'head' | 'base') => {
     const replay = finding[build];
-    return replay && !replay.ok ? `Stopped at step ${(replay.failedStep ?? 0) + 1}.` : 'No screenshot.';
+    return replay && !replay.ok ? `The replay ${stoppedAt(replay)}.` : 'No screenshot.';
   };
   /**
    * The GIF of a build or its last screen, then the full recording: a video, or a terminal cast. A recording
