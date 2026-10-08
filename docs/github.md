@@ -171,6 +171,8 @@ What you must know before you run it:
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 
+To review each pull request in CI, use the Bugpatrol Action (`action.yml` at the root of this repo). [Review pull requests in CI](../README.md#review-pull-requests-in-ci) shows the workflow and the inputs.
+
 ### The claim check
 
 ```bash

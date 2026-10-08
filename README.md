@@ -145,6 +145,44 @@ npx bugpatrol review 123     # review one pull request of your team in the runni
 
 The fixer and GitHub are off until you turn them on. [Getting started](docs/getting-started.md) shows each step in full, with Electron and mobile examples.
 
+## Review pull requests in CI
+
+The Bugpatrol Action runs `bugpatrol review` on each pull request. Set `agents.github.enabled: true` in `.bugpatrol/bugpatrol.yml`, add the API key of your LLM provider as a secret, and add this workflow:
+
+```yaml
+# .github/workflows/bugpatrol.yml
+name: Bugpatrol
+on: pull_request
+permissions:
+  contents: write        # the screenshots on the assets branch
+  pull-requests: write   # the review
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: agent-labs-dev/bugpatrol@main
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-ubuntu-2404`. On your own machine, use `runs-on: self-hosted` or its labels. The Action installs Node, Bugpatrol, and Chromium for a web app. For other apps it uses what the machine has: Xvfb for a Linux desktop app, a booted emulator for Android, a Mac with a simulator for iOS. On a self-hosted Linux machine with no passwordless `sudo`, install the system libraries of Chromium first (`npx playwright install-deps chromium`).
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `pr` | the pull request of the event | The pull request to review |
+| `github-token` | `github.token` | The token for `gh` |
+| `package` | `bugpatrol@latest` | The Bugpatrol that npm installs: a version, a tag, or a tarball |
+| `node-version` | `22` | The Node.js version |
+| `working-directory` | `.` | The folder that holds `.bugpatrol/` |
+| `allow-fork` | `false` | Review a pull request from a fork. Its code runs with the secrets of your app |
+| `force` | `false` | Test the same commit again. Without it, a rerun on the same commit only publishes the last review again |
+| `claims` | `false` | List what the pull request says it does, also when `agents.review.claims` is off |
+| `steps` | `agents.explorer.maxSteps` | The step limit of the explorer |
+| `args` | | More flags for `bugpatrol review` |
+
+The job passes when the review only comments. When Bugpatrol could not test, for example because the app did not start, the job fails with exit code 4. A refused fork or a config error gives exit code 2. [Review a pull request](docs/github.md#7-review-a-pull-request) tells how the review works.
+
 ## The dashboard
 
 <img src="assets/dashboard.png" alt="The Bugpatrol dashboard: the agent cards, the issues that need attention, the live screen, the coverage, and the token usage." width="100%">
