@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
-import { type Cast, Terminal, terminalPng, writeCast } from './cast.js';
+import { CastRecorder, Terminal, terminalPng } from './cast.js';
 import { nativeSnapshot } from './maestro.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
@@ -68,7 +68,7 @@ export class CliDriver implements Driver {
   private screen = new Terminal(COLS, ROWS);
   private last?: { command: string; exitCode?: number; output: Terminal };
   private child?: ChildProcess;
-  private cast?: { start: number; events: Cast['events'] };
+  private readonly cast = new CastRecorder({ width: COLS, height: ROWS });
   private readonly redact: (value: string) => string;
 
   constructor(private readonly options: CliDriverOptions) {
@@ -90,7 +90,7 @@ export class CliDriver implements Driver {
     if (!text) return;
     this.screen.write(text);
     if (output) this.last?.output.write(text);
-    this.cast?.events.push([(Date.now() - this.cast.start) / 1000, text]);
+    this.cast.push(text);
   }
 
   async act(action: DriverAction): Promise<ActResult> {
@@ -191,16 +191,11 @@ export class CliDriver implements Driver {
   }
 
   async startRecording(): Promise<void> {
-    this.cast = { start: Date.now(), events: [] };
+    this.cast.start();
   }
 
   async stopRecording(name: string): Promise<string> {
-    const cast = this.cast;
-    if (!cast) throw new Error('No recording runs');
-    this.cast = undefined;
-    const file = `${name}.cast`;
-    await writeCast(file, { width: COLS, height: ROWS, events: cast.events });
-    return file;
+    return this.cast.stop(name);
   }
 
   async close(): Promise<void> {

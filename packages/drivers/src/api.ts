@@ -1,6 +1,6 @@
 import type { HttpMethod } from '@bugpatrol/core';
 import { z } from 'zod';
-import { type Cast, writeCast } from './cast.js';
+import { CastRecorder } from './cast.js';
 import type { ActResult, DriverAction, Observation } from './types.js';
 import { WebDriver } from './web.js';
 
@@ -47,9 +47,6 @@ function redactCredentials(text: string): string {
   }
 }
 
-/** The terminal that a recording of requests plays in: wide enough for indented JSON. */
-const CAST = { width: 100, height: 30 };
-
 /** One request of a recording and its answer: a response, or why there was none. All text is redacted. */
 type Exchange = { request: string; body?: string } & (
   | { status: number; contentType: string | null; response: string }
@@ -83,8 +80,8 @@ export class ApiDriver extends WebDriver {
    * correctly; a 5xx or no answer at all is the server's own failure.
    */
   private serverFailures: string[] = [];
-  /** While a recording runs: when it started, and the output of each request so far. */
-  private cast?: { start: number; events: Cast['events'] };
+  /** The terminal that a recording of requests plays in: wide enough for indented JSON. */
+  private readonly cast = new CastRecorder({ width: 100, height: 30 });
 
   constructor(private readonly api: ApiOptions) {
     super({ url: 'about:blank', viewport: api.viewport });
@@ -182,22 +179,16 @@ export class ApiDriver extends WebDriver {
   }
 
   private record(exchange: Exchange): void {
-    this.cast?.events.push([(Date.now() - this.cast.start) / 1000, exchangeText(exchange)]);
+    this.cast.push(exchangeText(exchange));
   }
 
   /** Records the requests and responses as a terminal cast, not the screen: it needs no ffmpeg. */
   override async startRecording(): Promise<void> {
-    if (this.cast) throw new Error('A recording is already running');
-    this.cast = { start: Date.now(), events: [] };
+    this.cast.start();
   }
 
   override async stopRecording(name: string): Promise<string> {
-    const cast = this.cast;
-    if (!cast) throw new Error('No recording is running');
-    this.cast = undefined;
-    const file = `${name}.cast`;
-    await writeCast(file, { ...CAST, events: cast.events });
-    return file;
+    return this.cast.stop(name);
   }
 
   private serverFailed(line: string): void {

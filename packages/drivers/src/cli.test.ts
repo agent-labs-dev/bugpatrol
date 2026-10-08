@@ -23,7 +23,9 @@ async function withDriver(run: (driver: CliDriver, dir: string) => Promise<void>
 describe('CliDriver', () => {
   it('runs a real command in a terminal and records a cast with frames and no secret', { timeout: 30_000 }, () =>
     withDriver(async (driver, dir) => {
+      await expect(driver.stopRecording(join(dir, 'none'))).rejects.toThrow('No recording is running');
       await driver.startRecording();
+      await expect(driver.startRecording()).rejects.toThrow('A recording is already running');
       // The secret comes in two pieces, so redaction must see the whole line.
       const command = `[ -t 1 ] && echo "a terminal in $(basename "$PWD")"; printf 'hunter2-'; sleep 0.3; printf 'very-secret\\n'; printf '\\033[32mdone\\033[0m\\n'; exit 3`;
       const result = await driver.act({ kind: 'run', command });

@@ -343,6 +343,33 @@ export function terminalPng(terminal: Terminal): Buffer {
   return PNG.sync.write(png);
 }
 
+/** Records the output of a terminal session as an asciicast, while a recording runs. */
+export class CastRecorder {
+  private cast?: { start: number; events: Cast['events'] };
+
+  constructor(private readonly size: { width: number; height: number }) {}
+
+  start(): void {
+    if (this.cast) throw new Error('A recording is already running');
+    this.cast = { start: Date.now(), events: [] };
+  }
+
+  /** Output of the session. With no recording running, it goes nowhere. */
+  push(text: string): void {
+    this.cast?.events.push([(Date.now() - this.cast.start) / 1000, text]);
+  }
+
+  /** Ends the recording, and writes it to `<name>.cast`. */
+  async stop(name: string): Promise<string> {
+    const cast = this.cast;
+    if (!cast) throw new Error('No recording is running');
+    this.cast = undefined;
+    const file = `${name}.cast`;
+    await writeCast(file, { ...this.size, events: cast.events });
+    return file;
+  }
+}
+
 export async function writeCast(file: string, cast: Cast): Promise<void> {
   const lines = [
     { version: 2, width: cast.width, height: cast.height, env: { TERM: 'xterm-256color' } },
