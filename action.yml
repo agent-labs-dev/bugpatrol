@@ -13,7 +13,7 @@ inputs:
     description: "The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on."
     default: ${{ github.token }}
   package:
-    description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball.
+    description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball. On a release tag, the default is the version of that release.
     default: bugpatrol@latest
   node-version:
     description: The Node.js version that runs Bugpatrol.

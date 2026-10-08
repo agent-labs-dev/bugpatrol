@@ -40,7 +40,7 @@ Refer to [CONTRIBUTING.md](../CONTRIBUTING.md) for the rules that the product de
 
 ## Releases
 
-A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`, `minor`, or `major`. The workflow tests the repo, bumps `packages/bugpatrol/package.json`, publishes `bugpatrol` to npm with provenance, and pushes a tag and a GitHub release. The internal `@bugpatrol/*` packages are private. The bundle includes them.
+A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`, `minor`, or `major`. The workflow tests the repo, bumps `packages/bugpatrol/package.json`, publishes `bugpatrol` to npm with provenance, and pushes a tag and a GitHub release. On the release tag, the `package` input of `action.yml` defaults to the new version. The workflow also moves the major tag, for example `v0`, to the release, so workflows that use `agent-labs-dev/bugpatrol@v0` get it with no edit. The internal `@bugpatrol/*` packages are private. The bundle includes them.
 
 ## Examples
 
