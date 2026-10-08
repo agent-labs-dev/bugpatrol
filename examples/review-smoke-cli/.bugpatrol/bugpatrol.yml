@@ -1,0 +1,32 @@
+# A smoke test of Bugpatrol's own command line (.github/workflows/review-smoke.yml).
+# Each build of the pull request writes the dashboard fixture as a workspace
+# for the commands to read.
+version: 1
+
+app:
+  platform: cli
+  # The repo root: the review makes its worktrees from it, and the setup
+  # command below runs in the worktree of each build.
+  source: ../..
+  setup:
+    - run: node packages/dashboard/scripts/fixture.mjs .review-smoke
+      cwd: ../..
+      timeoutMs: 120000
+  connect:
+    cli:
+      timeoutMs: 60000
+
+agents:
+  review:
+    name: cli
+  explorer:
+    maxSteps: 15
+    budgetUsd: 0.5
+  judge:
+    budgetUsd: 0.5
+  fixer:
+    retest:
+      # Each build runs from its own worktree, so each needs its own install and build.
+      prepare: pnpm install --frozen-lockfile && pnpm build
+  github:
+    enabled: true

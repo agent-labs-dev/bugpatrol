@@ -36,8 +36,8 @@ import {
 import {
   claimMedia,
   numberDiff,
-  REVIEW_MARKER,
   renderReview,
+  reviewMarker,
   SUPERSEDED_MARKER,
   short,
   supersededBody,
@@ -67,7 +67,7 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 });
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
-const CHECK_NAME = 'Bugpatrol claim check';
+const checkName = (name?: string) => (name ? `Bugpatrol claim check (${name})` : 'Bugpatrol claim check');
 
 /** A lockfile diff is long and says nothing about a screen. */
 const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*', ':(exclude,glob)**/*.lockb'];
@@ -950,8 +950,8 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
 }
 
 /** The marked reviews on the pull request that no later review replaced yet. */
-async function openReviews(gh: Gh, reviews: string): Promise<{ id: string; commit: string }[]> {
-  const select = `.[] | select(.body | contains("${REVIEW_MARKER}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
+async function openReviews(gh: Gh, reviews: string, name?: string): Promise<{ id: string; commit: string }[]> {
+  const select = `.[] | select(.body | contains("${reviewMarker(name)}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
   return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id)"`]))
     .split('\n')
     .filter(Boolean)
@@ -971,7 +971,7 @@ async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head
   const ids = new Set(old.map((review) => review.id));
   for (const id of ids)
     await gh(['api', '-X', 'PUT', `${pulls}/${ctx.pr.number}/reviews/${id}`, '--input', '-'], {
-      input: JSON.stringify({ body: supersededBody(head) }),
+      input: JSON.stringify({ body: supersededBody(head, ctx.config.agents.review.name) }),
     });
   const rows = (
     await gh([
@@ -1002,7 +1002,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
   if (ctx.opts.dryRun) {
     const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
-    const rendered = renderReview(review, (path) => resolve(root, path), inDiff);
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(
       file,
@@ -1014,7 +1014,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
           ),
           ...(review.check
             ? [
-                `---\n\nCheck run ${CHECK_NAME}: \`${review.check.conclusion}\`, ${review.check.title}\n\n${review.check.summary}`,
+                `---\n\nCheck run ${checkName(config.agents.review.name)}: \`${review.check.conclusion}\`, ${review.check.title}\n\n${review.check.summary}`,
               ]
             : []),
         ].join('\n\n'),
@@ -1046,10 +1046,10 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
     }
   }
-  const rendered = renderReview(review, (path) => urls.get(path), inDiff);
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name);
   const body = limitBody(redact(rendered.body));
   const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
-  const open = await openReviews(gh, reviews);
+  const open = await openReviews(gh, reviews, config.agents.review.name);
   const current = open.find((item) => item.commit === review.head);
   let posted: { html_url: string };
   if (current && !tested) {
@@ -1095,7 +1095,7 @@ async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: 
     const run = JSON.parse(
       await gh(['api', '-X', 'POST', `repos/${ctx.repo}/check-runs`, '--input', '-'], {
         input: JSON.stringify({
-          name: CHECK_NAME,
+          name: checkName(ctx.config.agents.review.name),
           head_sha: review.head,
           status: 'completed',
           conclusion: check.conclusion,

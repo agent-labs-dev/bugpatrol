@@ -13,6 +13,9 @@ coverage/
 # applies it at every depth.
 **/.bugpatrol/runs/
 
+# The fixture workspace that the review-smoke-dashboard and review-smoke-cli setups write.
+/.review-smoke/
+
 # The fixture app is a test subject, not a project: its baselines are captured
 # fresh by scripts/determinism-check.sh and are tied to one machine's rendering.
 examples/fixture-app/.bugpatrol/*

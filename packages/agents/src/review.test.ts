@@ -403,6 +403,26 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('with a name, replaces only the older reviews of the same name', async () => {
+    const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'dashboard' });
+    try {
+      const { gh, calls, posted, sent } = fakeGh({ reviews: '55 0000000000000000000000000000000000000000' });
+      await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('pre-existing', 1, 1).createRuntime,
+        createDriver: screens,
+      });
+      const marker = '<!-- bugpatrol:review:dashboard -->';
+      expect(posted()[0]!.body.startsWith(marker)).toBe(true);
+      // GitHub applies the filter; it must select this name's reviews only.
+      const query = calls.find((call) => call.args.includes('--paginate') && call.args[2]!.endsWith('/reviews'))!;
+      expect(query.args.at(-1)).toContain(marker);
+      expect(sent('PUT', '/reviews/')[0]!.input!.body).toContain(marker);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('does not start the base build when the explorer reports nothing', async () => {
     const f = await fixture();
     try {
@@ -1671,6 +1691,18 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
     }
   });
 
+  it('names its check run after the review name', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      const { github } = await reviewRepro(f, { head: false, base: false }, { block: true, name: 'cli' });
+      const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
+      expect(check!.name).toBe('Bugpatrol claim check (cli)');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('fails a blocking check on a fix that does not fix, once a second replay agrees', async () => {
     const f = await fixture();
     try {
@@ -2319,6 +2351,19 @@ describe('review rendering', () => {
       (path) => `https://img/${path}`,
       (file, line) => file === 'src/a.ts' && line === 11,
     );
+
+  it('keeps a named marker and the unnamed marker apart, since GitHub matches them as substrings', () => {
+    const named = renderReview(
+      review,
+      (path) => path,
+      () => true,
+      'cli',
+    ).body;
+    expect(named.startsWith('<!-- bugpatrol:review:cli -->')).toBe(true);
+    expect(named).toContain('### Bugpatrol review: cli');
+    expect(named).not.toContain(REVIEW_MARKER);
+    expect(REVIEW_MARKER).not.toContain('<!-- bugpatrol:review:cli -->');
+  });
 
   it('puts a problem on its line, and keeps the others in the body, worst first', () => {
     const { body, comments } = render();

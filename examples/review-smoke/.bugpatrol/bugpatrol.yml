@@ -16,6 +16,9 @@ app:
     url: http://localhost:3300/
 
 agents:
+  review:
+    # Two more smoke reviews post on the same pull request: review-smoke-dashboard and review-smoke-cli.
+    name: fixture-app
   explorer:
     maxSteps: 15
     budgetUsd: 0.5

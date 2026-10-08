@@ -442,6 +442,15 @@ export const agentsSchema = z
     /** `bugpatrol review <pr>`. */
     review: z
       .object({
+        /**
+         * Tells this review apart from another Bugpatrol review of the same pull
+         * request, for example one per app of a monorepo. Each name keeps its own
+         * review and its own check run, and never replaces the other's.
+         */
+        name: z
+          .string()
+          .regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lowercase letters, digits and dashes')
+          .optional(),
         /** The claim check: test what the pull request says it does. Off until a team opts in. */
         claims: z.boolean().default(false),
         /**

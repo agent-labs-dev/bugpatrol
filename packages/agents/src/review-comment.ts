@@ -11,8 +11,14 @@ import type {
 } from '@bugpatrol/core';
 import { assertionWords } from './replay.js';
 
-/** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
-export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
+/**
+ * Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token.
+ * A named review (`agents.review.name`) has its own marker, so two reviews of one pull request never replace each other.
+ */
+export function reviewMarker(name?: string): string {
+  return name ? `<!-- bugpatrol:review:${name} -->` : '<!-- bugpatrol:review -->';
+}
+export const REVIEW_MARKER = reviewMarker();
 /** A review that a later one replaced. */
 export const SUPERSEDED_MARKER = '<!-- bugpatrol:superseded -->';
 
@@ -263,6 +269,7 @@ export function renderReview(
   review: PrReview,
   imageUrl: (path: string) => string | undefined,
   inDiff: (file: string, line: number) => boolean,
+  name?: string,
 ): RenderedReview {
   const of = (verdict: ReviewVerdict) =>
     review.findings
@@ -300,8 +307,8 @@ export function renderReview(
             `${located.length} of them ${located.length === 1 ? 'is a comment on the changed line that causes it' : 'are comments on the changed lines that cause them'}. The others are below.`,
           ];
   const body = [
-    REVIEW_MARKER,
-    '### Bugpatrol review',
+    reviewMarker(name),
+    name ? `### Bugpatrol review: ${name}` : '### Bugpatrol review',
     ...claimLines(review, image, imageUrl),
     introduced.length
       ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
@@ -339,6 +346,6 @@ export function renderReview(
 }
 
 /** The body of a review after a later review replaced it. Its marker stays, so it is never replaced again. */
-export function supersededBody(head: string): string {
-  return `${REVIEW_MARKER}\n${SUPERSEDED_MARKER}\n_A Bugpatrol review of \`${short(head)}\` replaced this one._`;
+export function supersededBody(head: string, name?: string): string {
+  return `${reviewMarker(name)}\n${SUPERSEDED_MARKER}\n_A Bugpatrol review of \`${short(head)}\` replaced this one._`;
 }
