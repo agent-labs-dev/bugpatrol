@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type PrReview, parseConfig, paths, type ReviewVerdict } from '@bugpatrol/core';
+import { type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
+import type { UiElement } from '@bugpatrol/drivers';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from './github.js';
 import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER } from './review-comment.js';
@@ -405,7 +406,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
-  it('lists the claims of the author-written claims section as written, untested', async () => {
+  it('takes the claims of the author-written claims section as written', async () => {
     const f = await fixture({ enabled: false }, { claims: true });
     try {
       const body = [
@@ -440,7 +441,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
             testable: true,
           },
           verdict: 'untested',
-          reason: 'Bugpatrol lists the claims, and does not test them yet.',
+          reason: 'The explorer did not reach this claim.',
         },
         {
           claim: {
@@ -451,7 +452,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
             testable: true,
           },
           verdict: 'untested',
-          reason: 'Bugpatrol lists the claims, and does not test them yet.',
+          reason: 'The explorer did not reach this claim.',
         },
       ]);
       expect((await f.workspace.readReview(7))!.claims).toEqual(review.claims);
@@ -525,7 +526,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(sent).toMatchObject({ commit_id: f.head, event: 'COMMENT' });
       expect(sent!.body.startsWith(REVIEW_MARKER)).toBe(true);
       expect(sent!.body).toContain(`From commit \`${f.head.slice(0, 7)}\``);
-      expect(sent!.body).toContain('Claims that Bugpatrol cannot test (1)');
+      expect(sent!.body).toContain('Claims that Bugpatrol could not test (3)');
       expect(sent!.body).toContain('No screen or request shows how clean the code is.');
       expect(sent!.body.indexOf('The save button saves the settings.')).toBeLessThan(
         sent!.body.indexOf('**1 problem that this pull request introduces.**'),
@@ -603,6 +604,317 @@ describe('pull request review', { timeout: 30_000 }, () => {
       await expect(run(f.config, false)).rejects.toThrow(/A patrol runs/);
       expect(agents.tasks).toHaveLength(0);
       expect(existsSync(paths.worktrees(f.root))).toBe(false);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * A dark mode switch. On the pull request build it makes the page dark; on
+ * the base build it does nothing. `extra` adds elements to the home screen.
+ */
+function darkApp(build: 'head' | 'base', extra: UiElement[] = []) {
+  const toggle: UiElement = {
+    ref: 'e1',
+    role: 'switch',
+    name: 'Dark mode',
+    testId: 'dark-mode',
+    box: { x: 0, y: 0, width: 10, height: 10 },
+    interactive: true,
+    enabled: true,
+  };
+  return new FakeDriver(
+    {
+      home: { elements: [toggle, ...extra], ...(build === 'head' ? { next: { e1: 'dark' } } : {}) },
+      dark: { elements: [toggle], color: 5 },
+    },
+    'home',
+  );
+}
+
+/**
+ * Each build runs a prepare command that names the build in a file, so the
+ * fake driver knows which build it drives, whatever the order of the builds.
+ * `drivers` keeps each driver by build. `make` can change one.
+ */
+function builds(root: string, make: (build: 'head' | 'base', index: number) => FakeDriver = (build) => darkApp(build)) {
+  const drivers: { head: FakeDriver[]; base: FakeDriver[] } = { head: [], base: [] };
+  const prepare = `cat settings.txt > ${JSON.stringify(join(root, 'build.txt'))}`;
+  const createDriver = () => {
+    const build = readFileSync(join(root, 'build.txt'), 'utf8').includes('broken') ? 'head' : 'base';
+    const driver = make(build, drivers[build].length);
+    drivers[build].push(driver);
+    return driver;
+  };
+  return { drivers, prepare, createDriver };
+}
+
+const claimConfig = (prepare: string, github: Record<string, unknown> = { enabled: false }) =>
+  parseConfig({
+    version: 1,
+    app: { source: 'source', connect: { url: 'fake://home' } },
+    agents: { github, review: { claims: true }, fixer: { retest: { prepare } } },
+  });
+
+type ClaimPlan = {
+  /** `flow` turns on the dark mode switch and saves the flow. `skip` and `note` save no flow. */
+  explore: Record<string, 'flow' | 'skip' | 'note'>;
+  verdicts: Record<string, { verdict: string; reason: string; saw?: string }>;
+};
+
+/** The explorer and the judge of a claim check, scripted. The explorer reports no bug. */
+function claimAgents(plan: ClaimPlan, before?: (task: RoleTask) => Promise<void>) {
+  const tasks: RoleTask[] = [];
+  const runtime: Runtime = {
+    label: 'scripted',
+    async run(task) {
+      tasks.push(task);
+      if (tool(task, 'report_bug')) {
+        await before?.(task);
+        for (const [claim, how] of Object.entries(plan.explore)) {
+          if (how === 'flow') {
+            // A claim routine starts with start_claim.
+            expect((await tool(task, 'save_claim').run({ claim, did: 'x', saw: 'y' })).isError).toBe(true);
+            await tool(task, 'start_claim').run({ claim });
+            await tool(task, 'open').run({ url: 'fake://home' });
+            await tool(task, 'tap').run({ ref: 'e1' });
+            await tool(task, 'save_claim').run({
+              claim,
+              did: 'Opened the home page and turned on the dark mode switch.',
+              saw: 'The page went dark.',
+            });
+          } else if (how === 'skip') {
+            await tool(task, 'skip_claim').run({ claim, reason: 'The export needs a paid account.' });
+          } else {
+            await tool(task, 'note_claim').run({
+              claim,
+              did: 'Saved the settings and waited for the toast.',
+              saw: 'The toast showed for about two seconds.',
+              reason: 'The toast hides on a timer, so a replay cannot catch it.',
+            });
+          }
+        }
+        await tool(task, 'finish').run({ summary: 'Tested the dark mode switch.' });
+      } else if (tool(task, 'view_claim')) {
+        for (const [claim, verdict] of Object.entries(plan.verdicts)) {
+          expect((await tool(task, 'view_claim').run({ claim })).isError).toBeFalsy();
+          if (verdict.verdict === 'not-proven') {
+            // A not-proven verdict says what Bugpatrol saw.
+            const bare = await tool(task, 'verdict').run({ claim, verdict: 'not-proven', reason: verdict.reason });
+            expect(bare.isError).toBe(true);
+          }
+          await tool(task, 'verdict').run({ claim, ...verdict });
+        }
+        await tool(task, 'finish').run({ summary: 'Done.' });
+      } else {
+        throw new Error(`Unexpected task with tools ${task.tools.map((item) => item.name).join(', ')}`);
+      }
+      return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Tested the dark mode switch.' };
+    },
+  };
+  return { tasks, createRuntime: () => runtime };
+}
+
+const claimsBody = (...claims: string[]) =>
+  `Adds dark mode.\n\n## Claims\n\n${claims.map((claim) => `- ${claim}`).join('\n')}`;
+
+describe('claim check', { timeout: 30_000 }, () => {
+  it('replays the flow of a claim on both builds with no model, and shows both builds in the review', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      const config = claimConfig(app.prepare, { enabled: true, repo: 'o/r' });
+      const github = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.') });
+      const agents = claimAgents({
+        explore: { 'claim-1': 'flow' },
+        verdicts: {
+          'claim-1': { verdict: 'proven', reason: 'The pull request build goes dark, and the base build stays light.' },
+        },
+      });
+      const run = () =>
+        reviewPullRequest(f.root, config, 7, {
+          gh: github.gh,
+          createRuntime: agents.createRuntime,
+          createDriver: app.createDriver,
+        });
+      const review = await run();
+
+      // The explorer and the judge are the only models. The replays use none.
+      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer', 'judge']);
+      expect(agents.tasks[0]!.prompt).toContain('claim-1: The dark mode switch makes the page dark.');
+      expect(review.claims).toMatchObject([
+        {
+          claim: { id: 'claim-1' },
+          verdict: 'proven',
+          evidence: 'replay',
+          reason: 'The pull request build goes dark, and the base build stays light.',
+          did: 'Opened the home page and turned on the dark mode switch.',
+          routine: '.bugpatrol/runs/reviews/pr-7/routines/claim-1.json',
+          head: { ok: true },
+          base: { ok: true },
+        },
+      ]);
+      const [finding] = review.claims!;
+      // A screenshot before the first step, and one after each step.
+      expect(finding!.head!.shots).toHaveLength(3);
+      expect(finding!.base!.shots).toHaveLength(3);
+      for (const shot of [...finding!.head!.shots, ...finding!.base!.shots])
+        expect(existsSync(join(f.root, shot))).toBe(true);
+
+      // Both builds follow the same steps, each from a fresh driver.
+      expect(app.drivers.head).toHaveLength(2);
+      expect(app.drivers.base).toHaveLength(1);
+      expect(app.drivers.base[0]!.actions).toEqual(app.drivers.head[1]!.actions);
+      expect(app.drivers.head[1]!.current).toBe('dark');
+      expect(app.drivers.base[0]!.current).toBe('home');
+
+      // The judge sees the last screen of each build.
+      const view = await tool(agents.tasks[1]!, 'view_claim').run({ claim: 'claim-1' });
+      expect(view.content.filter((item) => item.type === 'image')).toHaveLength(2);
+
+      // The claim routine stays with this review: the patrol knows nothing new.
+      const routine = JSON.parse(await readFile(join(f.root, finding!.routine!), 'utf8')) as Routine;
+      expect(routine.steps.map((step) => step.kind)).toEqual(['open', 'tap']);
+      expect(await f.workspace.listRoutines()).toEqual([]);
+      expect(await f.workspace.readAppMap()).toBeUndefined();
+
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('#### The dark mode switch makes the page dark.');
+      expect(sent!.body).toContain('`proven`');
+      expect(sent!.body).toContain('Evidence: a replay of the same steps on both builds, with no model.');
+      expect(sent!.body).toContain('Opened the home page and turned on the dark mode switch.');
+      expect(sent!.body).toContain(`\`${f.head.slice(0, 7)}\``);
+      expect(sent!.body).toContain(`\`${f.base.slice(0, 7)}\``);
+      expect(
+        sent!.body.match(/<img src="https:\/\/github\.com\/o\/r\/blob\/bugpatrol-assets\/pr-7\//g)!.length,
+      ).toBeGreaterThanOrEqual(2);
+
+      // The same commit with no --force tests nothing, and updates the review.
+      github.state.reviews = `90 ${f.head}`;
+      await run();
+      expect(agents.tasks).toHaveLength(2);
+      expect(app.drivers.head).toHaveLength(2);
+      expect(github.posted()).toHaveLength(1);
+      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/90']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('says what Bugpatrol saw on a not-proven claim, and lists the claims it could not test with the reason', async () => {
+    const f = await fixture();
+    try {
+      // Only the explorer's build shows a tip to close, so the replay of claim-2 fails partway.
+      const tip: UiElement = {
+        ref: 'e2',
+        role: 'button',
+        name: 'Close tip',
+        box: { x: 0, y: 20, width: 10, height: 10 },
+        interactive: true,
+        enabled: true,
+      };
+      const app = builds(f.root, (build, index) => darkApp(build, build === 'head' && index === 0 ? [tip] : []));
+      const { gh, calls } = fakeGh({
+        body: claimsBody(
+          'The dark mode switch makes the header dark.',
+          'Closing the tip keeps the page light.',
+          'Export works for free accounts.',
+          'A save shows a toast.',
+          'The settings page loads faster.',
+        ),
+      });
+      const agents = claimAgents(
+        {
+          explore: { 'claim-1': 'flow', 'claim-3': 'skip', 'claim-4': 'note' },
+          verdicts: {
+            'claim-1': {
+              verdict: 'not-proven',
+              reason: 'The page goes dark on this build, and the header stays light.',
+              saw: 'The header kept its light background.',
+            },
+            'claim-4': { verdict: 'partly-proven', reason: 'The toast shows, and the explorer saw it once only.' },
+          },
+        },
+        async (task) => {
+          await tool(task, 'start_claim').run({ claim: 'claim-2' });
+          await tool(task, 'open').run({ url: 'fake://home' });
+          await tool(task, 'tap').run({ ref: 'e2' });
+          await tool(task, 'save_claim').run({
+            claim: 'claim-2',
+            did: 'Closed the tip.',
+            saw: 'The page stayed light.',
+          });
+        },
+      );
+      const review = await reviewPullRequest(f.root, claimConfig(app.prepare), 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+        dryRun: true,
+        // A step whose target never shows gives up fast.
+        replayWindowMs: 50,
+      });
+      const byId = Object.fromEntries(review.claims!.map((finding) => [finding.claim.id, finding]));
+      expect(byId['claim-1']).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'replay',
+        saw: 'The header kept its light background.',
+      });
+      // A replay that fails partway is untested, never not-proven.
+      expect(byId['claim-2']).toMatchObject({ verdict: 'untested', head: { ok: false, failedStep: 1 } });
+      expect(byId['claim-2']!.evidence).toBeUndefined();
+      expect(byId['claim-2']!.reason).toContain('The replay on the pull request build stopped at step 2');
+      expect(byId['claim-3']).toMatchObject({ verdict: 'untested', reason: 'The export needs a paid account.' });
+      expect(byId['claim-4']).toMatchObject({
+        verdict: 'partly-proven',
+        evidence: 'explored',
+        saw: 'The toast showed for about two seconds.',
+      });
+      expect(byId['claim-5']).toMatchObject({ verdict: 'untested', reason: 'The explorer did not reach this claim.' });
+      // claim-2 stopped on the pull request build, so the base build does not replay it.
+      expect(app.drivers.head).toHaveLength(3);
+      expect(app.drivers.base).toHaveLength(1);
+
+      // The dry run writes the review and the screenshots locally, and calls nothing on GitHub.
+      expect(calls.some((call) => call.args.includes('POST') || call.args.includes('PUT'))).toBe(false);
+      const file = await readFile(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'), 'utf8');
+      expect(file).toContain(`<img src="${join(f.root, byId['claim-1']!.head!.shots.at(-1)!)}"`);
+      expect(file).toContain('Bugpatrol saw: The header kept its light background.');
+      expect(file).toContain('Evidence: the explorer and the judge, with no replay.');
+      expect(file).toContain('Claims that Bugpatrol could not test (3)');
+      expect(file).toContain('Bugpatrol saw: The toast showed for about two seconds.');
+      const untested = file.slice(file.indexOf('Claims that Bugpatrol could not test'));
+      expect(untested).toContain('Export works for free accounts.');
+      expect(untested).toContain('The export needs a paid account.');
+      expect(untested).toContain('The explorer did not reach this claim.');
+      expect(untested).not.toContain('The dark mode switch makes the header dark.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('stops with an error when a build does not start for a claim replay, and gives no verdict', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      // The base build does not install.
+      const config = claimConfig(`${app.prepare} && grep -q broken settings.txt`);
+      const { gh } = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.') });
+      const agents = claimAgents({ explore: { 'claim-1': 'flow' }, verdicts: {} });
+      await expect(
+        reviewPullRequest(f.root, config, 7, {
+          gh,
+          createRuntime: agents.createRuntime,
+          createDriver: app.createDriver,
+          dryRun: true,
+        }),
+      ).rejects.toThrow();
+      const record = await f.workspace.readReview(7);
+      expect(record).toMatchObject({ status: 'failed' });
+      expect(record!.claims?.some((finding) => finding.verdict !== 'untested') ?? false).toBe(false);
+      expect(existsSync(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'))).toBe(false);
+      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

@@ -9,13 +9,23 @@ export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; d
 export async function replaySteps(
   session: AgentSession,
   steps: RoutineStep[],
-  opts: { windowMs?: number } = {},
+  opts: { windowMs?: number; onStep?: (index: number) => Promise<void> } = {},
 ): Promise<ReplayResult> {
-  const result = await runSteps(session, steps, opts.windowMs ?? 30_000, false);
+  const result = await runSteps(session, steps, opts.windowMs ?? 30_000, false, opts.onStep);
   return { ok: !result.error, failedStep: result.failedStep, error: result.error, degraded: result.degraded };
 }
 
-async function runSteps(session: AgentSession, steps: RoutineStep[], windowMs: number, skippable: boolean) {
+/**
+ * `onStep` runs after each step that worked, once the screen settled. An
+ * error that it throws is not a failed step: it goes to the caller.
+ */
+async function runSteps(
+  session: AgentSession,
+  steps: RoutineStep[],
+  windowMs: number,
+  skippable: boolean,
+  onStep?: (index: number) => Promise<void>,
+) {
   const driver = session.driver as Driver;
   const version = driver.controlVersion;
   let degraded = false;
@@ -52,6 +62,7 @@ async function runSteps(session: AgentSession, steps: RoutineStep[], windowMs: n
       error = String(cause);
       break;
     }
+    await onStep?.(index);
   }
   return { degraded, failedStep, error, skipped };
 }

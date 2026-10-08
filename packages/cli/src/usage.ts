@@ -108,7 +108,7 @@ export const COMMAND_HELP: Record<string, string> = {
   --dry-run       write the review to .bugpatrol/runs/reviews/, and send nothing to GitHub
   --force         test the pull request again, also when the last review tested the same commit
   --allow-fork    review a pull request from a fork: its code runs on this machine, with the secrets of the app
-  --claims        list what the pull request says it does, also when agents.review.claims is off
+  --claims        test what the pull request says it does, also when agents.review.claims is off
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
 `,
   publish: `bugpatrol publish [--issue <id>]... [--dry-run]

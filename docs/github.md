@@ -166,7 +166,7 @@ What you must know before you run it:
 - **The code of the pull request runs on your machine, with the secrets of the app.** Bugpatrol refuses a pull request from a fork. Read the diff first. If you trust it, add `--allow-fork`.
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
-- **The pull request build changes nothing that the patrol knows.** The explorer of a review records no screen, no routine, and no lesson.
+- **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol.
 - **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
@@ -176,12 +176,24 @@ To review each pull request in CI, use the Bugpatrol Action (`action.yml` at the
 ### The claim check
 
 ```bash
-npx bugpatrol review 123 --claims       # list the claims for this run only
+npx bugpatrol review 123 --claims       # test the claims for this run only
 ```
 
 The claim check asks a second question: does the pull request do what it says? Turn it on with `agents.review.claims: true`, or with `--claims` for one run. It is off by default, and with it off `review` works as described above.
 
-Bugpatrol lists the claims at the top of the review, before the problems that the pull request introduces. Each claim names its source: the claims section, the title, the description, a commit, or an issue that the pull request closes. Bugpatrol does not test the claims yet, so each one shows as `untested`.
+Bugpatrol lists the claims at the top of the review, before the problems that the pull request introduces. Each claim names its source: the claims section, the title, the description, a commit, or an issue that the pull request closes.
+
+Bugpatrol tests each claim in three steps:
+
+1. On the pull request build, the explorer finds the flow of each claim and saves it as a claim routine in `.bugpatrol/runs/reviews/pr-<number>/routines/`. The routine holds every step from the start of the app, so it runs on a build that lacks the routines of the patrol.
+2. Bugpatrol replays each claim routine on the pull request build and then on the merge base, with no model. Each replay starts from a new driver, and Bugpatrol keeps a screenshot before the first step and after each step. Both builds run the same steps.
+3. The judge looks at the last screen of each build and gives each claim a verdict: `proven`, `not-proven`, `partly-proven` or `untested`. A `not-proven` verdict says what Bugpatrol saw.
+
+Each verdict names its evidence. `replay` means the verdict rests on the replay of the same steps on both builds. `explored` means the explorer checked the claim on the pull request build only, because a replay cannot repeat its flow (it hangs on timing, for example), and the judge decided from the explorer's account.
+
+In the review, each tested claim gets a heading, its verdict and evidence, one sentence on what Bugpatrol did, and the base and pull request screenshots side by side, with each step folded below. The review names the commits of both builds. The claims that Bugpatrol could not test come after, each with the reason: the explorer skipped it or did not reach it, the replay stopped partway on the pull request build, or the claim needs another platform than the app's.
+
+A replay that stops partway on the pull request build makes the claim `untested`, never `not-proven`. A base build that stops partway is evidence: the judge sees where it stopped, and a new control is often missing there. An app that does not start on either build stops the review with an error, as above.
 
 To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:
 
@@ -194,7 +206,7 @@ To choose the claims yourself, add a `Claims` heading to the pull request descri
 
 Bugpatrol uses each list item as written. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
 
-The judge session that writes the claims uses `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
+The two judge sessions of the claim check, one that writes the claims and one that gives the verdicts, use `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The explorer finds the claim flows in the same session that tests the diff, under `agents.explorer.maxSteps`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file, with the screenshots at their local paths. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
 
 ## Troubleshooting
 

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { appendFile, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -24,12 +24,20 @@ import { withSessionLogs } from '../logs.js';
 import { activePatrolPid } from '../patrol.js';
 import {
   explorerBaseSystem,
+  explorerClaimsPart,
   explorerReviewPrompt,
   explorerReviewSystem,
   judgeClaimsSystem,
   judgeReviewSystem,
 } from '../prompts.js';
-import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER, supersededBody } from '../review-comment.js';
+import {
+  claimShots,
+  numberDiff,
+  REVIEW_MARKER,
+  renderReview,
+  SUPERSEDED_MARKER,
+  supersededBody,
+} from '../review-comment.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
 import { explorerTools } from '../tools/explorer.js';
@@ -37,6 +45,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { type ClaimFlow, checkClaims, claimTools } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
 import { linkEnvFiles, stepWords } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
@@ -99,6 +108,8 @@ export type ReviewOptions = {
   maxSteps?: number;
   /** Run the claim check for this review, also when `agents.review.claims` is off. */
   claims?: boolean;
+  /** How long a replayed step waits for its target. */
+  replayWindowMs?: number;
 };
 
 type PullRequest = {
@@ -120,7 +131,7 @@ type PullRequest = {
   issues: { number: number; title: string; body: string }[];
 };
 
-type Context = {
+export type ReviewContext = {
   root: string;
   source: string;
   config: BugpatrolConfig;
@@ -131,7 +142,7 @@ type Context = {
   log: (message: string) => void;
 };
 
-const claimCheck = (ctx: Pick<Context, 'config' | 'opts'>) =>
+const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
   Boolean(ctx.opts.claims ?? ctx.config.agents.review.claims);
 
 /** Holds the fetched pull request commit for the time of one review. */
@@ -214,10 +225,10 @@ async function loadPullRequest(
  * of a person in it, so the forced removal loses nothing.
  */
 async function withBuild<T>(
-  ctx: Context,
+  ctx: ReviewContext,
   name: 'head' | 'base',
   commit: string,
-  run: (driver: Driver, vars: Vars) => Promise<T>,
+  run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
   const worktree = join(paths.worktrees(root), `review-${ctx.pr.number}-${name}`);
@@ -246,9 +257,15 @@ async function withBuild<T>(
     }
     const vars = new Vars(config.app.secrets);
     app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree });
-    driver = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
-    await driver.connect();
-    return await run(driver, vars);
+    const connect = async () => {
+      await driver?.close();
+      driver = undefined;
+      const next = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+      driver = next;
+      await next.connect();
+      return next;
+    };
+    return await run(await connect(), vars, connect);
   } finally {
     try {
       await driver?.close();
@@ -264,7 +281,12 @@ async function withBuild<T>(
 }
 
 /** The explorer tests what the diff can affect on the pull request build. Each report is a candidate. */
-async function exploreHead(ctx: Context, review: PrReview): Promise<Candidate[]> {
+async function exploreHead(
+  ctx: ReviewContext,
+  review: PrReview,
+  claims: Claim[],
+  flows: Map<string, ClaimFlow>,
+): Promise<Candidate[]> {
   const { root, config, workspace, pr, opts } = ctx;
   return withBuild(ctx, 'head', pr.head, async (driver, vars) => {
     const record = await workspace.startSession('explorer');
@@ -289,16 +311,20 @@ async function exploreHead(ctx: Context, review: PrReview): Promise<Candidate[]>
                 guide ? await readFile(guide, 'utf8') : '',
                 lessonsFor(await workspace.readMemory(), 'explorer'),
               ),
-              prompt: explorerReviewPrompt({
-                pr,
-                screens: (await workspace.readAppMap())?.screens ?? [],
-                routines: await workspace.listRoutines(),
-                placeholders: vars.names(),
-                maxSteps,
-              }),
-              tools: explorerTools(session, { replay: { save: false } })
-                .filter((tool) => REVIEW_TOOLS.has(tool.name))
-                .map((tool) => stopOnCancellation(session, tool)),
+              prompt: [
+                explorerReviewPrompt({
+                  pr,
+                  screens: (await workspace.readAppMap())?.screens ?? [],
+                  routines: await workspace.listRoutines(),
+                  placeholders: vars.names(),
+                  maxSteps,
+                }),
+                ...(claims.length ? [explorerClaimsPart(claims)] : []),
+              ].join('\n\n'),
+              tools: [
+                ...explorerTools(session, { replay: { save: false } }).filter((tool) => REVIEW_TOOLS.has(tool.name)),
+                ...(claims.length ? claimTools(session, ctx, claims, flows) : []),
+              ].map((tool) => stopOnCancellation(session, tool)),
               maxSteps,
               budgetUsd: config.agents.explorer.budgetUsd,
               timeoutMs: config.agents.explorer.timeoutMs,
@@ -341,7 +367,7 @@ async function exploreHead(ctx: Context, review: PrReview): Promise<Candidate[]>
  * does not start is not the end of the review: the judge then decides from
  * the pull request build and the diff, and says what it could not compare.
  */
-async function captureBase(ctx: Context, review: PrReview, candidates: Candidate[]): Promise<CaptureTarget[]> {
+async function captureBase(ctx: ReviewContext, review: PrReview, candidates: Candidate[]): Promise<CaptureTarget[]> {
   const { root, config, workspace, pr, opts } = ctx;
   const targets: CaptureTarget[] = candidates.map((candidate) => ({
     shot: {
@@ -402,7 +428,7 @@ async function captureBase(ctx: Context, review: PrReview, candidates: Candidate
 
 /** The judge compares the two builds and gives each candidate a verdict. */
 async function judgeFindings(
-  ctx: Context,
+  ctx: ReviewContext,
   review: PrReview,
   candidates: Candidate[],
   targets: CaptureTarget[],
@@ -567,7 +593,7 @@ async function judgeFindings(
  * as an issue of the main branch, so the review decides those candidates
  * here. A pre-existing problem stays open for that judge: the base build has it.
  */
-async function settleCandidates(ctx: Context, sessionId: string, findings: ReviewFinding[]): Promise<void> {
+async function settleCandidates(ctx: ReviewContext, sessionId: string, findings: ReviewFinding[]): Promise<void> {
   const lines = findings
     .filter((finding) => finding.verdict !== 'pre-existing')
     .map((finding) =>
@@ -603,17 +629,8 @@ function sectionClaims(body: string): string[] | undefined {
   return claims.length ? claims : undefined;
 }
 
-/** Nothing tests a claim yet: every claim is listed with the reason that it is untested. */
-function untested(claims: Claim[]): ClaimFinding[] {
-  return claims.map((claim) => ({
-    claim,
-    verdict: 'untested',
-    reason: claim.untestable ?? 'Bugpatrol lists the claims, and does not test them yet.',
-  }));
-}
-
 /** The claims of the pull request: the author's claims section as written, or else the judge's. */
-async function readClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
+async function readClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[]> {
   const { config, pr } = ctx;
   const section = sectionClaims(pr.body);
   if (section)
@@ -628,7 +645,7 @@ async function readClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
 }
 
 /** Without a claims section, the judge writes the claims from what the pull request says. */
-async function writeClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
+async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[]> {
   const { root, config, workspace, pr, opts } = ctx;
   const vars = new Vars(config.app.secrets);
   const record = await workspace.startSession('judge');
@@ -751,7 +768,7 @@ async function writeClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
   return claims;
 }
 
-async function runReview(ctx: Context): Promise<PrReview> {
+async function runReview(ctx: ReviewContext): Promise<PrReview> {
   const { workspace, pr } = ctx;
   const review: PrReview = {
     version: 1,
@@ -767,11 +784,35 @@ async function runReview(ctx: Context): Promise<PrReview> {
   };
   await workspace.saveReview(review);
   try {
-    if (claimCheck(ctx)) review.claims = untested(await readClaims(ctx, review));
+    const claims = claimCheck(ctx) ? await readClaims(ctx, review) : undefined;
+    // Each claim is untested until a test gives it a verdict, also when the review fails on the way.
+    const notYet = (claim: Claim, reason: string): ClaimFinding => ({
+      claim,
+      verdict: 'untested',
+      reason: claim.untestable ?? reason,
+    });
+    if (claims) {
+      review.claims = claims.map((claim) => notYet(claim, 'The review stopped before it tested this claim.'));
+      await rm(paths.reviewDir(ctx.root, pr.number), { recursive: true, force: true });
+    }
+    // Capability detection (#62) widens this to the platforms that the machine can run.
+    const toTest = (claims ?? []).filter((claim) => claim.testable && claim.platform === ctx.config.app.platform);
     if (!pr.files.length) {
       review.tested = `The pull request changes no file against \`${pr.baseRef}\`.`;
+      if (claims) review.claims = claims.map((claim) => notYet(claim, 'The pull request changes no file.'));
     } else {
-      const candidates = await exploreHead(ctx, review);
+      const flows = new Map<string, ClaimFlow>();
+      const candidates = await exploreHead(ctx, review, toTest, flows);
+      if (claims) {
+        const tested = await checkClaims(ctx, review, toTest, flows, (name, commit, run) =>
+          withBuild(ctx, name, commit, run),
+        );
+        review.claims = claims.map(
+          (claim) =>
+            tested.find((finding) => finding.claim.id === claim.id) ??
+            notYet(claim, `The app runs on ${ctx.config.app.platform}, and this claim needs ${claim.platform}.`),
+        );
+      }
       // With no report there is nothing to compare, so the base build does not start.
       if (candidates.length) {
         const targets = await captureBase(ctx, review, candidates);
@@ -808,7 +849,7 @@ async function openReviews(gh: Gh, reviews: string): Promise<{ id: string; commi
  * body, and Bugpatrol deletes its line comments. A comment that a person
  * answered stays: the answer is theirs.
  */
-async function supersede(ctx: Context, gh: Gh, old: { id: string }[], head: string): Promise<void> {
+async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head: string): Promise<void> {
   const pulls = `repos/${ctx.repo}/pulls`;
   const ids = new Set(old.map((review) => review.id));
   for (const id of ids)
@@ -838,7 +879,7 @@ async function supersede(ctx: Context, gh: Gh, old: { id: string }[], head: stri
  * merge. A new test of the pull request posts a new review and replaces the
  * older ones. The same result on the same commit only updates the body.
  */
-async function publishReview(ctx: Context, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
+async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
   const { root, config, repo, pr } = ctx;
   const redact = (text: string) => new Vars(config.app.secrets).redact(text) as string;
   const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
@@ -862,10 +903,12 @@ async function publishReview(ctx: Context, gh: Gh, review: PrReview, tested: boo
   }
   const branch = config.agents.github.assetsBranch;
   const urls = new Map<string, string>();
-  const shown = review.findings
-    .filter((finding) => finding.verdict === 'introduced')
-    .flatMap((finding) => [finding.head, finding.base])
-    .filter((path): path is string => Boolean(path));
+  const shown = [
+    ...review.findings
+      .filter((finding) => finding.verdict === 'introduced')
+      .flatMap((finding) => [finding.head, finding.base]),
+    ...claimShots(review),
+  ].filter((path): path is string => Boolean(path));
   if (shown.length) await ensureAssetsBranch(gh, repo, branch);
   for (const path of new Set(shown)) {
     try {
@@ -945,7 +988,7 @@ export async function reviewPullRequest(
       allowFork: Boolean(opts.allowFork),
       claims: claimCheck({ config, opts }),
     });
-    const ctx: Context = { root, source, config, workspace, repo, pr, opts, log };
+    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log };
     const last = await workspace.readReview(number);
     let review: PrReview;
     const covered = last && (last.claims || !claimCheck(ctx));

@@ -347,13 +347,33 @@ export type ClaimVerdict = 'proven' | 'not-proven' | 'partly-proven' | 'untested
  */
 export type ClaimEvidence = 'replay' | 'assertion' | 'explored' | 'bench';
 
+/** One replay of a claim routine on one build, with no model. */
+export type ClaimReplay = {
+  ok: boolean;
+  /** Workspace-relative screenshots: the screen before the first step, then one after each step that ran. */
+  shots: string[];
+  /** Where a replay that failed partway stopped, counted from 0. */
+  failedStep?: number;
+  error?: string;
+};
+
 /** One claim of a pull request, with the verdict of the claim check. */
 export type ClaimFinding = {
   claim: Claim;
   verdict: ClaimVerdict;
-  /** Absent when nothing tested the claim. */
+  /** Absent when nothing tested the claim. Bugpatrol sets it, never a model. */
   evidence?: ClaimEvidence;
   reason: string;
+  /** What Bugpatrol saw on the pull request build. Always set on a `not-proven` verdict. */
+  saw?: string;
+  /** One sentence on what Bugpatrol did on both builds. */
+  did?: string;
+  /** The claim routine, workspace-relative. It lives in the run directory of the review only. */
+  routine?: string;
+  /** The steps of the claim routine, in words. */
+  steps?: string[];
+  head?: ClaimReplay;
+  base?: ClaimReplay;
 };
 
 /** `reviews/pr-<number>.json`: the last review of one pull request. */
@@ -367,7 +387,17 @@ export type PrReview = {
   status: 'running' | 'finished' | 'failed';
   startedAt: string;
   endedAt?: string;
-  sessions: { explorer?: string; base?: string; judge?: string; claims?: string };
+  sessions: {
+    explorer?: string;
+    base?: string;
+    judge?: string;
+    /** The judge that wrote the claims. */
+    claims?: string;
+    /** The replays of the claim routines on each build, and the judge that gave the claim verdicts. */
+    headReplay?: string;
+    baseReplay?: string;
+    claimJudge?: string;
+  };
   /** The explorer's own account of what it tested. */
   tested?: string;
   /** The claim check. Absent when the claim check was off. */

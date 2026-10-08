@@ -445,7 +445,7 @@ npx bugpatrol@latest review <pr>             # post the review; it replaces the 
 - It runs the code of the pull request on this machine, with the secrets of the app. It refuses a pull request from a fork. Add `--allow-fork` only after the user read the diff and said yes.
 - It does not start while a patrol runs on the same machine.
 - Run `--dry-run` first, show the user the file, and post only after a yes.
-- `--claims` (or `agents.review.claims: true`) also lists what the pull request says it does, from a `## Claims` list in its description or else from its title, description, commits and closed issues. The claims are not tested yet.
+- `--claims` (or `agents.review.claims: true`) also lists what the pull request says it does, from a `## Claims` list in its description or else from its title, description, commits and closed issues. Bugpatrol replays the flow of each claim on both builds and gives each claim a verdict (`proven`, `not-proven`, `partly-proven`, `untested`) with its evidence (`replay` or `explored`). Claim routines stay in `.bugpatrol/runs/reviews/pr-<n>/`.
 
 Full reference: https://github.com/agent-labs-dev/bugpatrol/blob/main/docs/github.md#7-review-a-pull-request
 

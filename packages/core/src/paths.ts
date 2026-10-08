@@ -88,6 +88,8 @@ export const paths = {
   fix: (root: string, id: string) => data(root, 'fixes', `${recordId(id)}.json`),
   publish: (root: string) => data(root, 'publish'),
   review: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}.json`),
+  /** What one review keeps besides its record: the claim routines and their replays. Nothing else reads it. */
+  reviewDir: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}`),
   sessions: (root: string) => data(root, 'sessions'),
   session: (root: string, id: string) => data(root, 'sessions', recordId(id)),
   agents: (root: string) => data(root, 'agents.json'),

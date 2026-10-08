@@ -295,6 +295,39 @@ claim.
 ${lessonPart(lessons)}`;
 }
 
+/** The claims part of the prompt of the explorer on a pull request build. */
+export function explorerClaimsPart(claims: { id: string; text: string }[]): string {
+  return `CLAIMS TO TEST
+The pull request says it does these things. Bugpatrol replays the flow of each claim, with no model, on this build
+and on the base build, and the QA lead compares the two.
+${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}
+
+For each claim:
+1. Call start_claim. Then open the page, or run the routine, where a user starts the flow. The flow must start from
+   there, because the replay starts the app fresh.
+2. Do the shortest flow that shows the claim, until the screen shows the result.
+3. Call save_claim with one sentence on what the flow does and what this build shows.
+If a replay cannot repeat the flow (it hangs on timing, or on data that changes), check the claim and call note_claim.
+If you cannot test the claim on this build, call skip_claim with the reason. Test the claims before you finish.`;
+}
+
+export function judgeClaimVerdictsSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does as a list of claims. For each claim, Bugpatrol replayed
+the same steps on the build of the pull request and on the base build, or the explorer checked it on the pull
+request build when no replay could repeat it. You give each claim a verdict.
+
+Call view_claim for each claim. Then call verdict:
+- proven: the pull request build shows what the claim says. When the claim is a change, the base build does not.
+- not-proven: the pull request build does not show it. Fill in saw with what Bugpatrol saw, so the author knows
+  what is still wrong.
+- partly-proven: a part of the claim shows, or the evidence is thin.
+- untested: the screens do not show the claim either way.
+Judge only from what you see in view_claim and the diff. When every claim has a verdict, call finish with one
+sentence.
+
+${lessonPart(lessons)}`;
+}
+
 export function judgeRetestSystem(lessons: Lesson[] = []): string {
   return `You are the QA lead. You filed this issue. The fixer changed the code, and the explorer repeated the flow on the fixed build.
 Call view_retest to inspect the before and after screenshots. Then call verdict.

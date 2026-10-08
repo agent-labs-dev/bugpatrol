@@ -177,7 +177,7 @@ On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-
 | `working-directory` | `.` | The folder that holds `.bugpatrol/` |
 | `allow-fork` | `false` | Review a pull request from a fork. Its code runs with the secrets of your app |
 | `force` | `false` | Test the same commit again. Without it, a rerun on the same commit only publishes the last review again |
-| `claims` | `false` | List what the pull request says it does, also when `agents.review.claims` is off |
+| `claims` | `false` | Test what the pull request says it does, also when `agents.review.claims` is off |
 | `steps` | `agents.explorer.maxSteps` | The step limit of the explorer |
 | `args` | | More flags for `bugpatrol review` |
 

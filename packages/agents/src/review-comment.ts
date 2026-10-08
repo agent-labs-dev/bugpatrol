@@ -1,4 +1,4 @@
-import type { ClaimFinding, ClaimSource, PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
+import type { ClaimEvidence, ClaimFinding, ClaimSource, PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
 
 /** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
 export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
@@ -64,18 +64,79 @@ function sourceWords(source: ClaimSource): string {
   }
 }
 
-/** The claims come first: they are what the author says the pull request does. */
-function claimLines(claims: ClaimFinding[] | undefined): string[] {
+const evidenceWords: Record<ClaimEvidence, string> = {
+  replay: 'a replay of the same steps on both builds, with no model',
+  assertion: 'an exact check on both builds',
+  explored: 'the explorer and the judge, with no replay',
+  bench: 'a benchmark on both builds',
+};
+
+/** The screenshots that the claims of a review show: the last screen of each build, and each step. */
+export function claimShots(review: PrReview): string[] {
+  return (review.claims ?? [])
+    .filter((finding) => finding.verdict !== 'untested')
+    .flatMap((finding) => [...(finding.base?.shots ?? []), ...(finding.head?.shots ?? [])]);
+}
+
+/**
+ * The claims come first: they are what the author says the pull request
+ * does. A tested claim is a section with both builds side by side. The
+ * claims that Bugpatrol could not test are a list with the reason, so the
+ * reviewer knows what is left to check by hand.
+ */
+function claimLines(review: PrReview, image: (path?: string) => string | undefined): string[] {
+  const claims = review.claims;
   if (!claims) return [];
+  const head = `\`${short(review.head)}\``;
+  const base = `\`${short(review.base)}\``;
+  const tested = claims.filter((finding) => finding.verdict !== 'untested');
+  const untested = claims.filter((finding) => finding.verdict === 'untested');
+  const cell = (path: string | undefined, fallback: string) => image(path) ?? `_${fallback}_`;
+  const stopped = (finding: ClaimFinding, build: 'head' | 'base') => {
+    const replay = finding[build];
+    return replay && !replay.ok ? `Stopped at step ${(replay.failedStep ?? 0) + 1}.` : 'No screenshot.';
+  };
+  const section = (finding: ClaimFinding) => {
+    const replayed = Boolean(finding.head);
+    const steps = finding.steps ?? [];
+    return [
+      `#### ${finding.claim.text}`,
+      `\`${finding.verdict}\` · From ${sourceWords(finding.claim.source)}.` +
+        (finding.evidence ? ` Evidence: ${evidenceWords[finding.evidence]}.` : ''),
+      finding.reason,
+      // With a replay, the screenshots show the rest.
+      ...(finding.saw && (finding.verdict === 'not-proven' || !replayed) ? [`Bugpatrol saw: ${finding.saw}`] : []),
+      ...(finding.did
+        ? [
+            `${replayed ? 'What Bugpatrol did on both builds' : 'What Bugpatrol did on this pull request'}: ${finding.did}`,
+          ]
+        : []),
+      ...(replayed
+        ? [
+            `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
+              `| ${cell(finding.base?.shots.at(-1), stopped(finding, 'base'))} | ${cell(finding.head?.shots.at(-1), stopped(finding, 'head'))} |`,
+            ...details('Each step', [
+              `| Step | Base ${base} | This pull request ${head} |\n| --- | --- | --- |`,
+              ...['Start', ...steps].map(
+                (step, index) =>
+                  `| ${index ? `${index}. ${step}` : step} | ${cell(finding.base?.shots[index], '-')} | ${cell(finding.head?.shots[index], '-')} |`,
+              ),
+            ]),
+          ]
+        : []),
+    ].join('\n\n');
+  };
   const item = (finding: ClaimFinding) =>
-    `- **${finding.claim.text}** \`${finding.verdict}\`<br><sub>From ${sourceWords(finding.claim.source)}. ${finding.reason}</sub>`;
-  const testable = claims.filter((finding) => finding.claim.testable);
-  const untestable = claims.filter((finding) => !finding.claim.testable);
+    `- **${finding.claim.text}**<br><sub>From ${sourceWords(finding.claim.source)}. ${finding.reason}</sub>`;
   return [
     `#### What this pull request says it does (${claims.length})`,
-    ...(claims.length ? [] : ['Bugpatrol found no claim in the pull request.']),
-    ...(testable.length ? [testable.map(item).join('\n')] : []),
-    ...details(`Claims that Bugpatrol cannot test (${untestable.length})`, untestable.map(item)),
+    claims.length
+      ? `Bugpatrol compared this pull request (${head}) with its base (${base} on \`${review.baseRef}\`).`
+      : 'Bugpatrol found no claim in the pull request.',
+    ...tested.map(section),
+    ...(untested.length
+      ? [`#### Claims that Bugpatrol could not test (${untested.length})`, untested.map(item).join('\n')]
+      : []),
     '#### Problems that this pull request introduces',
   ];
 }
@@ -137,7 +198,7 @@ export function renderReview(
   const body = [
     REVIEW_MARKER,
     '### Bugpatrol review',
-    ...claimLines(review.claims),
+    ...claimLines(review, image),
     introduced.length
       ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
       : '**No problem found that this pull request introduces.**',
