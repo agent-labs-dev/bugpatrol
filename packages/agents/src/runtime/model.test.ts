@@ -202,6 +202,26 @@ describe('ModelRuntime', () => {
     expect(JSON.stringify(bodies[1])).toContain('Call one of the tools');
   });
 
+  it('gives up on a request that stalls, and asks again, instead of waiting out the whole session', async () => {
+    let attempts = 0;
+    const stallOnce = (async (_url: string | URL | Request, init?: RequestInit) => {
+      attempts++;
+      if (attempts > 1) return response({ choices: [{ message: { tool_calls: [call('finish')] } }] });
+      // A provider that keeps the connection open and sends nothing.
+      return new Promise((_, reject) =>
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+      );
+    }) as typeof fetch;
+    const runtime = new ModelRuntime(
+      { runtime: 'model', via: 'openai', model: 'test' },
+      { fetch: stallOnce, requestTimeoutMs: 50 },
+    );
+    const started = Date.now();
+    expect((await runtime.run(task([finish]), () => {})).stop).toBe('done');
+    expect(attempts).toBe(2);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('retries a 429 and sends Anthropic tool blocks', async () => {
     let attempts = 0;
     const retry = async () => {
