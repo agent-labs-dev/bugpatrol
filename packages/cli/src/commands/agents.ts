@@ -21,8 +21,17 @@ import {
   watchCi,
   withSessionLogs,
 } from '@bugpatrol/agents';
-import { type AgentRole, type BugpatrolConfig, ConfigError, formatUsage, InfrastructureError } from '@bugpatrol/core';
+import {
+  type AgentRole,
+  type BugpatrolConfig,
+  BugpatrolError,
+  ConfigError,
+  ExitCode,
+  formatUsage,
+  InfrastructureError,
+} from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
+import { exitCodeForReview } from './run.js';
 
 type AgentFlags = Record<string, string | string[] | boolean | number>;
 
@@ -252,6 +261,10 @@ export async function runAgentCommand(
         `PR #${review.pr.number}: ${claims}${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
           `${count('unclear')} not compared, ${count('not-a-bug')} not a bug.`,
       );
+      // The Action passes this exit code through, so only a failed claim check turns the workflow red.
+      const code = exitCodeForReview(review);
+      if (code !== ExitCode.Clean)
+        throw new BugpatrolError(`The claim check failed: ${review.check?.title ?? 'a claim was disproved'}.`, code);
     } finally {
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);

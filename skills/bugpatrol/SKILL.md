@@ -434,7 +434,7 @@ To read the state of the PRs and issues back from GitHub, run `npx bugpatrol@lat
 
 ### Optional: review a pull request
 
-`review` tests one pull request of the team in the running app. It starts the app from the pull request commit and from its merge base, repeats the same flows on both, and posts a GitHub review. Each problem that the pull request introduces is a comment on the changed line that causes it. The review never blocks the merge.
+`review` tests one pull request of the team in the running app. It starts the app from the pull request commit and from its merge base, repeats the same flows on both, and posts a GitHub review. Each problem that the pull request introduces is a comment on the changed line that causes it. The review never blocks the merge, unless `agents.review.block` is on and a replay disproves a claim twice.
 
 ```bash
 npx bugpatrol@latest review <pr> --dry-run   # write the review to .bugpatrol/runs/reviews/pr-<pr>.md
@@ -446,6 +446,7 @@ npx bugpatrol@latest review <pr>             # post the review; it replaces the 
 - It does not start while a patrol runs on the same machine.
 - Run `--dry-run` first, show the user the file, and post only after a yes.
 - `--claims` (or `agents.review.claims: true`) also lists what the pull request says it does, from a `## Claims` list in its description or else from its title, description, commits and closed issues. Bugpatrol replays the flow of each claim on both builds and gives each claim a verdict (`proven`, `not-proven`, `partly-proven`, `untested`) with its evidence (`replay` or `explored`). Claim routines stay in `.bugpatrol/runs/reviews/pr-<n>/`.
+- `agents.review.block: true` sets a `Bugpatrol claim check` check run (the token needs `checks: write`). It fails, and `review` exits 1, only on a `not-proven` claim with `replay` or `assertion` evidence that a second replay repeated. A second replay that differs makes the claim `untested` ("Flaky replay").
 
 Full reference: https://github.com/agent-labs-dev/bugpatrol/blob/main/docs/github.md#7-review-a-pull-request
 

@@ -158,7 +158,7 @@ npx bugpatrol review 123 --dry-run      # write the review to a local file, and 
    | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A folded list |
    | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A folded list |
 
-5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check.
+5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check, unless you turn on [blocking](#block-a-merge-on-a-disproved-claim).
 6. A new test of the pull request posts a new review. Bugpatrol then replaces the body of each older review with one line, and it deletes the line comments of that review. A comment that a person answered stays.
 
 `.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it updates the body of the review that the commit has, or it posts the review when the commit has none. Use `--force` to test the same commit again.
@@ -169,7 +169,7 @@ What you must know before you run it:
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
 - **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol. After the merge, `bugpatrol promote <number> <claim>` keeps a proven claim's routine in `.bugpatrol/routines/` for the patrol to replay.
-- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch.
+- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch. With `agents.review.block` on, the token also needs `checks: write`.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 
@@ -219,6 +219,20 @@ Before the explorer starts, the judge picks which declared benchmarks measure wh
 The review shows the median and the spread (lowest to highest) of each build, and folds the command and each number below. The judge compares the numbers with the claim and gives the verdict. When the two spreads overlap, the difference may be noise, so the verdict is at most `partly-proven`: a `proven` or a `not-proven` from the judge becomes `partly-proven`. The evidence is `bench`. A benchmark never fails a check, because runner noise must never block a merge. A command that fails, or prints no number that `parse` matches, leaves its claims `untested` with the reason.
 
 The judge sessions of the claim check, one that writes the claims, one that picks the benchmarks, and one that gives the verdicts, use `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The explorer finds the claim flows in the same session that tests the diff, under `agents.explorer.maxSteps`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file, with the screenshots at their local paths. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
+
+### Block a merge on a disproved claim
+
+The claim check only comments by default. To let it fail a check, set `agents.review.block: true`. Then `review` sets one check run, `Bugpatrol claim check`, on the pull request commit.
+
+Only a deterministic disproof fails that check: a `not-proven` verdict whose evidence is `replay` or `assertion`. Before it counts, Bugpatrol replays the claim routine a second time on the pull request build. If the second replay stops at another step, or ends on a different screen, the verdict becomes `untested` with the reason "Flaky replay". A verdict with `explored` or `bench` evidence never fails the check. The judge still gives the verdict, but the check fails only on a result that a replay with no model repeated ([ADR 0007](adr/0007-only-a-repeated-replay-blocks.md)).
+
+| Result | Check run | Exit code of `review` |
+| --- | --- | --- |
+| No deterministic disproof | `neutral` | 0 |
+| A disproof that the second replay repeated | `failure`, with each claim, what Bugpatrol saw, and the claim routine | 1 |
+| The app did not start | none | 4 |
+
+With `block` off, `review` sets no check and exits 0 when it only comments. The token needs `checks: write` to set the check. Without it, Bugpatrol logs that it could not set the check, and the exit code still carries the result.
 
 ## Troubleshooting
 

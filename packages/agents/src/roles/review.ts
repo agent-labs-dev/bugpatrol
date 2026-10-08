@@ -6,6 +6,7 @@ import {
   type BugpatrolConfig,
   type Candidate,
   type Claim,
+  type ClaimCheckRun,
   type ClaimFinding,
   ConfigError,
   InfrastructureError,
@@ -47,7 +48,7 @@ import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
-import { type ClaimFlow, checkClaims, claimTools } from './claims.js';
+import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
 import { linkEnvFiles, stepWords } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
@@ -64,6 +65,7 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
 const short = (commit: string) => commit.slice(0, 7);
+const CHECK_NAME = 'Bugpatrol claim check';
 
 /** A lockfile diff is long and says nothing about a screen. */
 const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*', ':(exclude,glob)**/*.lockb'];
@@ -148,6 +150,8 @@ export type ReviewContext = {
 
 const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
   Boolean(ctx.opts.claims ?? ctx.config.agents.review.claims);
+/** A check run that a deterministic disproof fails (ADR 0007). */
+const blocking = (ctx: Pick<ReviewContext, 'config'>) => ctx.config.agents.review.block;
 
 /** Holds the fetched pull request commit for the time of one review. */
 const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
@@ -835,7 +839,6 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       review.claims = claims!.map(untestedHere);
     } else {
       const flows = new Map<string, ClaimFlow>();
-      const testable = (claims ?? []).filter((claim) => claim.testable);
       const picks =
         testable.length && ctx.config.agents.review.benches.length
           ? await pickBenches(ctx, review, testable)
@@ -849,10 +852,14 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
             withWorktree(ctx, 'head', pr.head, (head) => run({ head, base })),
           ),
         );
+        const build = <T>(
+          name: 'head' | 'base',
+          commit: string,
+          run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
+        ) => withBuild(ctx, name, commit, run);
         const toCheck = [...toExplore, ...testable.filter((claim) => picks.has(claim.id))];
-        const tested = await checkClaims(ctx, review, toCheck, flows, measured, (name, commit, run) =>
-          withBuild(ctx, name, commit, run),
-        );
+        const checked = await checkClaims(ctx, review, toCheck, flows, measured, build);
+        const tested = blocking(ctx) ? await replayDisproofs(ctx, review, checked, flows, build) : checked;
         review.claims = claims.map(
           (claim) => tested.find((finding) => finding.claim.id === claim.id) ?? untestedHere(claim),
         );
@@ -864,6 +871,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
         await settleCandidates(ctx, review.sessions.explorer!, review.findings);
       }
     }
+    if (blocking(ctx)) review.check = claimCheckRun(review.claims ?? [], review.head);
     review.status = 'finished';
   } catch (error) {
     review.status = 'failed';
@@ -939,6 +947,11 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
           ...rendered.comments.map(
             (comment) => `---\n\nOn \`${comment.path}\` line ${comment.line}:\n\n${comment.body}`,
           ),
+          ...(review.check
+            ? [
+                `---\n\nCheck run ${CHECK_NAME}: \`${review.check.conclusion}\`, ${review.check.title}\n\n${review.check.summary}`,
+              ]
+            : []),
         ].join('\n\n'),
       ),
     );
@@ -996,6 +1009,37 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   review.posted = { url: posted.html_url, at: new Date().toISOString() };
   await ctx.workspace.saveReview(review);
   ctx.log(`${current && !tested ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
+  if (review.check) await setCheckRun(ctx, gh, review, review.check);
+}
+
+/**
+ * Sets the check run of the claim check on the pull request commit. The
+ * exit code carries the same result, so a token without `checks: write`
+ * loses the check on GitHub, and the run still fails.
+ */
+async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: ClaimCheckRun): Promise<void> {
+  const redact = (text: string) => new Vars(ctx.config.app.secrets).redact(text) as string;
+  try {
+    const run = JSON.parse(
+      await gh(['api', '-X', 'POST', `repos/${ctx.repo}/check-runs`, '--input', '-'], {
+        input: JSON.stringify({
+          name: CHECK_NAME,
+          head_sha: review.head,
+          status: 'completed',
+          conclusion: check.conclusion,
+          ...(review.posted ? { details_url: review.posted.url } : {}),
+          output: { title: check.title, summary: limitBody(redact(check.summary)) },
+        }),
+      }),
+    ) as { html_url: string };
+    check.url = run.html_url;
+    await ctx.workspace.saveReview(review);
+    ctx.log(`Set the claim check of PR #${ctx.pr.number} to ${check.conclusion}: ${run.html_url}`);
+  } catch (error) {
+    ctx.log(
+      `Could not set the claim check of PR #${ctx.pr.number} (the token needs checks: write): ${String(error).split('\n')[0]}`,
+    );
+  }
 }
 
 /**
@@ -1003,6 +1047,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
  * diff can affect on the pull request build, repeats each reported flow on
  * the merge base, and the judge keeps only what the pull request introduces.
  * The result is a pull request review that comments and never blocks a merge (ADR 0005, section 6).
+ * With `agents.review.block` on, a claim check run fails on a disproof that a replay repeated (ADR 0007).
  */
 export async function reviewPullRequest(
   root: string,
@@ -1035,7 +1080,7 @@ export async function reviewPullRequest(
     const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log };
     const last = await workspace.readReview(number);
     let review: PrReview;
-    const covered = last && (last.claims || !claimCheck(ctx));
+    const covered = last && (last.claims || !claimCheck(ctx)) && (last.check || !blocking(ctx));
     if (last?.status === 'finished' && last.head === pr.head && covered && !opts.force) {
       log(`PR #${number} has a review of ${short(pr.head)}: published it again. Use --force to test the commit again.`);
       review = last;

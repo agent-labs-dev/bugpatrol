@@ -11,6 +11,7 @@ import {
   type ExitCodeValue,
   InfrastructureError,
   type LiveProgress,
+  type PrReview,
   paths,
   type RunMode,
   requireRun,
@@ -362,4 +363,12 @@ export function exitCodeForError(error: unknown): ExitCodeValue {
   if (error instanceof InfrastructureError) return ExitCode.Infrastructure;
   if (error instanceof BugpatrolError) return error.exitCode;
   return ExitCode.Infrastructure;
+}
+
+/**
+ * A review exits with the regression code only when its claim check fails.
+ * A comment, however bad its verdicts, never turns the build red.
+ */
+export function exitCodeForReview(review: PrReview): ExitCodeValue {
+  return review.check?.conclusion === 'failure' ? ExitCode.Regression : ExitCode.Clean;
 }

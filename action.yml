@@ -10,7 +10,7 @@ inputs:
     description: The pull request number. Default is the pull request of the event.
     default: ${{ github.event.pull_request.number }}
   github-token:
-    description: The token for gh. It needs `pull-requests: write`, and `contents: write` for the screenshots on the assets branch.
+    description: The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on.
     default: ${{ github.token }}
   package:
     description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball.
@@ -114,5 +114,6 @@ runs:
         # shellcheck disable=SC2086 # the extra flags split on spaces on purpose
         set -- "$@" $ARGS
         # The exit code of Bugpatrol is the exit code of this step: 0 when the
-        # review only comments, 4 when Bugpatrol could not test.
+        # review only comments, 1 when the claim check fails (agents.review.block),
+        # 4 when Bugpatrol could not test.
         exec "$BUGPATROL_PREFIX/node_modules/.bin/bugpatrol" "$@"
