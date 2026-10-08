@@ -116,7 +116,8 @@ export const COMMAND_HELP: Record<string, string> = {
   promote: `bugpatrol promote <pr> <claim>...
   Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
   Commit the routines, and the patrol replays them from then on. A review never does this by itself.
-  It refuses a pull request that is not merged, and a claim that is not proven or has no claim routine.
+  It refuses a pull request that is not merged, a review of another commit than the one that merged,
+  and a claim that is not proven or has no claim routine.
   Needs a logged-in gh CLI, and the review of the pull request in .bugpatrol/runs/reviews/.
   <pr>            the number or the URL of the pull request
   <claim>         a claim id from the review, for example claim-1

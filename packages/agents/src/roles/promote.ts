@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { type BugpatrolConfig, ConfigError, type Routine } from '@bugpatrol/core';
 import { defaultGh, type Gh } from '../github.js';
+import { short } from '../review-comment.js';
 import { Workspace } from '../workspace.js';
 
 /**
@@ -36,10 +37,18 @@ export async function promoteClaims(
   });
   const repo = config.agents.github.repo ? ['--repo', config.agents.github.repo] : [];
   const source = resolve(root, config.app.source);
-  const state = await gh(['pr', 'view', String(number), ...repo, '--json', 'state', '-q', '.state'], { cwd: source });
-  if (state.trim() !== 'MERGED')
+  const merged = JSON.parse(
+    await gh(['pr', 'view', String(number), ...repo, '--json', 'state,headRefOid'], { cwd: source }),
+  ) as { state: string; headRefOid: string };
+  if (merged.state !== 'MERGED')
     throw new ConfigError(
-      `PR #${number} is not merged (${state.trim().toLowerCase() || 'unknown'}). Promote its claims after the merge.`,
+      `PR #${number} is not merged (${merged.state.toLowerCase() || 'unknown'}). Promote its claims after the merge.`,
+    );
+  // A proof of an older commit says nothing about the code that merged.
+  if (merged.headRefOid !== review.head)
+    throw new ConfigError(
+      `The review of PR #${number} tested ${short(review.head)}, and the pull request merged ${short(merged.headRefOid)}. ` +
+        `Run \`bugpatrol review ${number} --claims --force\`, then promote again.`,
     );
   const now = new Date().toISOString();
   const routines: Routine[] = [];
@@ -58,6 +67,10 @@ export async function promoteClaims(
       description: finding.claim.text,
       platform: saved.platform,
       steps: saved.steps,
+      // The checks decide the verdict of a replay, so the patrol needs them too.
+      ...(saved.assert ? { assert: saved.assert } : {}),
+      ...(saved.same ? { same: saved.same } : {}),
+      ...(saved.bug ? { bug: saved.bug } : {}),
       createdAt: now,
       updatedAt: now,
     });

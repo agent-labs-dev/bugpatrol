@@ -54,11 +54,11 @@ const review = (claims: ClaimFinding[]): PrReview => ({
   costUsd: 0,
 });
 
-/** gh that answers the state of pull request 7. */
+/** gh that answers the state of pull request 7, and the head commit that it merged. */
 const ghWith =
-  (state: string): Gh =>
+  (state: string, head = 'a'.repeat(40)): Gh =>
   async (args) => {
-    if (args[0] === 'pr' && args[1] === 'view' && args[2] === '7') return state;
+    if (args[0] === 'pr' && args[1] === 'view' && args[2] === '7') return JSON.stringify({ state, headRefOid: head });
     throw new Error(`Unexpected gh ${args.join(' ')}`);
   };
 
@@ -113,6 +113,32 @@ describe('promoteClaims', () => {
     const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
     expect((await replayRoutine(session, 'pr-7-claim-1', { windowMs: 200 })).ok).toBe(true);
     expect((await driver.observe()).location).toBe('fake://settings');
+  });
+
+  it('keeps the exact checks, the same-behavior flag and the bug check of the claim routine', async () => {
+    const dir = join(paths.reviewDir(root, 7), 'routines');
+    const checked: Routine = {
+      ...flow('claim-1'),
+      platform: 'cli',
+      assert: [{ kind: 'exit-code', value: 0 }],
+      same: true,
+      bug: { shows: 'Save failed' },
+    };
+    await writeFile(join(dir, 'claim-1.json'), `${JSON.stringify(checked, null, 2)}\n`);
+    await promoteClaims(root, config, 7, ['claim-1'], { gh: ghWith('MERGED') });
+    expect(await workspace.readRoutine('pr-7-claim-1')).toMatchObject({
+      platform: 'cli',
+      assert: [{ kind: 'exit-code', value: 0 }],
+      same: true,
+      bug: { shows: 'Save failed' },
+    });
+  });
+
+  it('refuses a review of another commit than the one that merged, and keeps nothing', async () => {
+    await expect(promoteClaims(root, config, 7, ['claim-1'], { gh: ghWith('MERGED', 'c'.repeat(40)) })).rejects.toThrow(
+      /tested aaaaaaa, and the pull request merged ccccccc/,
+    );
+    expect(await workspace.listRoutines()).toEqual([]);
   });
 
   it('refuses a pull request that is not merged, and keeps nothing', async () => {
