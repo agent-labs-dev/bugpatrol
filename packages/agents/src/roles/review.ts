@@ -996,14 +996,18 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
 }
 
 /** The marked reviews on the pull request that no later review replaced yet. */
-async function openReviews(gh: Gh, reviews: string, name?: string): Promise<{ id: string; commit: string }[]> {
+async function openReviews(
+  gh: Gh,
+  reviews: string,
+  name?: string,
+): Promise<{ id: string; commit: string; node: string }[]> {
   const select = `.[] | select(.body | contains("${reviewMarker(name)}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
-  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id)"`]))
+  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id) \\(.node_id)"`]))
     .split('\n')
     .filter(Boolean)
     .map((row) => {
-      const [id, commit] = row.split(' ');
-      return { id: id!, commit: commit! };
+      const [id, commit, node] = row.split(' ');
+      return { id: id!, commit: commit!, node: node! };
     });
 }
 
@@ -1032,10 +1036,10 @@ async function saveSticky(
 
 /**
  * GitHub keeps a submitted review for good, so an old review gets a one-line
- * body, and Bugpatrol deletes its line comments. A comment that a person
- * answered stays: the answer is theirs.
+ * body, Bugpatrol deletes its line comments, and folds it away as outdated.
+ * A comment that a person answered stays: the answer is theirs.
  */
-async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head: string): Promise<void> {
+async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string; node: string }[], head: string): Promise<void> {
   const pulls = `repos/${ctx.repo}/pulls`;
   const ids = new Set(old.map((review) => review.id));
   for (const id of ids)
@@ -1058,6 +1062,15 @@ async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head
   for (const [id, review, parent] of rows)
     if (ids.has(review) && parent === 'null' && !answered.has(id))
       await gh(['api', '-X', 'DELETE', `${pulls}/comments/${id}`]);
+  for (const { node } of old)
+    await gh([
+      'api',
+      'graphql',
+      '-f',
+      'query=mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }',
+      '-f',
+      `id=${node}`,
+    ]);
 }
 
 /**

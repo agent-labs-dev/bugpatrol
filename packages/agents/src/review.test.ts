@@ -105,6 +105,7 @@ function fakeGh(
     if (args.some((arg) => /\/issues\/(7\/)?comments/.test(arg)))
       return JSON.stringify({ html_url: 'https://github.com/o/r/pull/7#issuecomment-91' });
     if (args.includes('DELETE')) return '';
+    if (args[1] === 'graphql') return '{}';
     if (args.some((arg) => arg.endsWith('/check-runs')))
       return JSON.stringify({ html_url: 'https://github.com/o/r/runs/1' });
     if (args.some((arg) => arg.includes('/reviews')))
@@ -406,8 +407,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
     const f = await fixture();
     try {
       // Review 55 is of an older commit. A person answered its comment 2.
-      const { gh, posted, sent, sticky } = fakeGh({
-        reviews: '55 0000000000000000000000000000000000000000',
+      const { gh, calls, posted, sent, sticky } = fakeGh({
+        reviews: '55 0000000000000000000000000000000000000000 PRR_55',
         comments: ['1 55 null', '2 55 null', '3 55 2', '4 77 null'].join('\n'),
       });
       const review = await reviewPullRequest(f.root, f.config, 7, {
@@ -425,6 +426,11 @@ describe('pull request review', { timeout: 30_000 }, () => {
       const replaced = sent('PUT', '/reviews/');
       expect(replaced.map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
       expect(replaced[0]!.input!.body).toContain(SUPERSEDED_MARKER);
+      // GitHub keeps a submitted review for good, so the replaced one is folded away as outdated.
+      const hidden = calls.filter((call) => call.args[1] === 'graphql');
+      expect(hidden.map((call) => call.args.join(' '))).toEqual([
+        expect.stringMatching(/minimizeComment\(input: \{subjectId: \$id, classifier: OUTDATED\}\).* -f id=PRR_55$/),
+      ]);
       expect(sent('DELETE', '/comments/').map((call) => call.path)).toEqual(['repos/o/r/pulls/comments/1']);
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -434,7 +440,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('with a name, replaces only the older reviews of the same name', async () => {
     const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'dashboard' });
     try {
-      const { gh, calls, sent, sticky } = fakeGh({ reviews: '55 0000000000000000000000000000000000000000' });
+      const { gh, calls, sent, sticky } = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
       await reviewPullRequest(f.root, f.config, 7, {
         gh,
         createRuntime: scripted('pre-existing', 1, 1).createRuntime,
@@ -509,7 +515,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('puts the line comments in a review of their own that links the PR comment, and replaces older reviews', async () => {
     const f = await fixture();
     try {
-      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000' });
+      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
       await reviewPullRequest(f.root, f.config, 7, {
         gh: github.gh,
         createRuntime: scripted('introduced', 1, 1).createRuntime,
@@ -528,7 +534,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('posts no review when no problem is on a line, and still replaces the older reviews', async () => {
     const f = await fixture();
     try {
-      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000' });
+      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
       await reviewPullRequest(f.root, f.config, 7, {
         gh: github.gh,
         createRuntime: scripted('pre-existing', 1).createRuntime,
@@ -578,7 +584,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
           createDriver: screens,
         });
       await run();
-      github.state.reviews = `90 ${f.head}`;
+      github.state.reviews = `90 ${f.head} PRR_90`;
       github.state.sticky = '91';
       await run();
       expect(agents.tasks).toHaveLength(3);
