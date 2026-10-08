@@ -164,10 +164,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: agent-labs-dev/bugpatrol@main
+      - uses: agent-labs-dev/bugpatrol@v0
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
+
+`@v0` moves to each new release. On a release tag, the Action installs the bugpatrol of that release, so the Action and the CLI always match. For a fixed version, use a full tag such as `@v0.2.0`. `@main` installs `bugpatrol@latest`.
 
 On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-ubuntu-2404`. On your own machine, use `runs-on: self-hosted` or its labels. The Action installs Node, Bugpatrol, and Chromium for a web app. For other apps it uses what the machine has: Xvfb for a Linux desktop app, a booted emulator for Android, a Mac with a simulator for iOS. On a self-hosted Linux machine with no passwordless `sudo`, install the system libraries of Chromium first (`npx playwright install-deps chromium`).
 
@@ -175,7 +177,7 @@ On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-
 | --- | --- | --- |
 | `pr` | the pull request of the event | The pull request to review |
 | `github-token` | `github.token` | The token for `gh` |
-| `package` | `bugpatrol@latest` | The Bugpatrol that npm installs: a version, a tag, or a tarball |
+| `package` | the version of the Action tag | The Bugpatrol that npm installs: a version, a tag, or a tarball |
 | `node-version` | `22` | The Node.js version |
 | `working-directory` | `.` | The folder that holds `.bugpatrol/` |
 | `allow-fork` | `false` | Review a pull request from a fork. Its code runs with the secrets of your app |
