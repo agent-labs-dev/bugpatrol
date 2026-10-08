@@ -380,10 +380,12 @@ async function exploreHead(
       claimWork?.charge(outcome);
       const candidates = await workspace.readCandidates(record.id);
       review.costUsd += outcome.costUsd;
+      const summary = outcome.summary?.trim();
+      const cutShort = `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
       review.tested =
-        outcome.stop === 'done' && outcome.summary
-          ? (vars.redact(outcome.summary.trim()) as string)
-          : `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
+        summary && (outcome.stop === 'done' || outcome.finished)
+          ? (vars.redact(outcome.stop === 'done' ? summary : `${cutShort}\n\n${summary}`) as string)
+          : cutShort;
       await workspace.endSession(record.id, {
         steps: outcome.steps,
         costUsd: outcome.costUsd,
