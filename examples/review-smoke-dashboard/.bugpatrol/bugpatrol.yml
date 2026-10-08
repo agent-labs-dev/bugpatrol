@@ -27,7 +27,6 @@ agents:
   review:
     name: dashboard
   explorer:
-    maxSteps: 15
     budgetUsd: 0.5
   judge:
     budgetUsd: 0.5
