@@ -619,7 +619,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
  * A dark mode switch. On the pull request build it makes the page dark; on
  * the base build it does nothing. `extra` adds elements to the home screen.
  */
-function darkApp(build: 'head' | 'base', extra: UiElement[] = [], record?: 'video' | 'broken') {
+function darkApp(build: 'head' | 'base', extra: UiElement[] = [], record?: 'video' | 'broken' | 'huge') {
   const toggle: UiElement = {
     ref: 'e1',
     role: 'switch',
@@ -1038,6 +1038,38 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(file).toContain(`<a href="${join(f.root, finding!.head!.recording!.file)}">Full video</a>`);
       expect(file).toContain('<details><summary>Each step</summary>');
       expect(file).toContain(`<img src="${join(f.root, finding!.head!.shots.at(-1)!)}"`);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a full recording over the upload limit off GitHub, and says where it is', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root, (build) => darkApp(build, [], 'huge'));
+      const github = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.') });
+      const agents = claimAgents({
+        explore: { 'claim-1': 'flow' },
+        verdicts: { 'claim-1': { verdict: 'proven', reason: 'Dark on this build, light on the base.' } },
+      });
+      const logs: string[] = [];
+      await reviewPullRequest(f.root, claimConfig(app.prepare, { enabled: true, repo: 'o/r' }), 7, {
+        gh: github.gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+        onLog: (line) => logs.push(line),
+      });
+      const uploads = github.sent('PUT', '/contents/').map((call) => call.path);
+      expect(uploads.filter((path) => path.endsWith('.mp4'))).toEqual([]);
+      expect(uploads.filter((path) => path.endsWith('.png')).length).toBeGreaterThan(0);
+      expect(logs).toContain(
+        'Did not upload .bugpatrol/runs/reviews/pr-7/claim-1/head.mp4: it has 11.0 MB, over the limit of 10 MB.',
+      );
+      const [sent] = github.posted();
+      expect(sent!.body).not.toContain('<a href');
+      expect(sent!.body).toContain(
+        'Full video: `.bugpatrol/runs/reviews/pr-7/claim-1/head.mp4` in the run, and in the dashboard',
+      );
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { appendFile, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -72,6 +72,9 @@ const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*
 const DIFF_LIMIT = 40_000;
 /** An issue that the pull request closes is context for the claims, and a long one would crowd out the diff. */
 const ISSUE_LIMIT = 4_000;
+const MB = 1024 * 1024;
+/** GitHub serves a larger file from the assets branch as a download, not as media (spike #58). */
+const UPLOAD_LIMIT = 10 * MB;
 const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli'];
 
 /**
@@ -983,6 +986,13 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   if (shown.length) await ensureAssetsBranch(gh, repo, branch);
   for (const path of new Set(shown)) {
     try {
+      const { size } = await stat(resolve(root, path));
+      if (size > UPLOAD_LIMIT) {
+        ctx.log(
+          `Did not upload ${path}: it has ${(size / MB).toFixed(1)} MB, over the limit of ${UPLOAD_LIMIT / MB} MB.`,
+        );
+        continue;
+      }
       urls.set(path, await uploadImage(gh, repo, branch, resolve(root, path), `pr-${pr.number}`));
     } catch (error) {
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);

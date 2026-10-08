@@ -34,13 +34,14 @@ export class FakeDriver implements Driver {
 
   /**
    * `record: 'video'` records the screens it shows into a real MP4, which
-   * needs ffmpeg. `record: 'broken'` writes a file that is no video.
+   * needs ffmpeg. `record: 'broken'` writes a file that is no video, and
+   * `record: 'huge'` one of 11 MB.
    */
   constructor(
     readonly screens: Record<string, FakeScreen>,
     start = 'home',
     platform: Platform = 'web',
-    options: { record?: 'video' | 'broken' } = {},
+    options: { record?: 'video' | 'broken' | 'huge' } = {},
   ) {
     this.current = start;
     this.platform = platform;
@@ -52,6 +53,7 @@ export class FakeDriver implements Driver {
     this.stopRecording = async (name) => {
       const file = `${name}.mp4`;
       if (record === 'broken') await writeFile(file, 'not a video');
+      else if (record === 'huge') await writeFile(file, Buffer.alloc(11 * 1024 * 1024));
       else await encodeFrames(this.frames ?? [], file, Date.now());
       this.frames = undefined;
       return file;

@@ -139,14 +139,21 @@ function claimLines(
     const replay = finding[build];
     return replay && !replay.ok ? `Stopped at step ${(replay.failedStep ?? 0) + 1}.` : 'No screenshot.';
   };
-  /** The GIF of a build or its last screen, then a link to the full recording: a video, or a terminal cast. */
+  /**
+   * The GIF of a build or its last screen, then the full recording: a video, or a terminal cast. A recording
+   * with no URL, such as one over the upload limit, stays in the run directory.
+   */
   const last = (finding: ClaimFinding, build: 'head' | 'base') => {
-    const replay = finding[build];
-    const video = replay?.recording && url(replay.recording.file);
-    const label = replay?.recording?.file.endsWith('.cast') ? 'Terminal recording' : 'Full video';
+    const recording = finding[build]?.recording;
+    const video = recording && url(recording.file);
+    const label = recording?.file.endsWith('.cast') ? 'Terminal recording' : 'Full video';
     return (
-      cell(replay?.recording?.gif ?? replay?.shots.at(-1), stopped(finding, build)) +
-      (video ? `<br><a href="${video}">${label}</a>` : '')
+      cell(recording?.gif ?? finding[build]?.shots.at(-1), stopped(finding, build)) +
+      (video
+        ? `<br><a href="${video}">${label}</a>`
+        : recording
+          ? `<br>${label}: \`${recording.file}\` in the run, and in the dashboard`
+          : '')
     );
   };
   /** Each exact check of a claim on both builds. */
