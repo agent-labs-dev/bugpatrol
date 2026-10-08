@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { closeOnGitHub, dismissedFingerprints, Workspace } from '@bugpatrol/agents';
-import { type BugpatrolConfig, ConfigError, type Issue } from '@bugpatrol/core';
+import { type BugpatrolConfig, ConfigError, fitLesson, type Issue } from '@bugpatrol/core';
 
 /**
  * `bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>`
@@ -55,7 +55,7 @@ export async function runIssueCommand(
         role: 'judge',
         source: 'human',
         scope: issue.screenId,
-        text: `Not a bug: ${issue.title} — ${reason}`.slice(0, 200),
+        text: fitLesson(`Not a bug: ${issue.title} — ${reason}`),
       },
     ]);
     log(`Dismissed ${issue.id}: ${issue.title}`);

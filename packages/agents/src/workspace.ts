@@ -90,7 +90,7 @@ export class Workspace {
       const now = new Date().toISOString();
       const saved: Lesson[] = [];
       for (const lesson of lessons) {
-        const text = lesson.text.trim().slice(0, 200);
+        const text = lesson.text.trim();
         if (!text) continue;
         const id = `les_${shortHash(`${lesson.role}:${text.toLowerCase().replace(/\s+/g, ' ')}`)}`;
         const previous = memory.lessons.find((item) => item.id === id);

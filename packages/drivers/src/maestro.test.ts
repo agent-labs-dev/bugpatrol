@@ -67,6 +67,22 @@ describe('Maestro data conversion', () => {
     expect(elements.some((element) => element.name === 'invisible')).toBe(false);
   });
 
+  it('takes the viewport from the windows when the Android root node has no bounds', () => {
+    const android = {
+      elements: [
+        {
+          children: [
+            { bounds: '[0,0][1080,132]', 'resource-id': 'status_bar' },
+            { bounds: '[0,0][1080,2400]', children: [{ bounds: '[40,300][1040,400]', text: 'Your classes' }] },
+          ],
+        },
+      ],
+    };
+    const { elements, viewport } = flattenHierarchy(android);
+    expect(viewport).toEqual({ width: 1080, height: 2400 });
+    expect(elements.some((element) => element.name === 'Your classes')).toBe(true);
+  });
+
   it('builds stable tap YAML and safely quotes input text', () => {
     expect(tapCommand({ testId: 'save:button' })).toContain('id: "save:button"');
     expect(tapCommand({ name: 'Save (2)?' })).toContain(`text: ${yamlString(regexText('Save (2)?'))}`);

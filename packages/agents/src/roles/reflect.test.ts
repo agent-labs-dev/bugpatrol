@@ -59,6 +59,48 @@ describe('reflection', () => {
     }
   });
 
+  it('rejects a lesson over 200 characters without counting it, and states the limit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-reflect-'));
+    try {
+      const workspace = new Workspace(root);
+      const session = await workspace.startSession('explorer');
+      await workspace.appendEvent(session.id, {
+        sessionId: session.id,
+        role: 'explorer',
+        kind: 'tool-result',
+        tool: 'tap',
+        summary: 'tap: failed',
+        output: 'Error: no target',
+      });
+      await workspace.endSession(session.id, { summary: 'Finished.' });
+      const long = `${'On Channels, open the member list first. '.repeat(5)}Then tap.`;
+      const short = 'On Channels, open the member list first.'.padEnd(200, '!');
+      let rejected: unknown;
+      const runtime: Runtime = {
+        label: 'fake',
+        async run(task) {
+          expect(task.system).toContain('200 characters');
+          const add = task.tools.find((tool) => tool.name === 'add_lesson')!;
+          expect(add.description).toContain('200 characters');
+          rejected = await add.run({ text: long });
+          await add.run({ text: short });
+          return { stop: 'done', steps: 1, costUsd: 0, summary: '' };
+        },
+      };
+      const reflectConfig = parseConfig({
+        version: 1,
+        app: { connect: { url: 'fake://home' } },
+        agents: { memory: { maxPerSession: 1 } },
+      });
+      await reflectOnSession(root, reflectConfig, session.id, { createRuntime: () => runtime });
+      expect(rejected).toMatchObject({ isError: true });
+      expect(JSON.stringify(rejected)).toContain(`${long.length} characters`);
+      expect((await workspace.readMemory()).lessons.map((lesson) => lesson.text)).toEqual([short]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not call a runtime for a clean session', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-reflect-'));
     try {

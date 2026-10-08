@@ -1,4 +1,4 @@
-import type { Lesson, LessonRole } from '@bugpatrol/core';
+import { LESSON_MAX_LENGTH, type Lesson, type LessonRole, lessonTooLong } from '@bugpatrol/core';
 import type { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 
@@ -77,7 +77,8 @@ export function lessonTools(session: AgentSession, role: LessonRole): Tool[] {
       name: 'save_lesson',
       description:
         'Save one lasting fact about this app or its code for later sessions: one short, specific ' +
-        'sentence. Use "for" to save it for another role (explorer, judge, or fixer). When a similar lesson ' +
+        `sentence of at most ${LESSON_MAX_LENGTH} characters. Use "for" to save it for another role ` +
+        '(explorer, judge, or fixer). When a similar lesson ' +
         'exists, the tool shows it and saves nothing.',
       inputSchema: {
         type: 'object',
@@ -99,7 +100,7 @@ export function lessonTools(session: AgentSession, role: LessonRole): Tool[] {
         if (saved >= memory.maxPerSession) {
           return { content: [{ type: 'text', text: 'The lesson limit for this session is reached.' }] };
         }
-        const text = (session.vars.redact(String(input.text ?? '')) as string).trim().slice(0, 240);
+        const text = (session.vars.redact(String(input.text ?? '')) as string).trim();
         if (!text) return { content: [{ type: 'text', text: 'The lesson needs a text.' }], isError: true };
         const target = roles.includes(input.for as LessonRole) ? (input.for as LessonRole) : role;
         const { lessons } = await session.workspace.readMemory();
@@ -113,6 +114,8 @@ export function lessonTools(session: AgentSession, role: LessonRole): Tool[] {
           ]);
           return { content: [{ type: 'text', text: `Confirmed ${confirmed.id}. It has one more hit now.` }] };
         }
+        const tooLong = lessonTooLong(text);
+        if (tooLong) return { content: [{ type: 'text', text: tooLong }], isError: true };
         const similar = input.different === true ? undefined : similarLesson(lessons, target, text);
         if (similar && similar.text.toLowerCase() !== text.toLowerCase()) {
           return {

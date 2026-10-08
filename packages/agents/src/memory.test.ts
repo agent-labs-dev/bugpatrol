@@ -28,6 +28,18 @@ describe('memory', () => {
     }
   });
 
+  it('stores a lesson text as given, without cutting it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-memory-'));
+    try {
+      const workspace = new Workspace(root);
+      const text = 'Open the member list on Channels before you mention an agent. '.repeat(4).trim();
+      await workspace.upsertLessons([{ role: 'explorer', source: 'reflection', text: ` ${text} ` }]);
+      expect((await workspace.readMemory()).lessons.map((lesson) => lesson.text)).toEqual([text]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('places explorer lessons before the app guide only when present', () => {
     const lesson: Lesson = {
       id: 'les_1',

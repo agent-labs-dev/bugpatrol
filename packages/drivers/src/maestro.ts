@@ -113,6 +113,33 @@ function nativeRole(
   return 'group';
 }
 
+/**
+ * The screen box. iOS puts it on the first node; Android wraps the windows in a
+ * node with no bounds, so use the union of the shallowest level that has them.
+ */
+function rootBounds(roots: Node[], read: (node: Node, name: string) => unknown): UiElement['box'] | undefined {
+  const first = bounds(read(roots[0] ?? {}, 'bounds'));
+  if (first) {
+    return first;
+  }
+  let level = roots;
+  while (level.length > 0) {
+    const boxes = level.map((node) => bounds(read(node, 'bounds'))).filter((box) => box !== undefined);
+    if (boxes.length > 0) {
+      const x1 = Math.min(...boxes.map((box) => box.x));
+      const y1 = Math.min(...boxes.map((box) => box.y));
+      const x2 = Math.max(...boxes.map((box) => box.x + box.width));
+      const y2 = Math.max(...boxes.map((box) => box.y + box.height));
+      return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+    }
+    level = level.flatMap((node) => {
+      const children = read(node, 'children');
+      return Array.isArray(children) ? (children as Node[]) : [];
+    });
+  }
+  return undefined;
+}
+
 /** Keep only visible native nodes so refs match the current screen geometry. */
 export function flattenHierarchy(schema: Schema): {
   elements: UiElement[];
@@ -123,7 +150,7 @@ export function flattenHierarchy(schema: Schema): {
   const key = (name: string) => Object.entries(aliases).find(([, expanded]) => expanded === name)?.[0] ?? name;
   const read = (node: Node, name: string) => node[key(name)] ?? node[name] ?? defaults[key(name)] ?? defaults[name];
   const roots = schema.elements;
-  const root = bounds(read(roots[0] ?? {}, 'bounds'));
+  const root = rootBounds(roots, read);
   if (!root) {
     throw new Error('Maestro hierarchy has no root bounds');
   }

@@ -22,6 +22,28 @@ export type Lesson = {
 };
 export type MemoryFile = { version: 1; lessons: Lesson[] };
 
+/** The longest lesson text. A lesson that a model or a human writes over it is rejected, not cut. */
+export const LESSON_MAX_LENGTH = 200;
+
+/**
+ * Fits a lesson that Bugpatrol builds around outside text, such as stderr or
+ * a dismissal reason, into the limit. It cuts at the last word boundary and
+ * ends with an ellipsis, so the lesson never stops mid-word.
+ */
+export function fitLesson(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= LESSON_MAX_LENGTH) return trimmed;
+  const space = trimmed.lastIndexOf(' ', LESSON_MAX_LENGTH - 1);
+  return `${trimmed.slice(0, space > 0 ? space : LESSON_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+/** Why a written lesson cannot be saved, or undefined when it fits. */
+export function lessonTooLong(text: string): string | undefined {
+  const length = text.trim().length;
+  if (length > LESSON_MAX_LENGTH)
+    return `The lesson has ${length} characters, and the limit is ${LESSON_MAX_LENGTH}. Nothing was saved. Write it shorter.`;
+}
+
 export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop' | 'cli';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

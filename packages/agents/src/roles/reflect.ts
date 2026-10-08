@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from 'node:util';
-import type { AgentEvent, BugpatrolConfig, Lesson } from '@bugpatrol/core';
+import { type AgentEvent, type BugpatrolConfig, LESSON_MAX_LENGTH, type Lesson, lessonTooLong } from '@bugpatrol/core';
 import { readGuide } from '../guide.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import type { Tool } from '../types.js';
@@ -85,12 +85,14 @@ export async function reflectOnSession(
     const tools: Tool[] = [
       {
         name: 'add_lesson',
-        description: 'Save one specific imperative lesson.',
+        description: `Save one specific imperative lesson of at most ${LESSON_MAX_LENGTH} characters.`,
         inputSchema: schema({ text: string, scope: string }, ['text']),
         async run(input) {
           if (added >= config.agents.memory.maxPerSession) return reply('Lesson limit reached.');
-          const text = (vars.redact(String(input.text ?? '')) as string).trim().slice(0, 200);
+          const text = (vars.redact(String(input.text ?? '')) as string).trim();
           if (!text) return reply('Lesson text is required.');
+          const tooLong = lessonTooLong(text);
+          if (tooLong) return { ...reply(tooLong), isError: true };
           const [lesson] = await workspace.upsertLessons([
             { role: 'explorer', text, scope: input.scope ? String(input.scope) : undefined, source: 'reflection' },
           ]);
@@ -135,7 +137,7 @@ export async function reflectOnSession(
       {
         role: 'explorer',
         sessionId: record.id,
-        system: `You review a QA explorer's run of this app. Write lessons that would have saved steps or avoided a mistake. Each lesson is ONE imperative sentence a future explorer can follow: what to do and where. Be specific to this app: name the screen, field, or control. Never include a secret value; placeholders such as {{E2E_RUN_ID}} are fine. Do not restate the app guide. Add at most ${config.agents.memory.maxPerSession} lessons. If an existing lesson already says it, call keep_lesson with its id. If one was followed and still failed, or is wrong, call retire_lesson with a reason. Then call finish.`,
+        system: `You review a QA explorer's run of this app. Write lessons that would have saved steps or avoided a mistake. Each lesson is ONE imperative sentence of at most ${LESSON_MAX_LENGTH} characters that a future explorer can follow: what to do and where. Be specific to this app: name the screen, field, or control. Never include a secret value; placeholders such as {{E2E_RUN_ID}} are fine. Do not restate the app guide. Add at most ${config.agents.memory.maxPerSession} lessons. If an existing lesson already says it, call keep_lesson with its id. If one was followed and still failed, or is wrong, call retire_lesson with a reason. Then call finish.`,
         prompt: `TROUBLE LOG\n${lines.join('\n')}\n\nEXISTING LESSONS\n${existing.map((item: Lesson) => `${item.id}: ${item.text}`).join('\n') || '(none)'}\n\nAPP GUIDE\n${guide || '(none)'}`,
         tools,
         maxSteps: config.agents.memory.reflectMaxSteps,

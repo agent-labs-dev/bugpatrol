@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { type FixProposal, type Issue, judgedRetests, paths, type RoutineStep } from '@bugpatrol/core';
+import { type FixProposal, fitLesson, type Issue, judgedRetests, paths, type RoutineStep } from '@bugpatrol/core';
 import { fixerSystem } from '../prompts.js';
 import type { AgentSession } from '../session.js';
 import { lessonTools } from '../tools/memory.js';
@@ -350,10 +350,7 @@ export async function runFixer(
               role: 'judge',
               source: 'fixer-decline',
               scope: issue.screenId,
-              text: `Likely by design: ${issue.title} — ${outcome.summary?.split(/(?<=[.!?])\s/)[0] ?? ''}`.slice(
-                0,
-                200,
-              ),
+              text: fitLesson(`Likely by design: ${issue.title} — ${outcome.summary?.split(/(?<=[.!?])\s/)[0] ?? ''}`),
             },
           ]);
         if (!outcome.summary) proposal.error = 'The fixer made no change and gave no reason.';
@@ -377,7 +374,7 @@ export async function runFixer(
             {
               role: 'fixer',
               source: 'verify',
-              text: `The verify command failed with: ${last}. Run it before you finish.`.slice(0, 200),
+              text: fitLesson(`The verify command failed with: ${last}. Run it before you finish.`),
             },
           ]);
           throw new Error(`Verification failed: ${(output.stderr || output.stdout || output.message).slice(-4000)}`, {
@@ -393,7 +390,7 @@ export async function runFixer(
           {
             role: 'fixer',
             source: 'commit-hook',
-            text: `The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`.slice(0, 200),
+            text: fitLesson(`The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`),
           },
         ]);
         // The diff is the proposal; a commit is only a convenience. A repo's
