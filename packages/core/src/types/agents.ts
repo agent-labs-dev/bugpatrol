@@ -375,6 +375,12 @@ export type ClaimReplay = {
   /** Where a replay that failed partway stopped, counted from 0. */
   failedStep?: number;
   error?: string;
+  /**
+   * The recording of the replay, workspace-relative, when the driver can
+   * record. `gif` is the short copy that a review shows inline. It is
+   * absent when the recording does not fit the budget or does not convert.
+   */
+  recording?: { file: string; gif?: string };
   /** Issue repros only: whether the bug check of the repro routine held at the end of a full replay. */
   bug?: boolean;
 };

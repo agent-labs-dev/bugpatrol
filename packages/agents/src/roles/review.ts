@@ -33,7 +33,7 @@ import {
   judgeReviewSystem,
 } from '../prompts.js';
 import {
-  claimShots,
+  claimMedia,
   numberDiff,
   REVIEW_MARKER,
   renderReview,
@@ -972,7 +972,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
     ...review.findings
       .filter((finding) => finding.verdict === 'introduced')
       .flatMap((finding) => [finding.head, finding.base]),
-    ...claimShots(review),
+    ...claimMedia(review),
   ].filter((path): path is string => Boolean(path));
   if (shown.length) await ensureAssetsBranch(gh, repo, branch);
   for (const path of new Set(shown)) {
