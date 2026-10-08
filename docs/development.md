@@ -72,6 +72,7 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 ## Design documents
 
 - [ADR 0005: agents, drivers, and the patrol](adr/0005-agents-drivers-and-the-patrol.md): the agent design
+- [ADR 0006: commit the routines and the app map](adr/0006-commit-the-routines.md): what Bugpatrol commits, and why
 - [Architecture decisions](adr/): all ADRs
 - [Technical specification](spec/bugpatrol-technical-spec.md): the deterministic gate
 - [Competitive landscape](research/oss-visual-testing-landscape-2026.md): the research behind the design

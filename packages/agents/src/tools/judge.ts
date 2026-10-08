@@ -1,6 +1,6 @@
 import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { type Candidate, type Issue, paths, shortHash, type TriageFile } from '@bugpatrol/core';
+import { type Candidate, type Issue, paths, type Routine, shortHash, type TriageFile } from '@bugpatrol/core';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -40,6 +40,35 @@ async function decisions(session: AgentSession, sessionId: string): Promise<Set<
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
     throw error;
   }
+}
+
+/**
+ * Saves the candidate's flow as a committed routine, so a fresh clone can
+ * replay the issue without this run directory. Returns its id, or undefined
+ * when the candidate has no flow to replay.
+ */
+async function saveRepro(
+  session: AgentSession,
+  issueId: string,
+  title: string,
+  candidate: Candidate,
+  now: string,
+): Promise<string | undefined> {
+  const { routineId, steps = [] } = candidate.evidence;
+  if (!routineId && !steps.length) return undefined;
+  const routine: Routine = {
+    version: 1,
+    id: `repro-${issueId.replace(/^iss_/, '')}`,
+    description: `Reproduces: ${title}`,
+    platform: session.config.app.platform,
+    ...(routineId ? { requires: [routineId] } : {}),
+    steps,
+    screenId: candidate.screenId,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await session.workspace.saveRoutine(routine);
+  return routine.id;
 }
 
 /** Excludes candidates already accepted or dismissed in the requested sessions. */
@@ -201,9 +230,11 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
               : {}),
           };
         } else {
+          const id = `iss_${shortHash(`${first.fingerprint}:${now}`)}`;
+          const repro = await saveRepro(session, id, issueTitle(title), first, now);
           issue = {
             version: 1,
-            id: `iss_${shortHash(`${first.fingerprint}:${now}`)}`,
+            id,
             fingerprint: first.fingerprint,
             title: issueTitle(title),
             body: String(input.body),
@@ -211,7 +242,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             status: 'new',
             screenId: first.screenId,
             candidateIds: ids,
-            evidence: first.evidence,
+            evidence: repro ? { ...first.evidence, reproRoutineId: repro } : first.evidence,
             judgement: { by: runtimeLabel, reason: input.reason.trim(), at: now },
             occurrences: 1,
             firstSeenAt: now,

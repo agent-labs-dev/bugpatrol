@@ -362,10 +362,10 @@ Example: Sign in with the email {{TEST_EMAIL}} and the password {{TEST_PASSWORD}
 `;
 
 /**
- * Git-ignores the local data, and only the local data: the config and the app
- * guide in .bugpatrol/ are committed. A line from an older version that
- * ignores all of .bugpatrol/ is changed to the data folder. True when the
- * file changed.
+ * Git-ignores the local data, and only the local data: the config, the app
+ * guide, the app map and the routines in .bugpatrol/ are committed. A line
+ * from an older version that ignores all of .bugpatrol/ is changed to the
+ * data folder. True when the file changed.
  */
 function ignoreData(root: string): boolean {
   const gitignore = join(root, '.gitignore');

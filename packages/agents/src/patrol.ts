@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { AgentsFile, BugpatrolConfig } from '@bugpatrol/core';
+import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
@@ -25,6 +25,19 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 /**
+ * True when the source repo has uncommitted changes to tracked files. The
+ * routines and the app map do not count: the patrol writes them itself and
+ * leaves them for the user to commit (ADR 0006).
+ */
+async function dirty(root: string, source: string): Promise<boolean> {
+  const own = [paths.routines(root), paths.appMap(root)]
+    .map((path) => relative(source, path))
+    .filter((path) => !path.startsWith('..'));
+  const exclude = own.map((path) => `:(exclude)${path}`);
+  return Boolean(await git(source, 'status', '--porcelain', '--untracked-files=no', '--', '.', ...exclude));
+}
+
+/**
  * Check out the latest `patrol.pull` commit in the source repository, so each
  * cycle tests the latest code. A detached HEAD works in a linked worktree, where
  * another worktree can hold the branch. A failure keeps the current checkout.
@@ -41,7 +54,7 @@ export async function pullSource(
   const branch = target.slice(slash + 1);
   const source = resolve(root, config.app.source);
   try {
-    if (await git(source, 'status', '--porcelain', '--untracked-files=no')) {
+    if (await dirty(root, source)) {
       onLog?.(`Did not pull ${target}: the source repository has uncommitted changes.`);
       return false;
     }
@@ -60,7 +73,7 @@ export async function pullSource(
 export async function sourceCommit(root: string, config: BugpatrolConfig): Promise<string | undefined> {
   const source = resolve(root, config.app.source);
   try {
-    if (await git(source, 'status', '--porcelain', '--untracked-files=no')) return undefined;
+    if (await dirty(root, source)) return undefined;
     return await git(source, 'rev-parse', 'HEAD');
   } catch {
     return undefined;

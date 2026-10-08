@@ -23,7 +23,7 @@ afterEach(async () => {
 describe('AgentReader', () => {
   it('prefers transitions and replay prerequisites over visit-order links', () => {
     writeAgentFixture(root);
-    const file = join(root, '.bugpatrol', 'runs', 'appmap.json');
+    const file = join(root, '.bugpatrol', 'appmap.json');
     const map = JSON.parse(readFileSync(file, 'utf8'));
     map.screens[0].transitions = [
       { to: 'settings', kind: 'tap', via: 'Settings', count: 3, steps: 1 },
@@ -43,15 +43,15 @@ describe('AgentReader', () => {
       createdAt: '',
       updatedAt: '',
     };
-    mkdirSync(join(root, '.bugpatrol', 'runs', 'routines'), { recursive: true });
-    writeFileSync(join(root, '.bugpatrol', 'runs', 'routines', 'enter-app.json'), JSON.stringify(routine));
+    mkdirSync(join(root, '.bugpatrol', 'routines'), { recursive: true });
+    writeFileSync(join(root, '.bugpatrol', 'routines', 'enter-app.json'), JSON.stringify(routine));
     for (const [id, screenId, requires] of [
       ['screen-settings', 'settings', ['screen-home']],
       ['screen-billing', 'billing', ['enter-app']],
       ['screen-projects', 'projects', ['missing']],
     ] as const)
       writeFileSync(
-        join(root, '.bugpatrol', 'runs', 'routines', `${id}.json`),
+        join(root, '.bugpatrol', 'routines', `${id}.json`),
         JSON.stringify({ ...routine, id, screenId, requires }),
       );
     const result = new AgentReader(root).screens();
@@ -92,7 +92,7 @@ describe('AgentReader', () => {
   });
 
   it('links App start to the enter-app screen when every screen has an edge in', () => {
-    const dir = join(root, '.bugpatrol', 'runs');
+    const dir = join(root, '.bugpatrol');
     mkdirSync(join(dir, 'routines'), { recursive: true });
     const screen = (id: string, to: string) => ({
       id,
@@ -125,7 +125,7 @@ describe('AgentReader', () => {
   });
 
   it('connects screens through routineId when routines have no screenId', () => {
-    const dir = join(root, '.bugpatrol', 'runs');
+    const dir = join(root, '.bugpatrol');
     mkdirSync(join(dir, 'routines'), { recursive: true });
     const ids = ['signin', 'home', 'settings', 'browse'];
     writeFileSync(

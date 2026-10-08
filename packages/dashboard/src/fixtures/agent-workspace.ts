@@ -16,11 +16,12 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwM
 
 /** Write a complete desktop patrol workspace for human UI review and API tests. */
 export function writeAgentFixture(root: string): void {
-  const dir = join(root, '.bugpatrol', 'runs');
+  const committed = join(root, '.bugpatrol');
+  const dir = join(committed, 'runs');
   const now = new Date();
   const at = (minutes: number): string => new Date(now.getTime() - minutes * 60_000).toISOString();
-  const save = (relative: string, value: unknown): void => {
-    const file = join(dir, relative);
+  const save = (relative: string, value: unknown, base = dir): void => {
+    const file = join(base, relative);
     mkdirSync(join(file, '..'), { recursive: true });
     writeFileSync(file, JSON.stringify(value, null, 2));
   };
@@ -45,7 +46,7 @@ export function writeAgentFixture(root: string): void {
     screens,
     updatedAt: at(1),
   };
-  save('appmap.json', map);
+  save('appmap.json', map, committed);
   const agents: AgentsFile = {
     version: 1,
     patrol: { cycle: 3, state: 'running', startedAt: at(180), nextAt: at(-20) },
@@ -222,5 +223,5 @@ export function writeAgentFixture(root: string): void {
     updatedAt: at(5),
     lastReplay: { at: at(5), ok: true },
   }));
-  for (const routine of routines) save(`routines/${routine.id}.json`, routine);
+  for (const routine of routines) save(`routines/${routine.id}.json`, routine, committed);
 }
