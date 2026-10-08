@@ -376,6 +376,25 @@ export type ClaimFinding = {
   steps?: string[];
   head?: ClaimReplay;
   base?: ClaimReplay;
+  /**
+   * The second replay on the pull request build. Blocking replays each
+   * deterministic disproof again before it counts, and a different result
+   * makes the verdict untested.
+   */
+  again?: ClaimReplay;
+};
+
+/**
+ * The GitHub check run of the claim check, set only when `agents.review.block`
+ * is on. Only a deterministic disproof that a second replay repeated fails it.
+ */
+export type ClaimCheckRun = {
+  conclusion: 'neutral' | 'failure';
+  title: string;
+  /** Markdown: on a failure, each disproved claim and the evidence that disproved it. */
+  summary: string;
+  /** The check run on GitHub. Absent on a dry run. */
+  url?: string;
 };
 
 /** `reviews/pr-<number>.json`: the last review of one pull request. */
@@ -399,11 +418,15 @@ export type PrReview = {
     headReplay?: string;
     baseReplay?: string;
     claimJudge?: string;
+    /** The second replay of the disproved claims on the pull request build, when blocking is on. */
+    againReplay?: string;
   };
   /** The explorer's own account of what it tested. */
   tested?: string;
   /** The claim check. Absent when the claim check was off. */
   claims?: ClaimFinding[];
+  /** The check run of the claim check. Absent when blocking is off. */
+  check?: ClaimCheckRun;
   findings: ReviewFinding[];
   /** The review on GitHub. */
   posted?: { url: string; at: string };

@@ -102,7 +102,8 @@ export const COMMAND_HELP: Record<string, string> = {
   Review one pull request in the running app. The explorer tests what the diff can affect on the pull request
   build. Bugpatrol repeats each reported flow on the base build, and the judge keeps what the pull request introduces.
   The result is a GitHub review: each introduced problem is a comment on the changed line that causes it.
-  A new review replaces the review of an older commit. It never blocks the merge.
+  A new review replaces the review of an older commit. It never blocks the merge, unless agents.review.block
+  is on: then a claim that a replay disproves twice fails the claim check run, and review exits 1.
   Needs a logged-in gh CLI. To post the review, it also needs agents.github.enabled: true.
   <pr>            the number or the URL of the pull request
   --dry-run       write the review to .bugpatrol/runs/reviews/, and send nothing to GitHub

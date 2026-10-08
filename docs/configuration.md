@@ -60,6 +60,7 @@ agents:
     prScope: app                # optional: the scope in PR titles
   review:
     claims: false               # the claim check of `bugpatrol review`: test what the pull request says it does
+    block: false                # set a check run that fails on a disproof from a replay (needs `checks: write`)
     maxSteps: 60                # the step limit of the claim check
     budgetUsd: 2                # optional: its cost limit in USD; no limit by default
   memory:

@@ -158,6 +158,7 @@ on: pull_request
 permissions:
   contents: write        # the screenshots on the assets branch
   pull-requests: write   # the review
+  checks: write          # only with agents.review.block: the claim check run
 jobs:
   review:
     runs-on: ubuntu-latest
@@ -183,7 +184,7 @@ On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-
 | `steps` | `agents.explorer.maxSteps` | The step limit of the explorer |
 | `args` | | More flags for `bugpatrol review` |
 
-The job passes when the review only comments. When Bugpatrol could not test, for example because the app did not start, the job fails with exit code 4. A refused fork or a config error gives exit code 2. [Review a pull request](docs/github.md#7-review-a-pull-request) tells how the review works.
+The job passes when the review only comments. With `agents.review.block: true`, a claim that a replay disproved twice fails the job with exit code 1, and the claim check run on the pull request fails too ([Block a merge on a disproved claim](docs/github.md#block-a-merge-on-a-disproved-claim)). When Bugpatrol could not test, for example because the app did not start, the job fails with exit code 4. A refused fork or a config error gives exit code 2. [Review a pull request](docs/github.md#7-review-a-pull-request) tells how the review works.
 
 ## The dashboard
 

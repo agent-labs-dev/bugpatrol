@@ -432,6 +432,12 @@ export const agentsSchema = z
       .object({
         /** The claim check: test what the pull request says it does. Off until a team opts in. */
         claims: z.boolean().default(false),
+        /**
+         * Set a check run on the pull request that fails on a deterministic
+         * disproof: a replay or an assertion that a second replay repeats.
+         * Off until a team trusts the comments (ADR 0007).
+         */
+        block: z.boolean().default(false),
         /** Limits for the claim check of one review, across its sessions. */
         maxSteps: z.number().int().positive().default(60),
         budgetUsd: z.number().nonnegative().optional(),

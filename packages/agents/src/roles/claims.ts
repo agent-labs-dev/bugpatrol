@@ -1,7 +1,8 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
   type Claim,
+  type ClaimCheckRun,
   type ClaimEvidence,
   type ClaimFinding,
   type ClaimReplay,
@@ -171,6 +172,15 @@ export function claimTools(
   ];
 }
 
+/** A replay of each build, and `again`: the second replay on the pull request build. */
+type ReplayPass = 'head' | 'base' | 'again';
+const SESSION_OF = { head: 'headReplay', base: 'baseReplay', again: 'againReplay' } as const;
+const WHERE_OF = {
+  head: 'the pull request build',
+  base: 'the base build',
+  again: 'the pull request build a second time',
+} as const;
+
 /**
  * Replays each claim routine on one build, with no model, each from a new
  * driver, and keeps a screenshot before the first step and after each step.
@@ -179,7 +189,7 @@ export function claimTools(
 async function replayClaims(
   ctx: ReviewContext,
   review: PrReview,
-  build: 'head' | 'base',
+  build: ReplayPass,
   routines: Map<string, Routine>,
   driver: Driver,
   vars: Vars,
@@ -187,8 +197,8 @@ async function replayClaims(
 ): Promise<Map<string, ClaimReplay>> {
   const { root, config, workspace, pr, opts } = ctx;
   const record = await workspace.startSession('explorer');
-  review.sessions[build === 'head' ? 'headReplay' : 'baseReplay'] = record.id;
-  const where = build === 'head' ? 'the pull request build' : 'the base build';
+  review.sessions[SESSION_OF[build]] = record.id;
+  const where = WHERE_OF[build];
   const replays = new Map<string, ClaimReplay>();
   let first = true;
   let status: 'finished' | 'failed' = 'finished';
@@ -370,6 +380,13 @@ async function judgeClaims(
   return verdicts;
 }
 
+/** Starts one build and hands over a connected driver. An app that does not start throws. */
+type StartBuild = <T>(
+  name: 'head' | 'base',
+  commit: string,
+  run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
+) => Promise<T>;
+
 /**
  * Tests the testable claims: the explorer found their flows on the pull
  * request build, Bugpatrol replays each flow on both builds, and the judge
@@ -381,11 +398,7 @@ export async function checkClaims(
   review: PrReview,
   claims: Claim[],
   flows: Map<string, ClaimFlow>,
-  build: <T>(
-    name: 'head' | 'base',
-    commit: string,
-    run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
-  ) => Promise<T>,
+  build: StartBuild,
 ): Promise<ClaimFinding[]> {
   const { pr } = ctx;
   const routines = (keep: (claim: string) => boolean) =>
@@ -449,4 +462,99 @@ export async function checkClaims(
       ...shown,
     };
   });
+}
+
+/** Only a replay and an assertion give the same result on each run (ADR 0001, ADR 0007). */
+const DETERMINISTIC: ClaimEvidence[] = ['replay', 'assertion'];
+
+const disproves = (finding: ClaimFinding) =>
+  finding.verdict === 'not-proven' && DETERMINISTIC.includes(finding.evidence as ClaimEvidence);
+
+/** The disproofs that may fail the check: each one gave the same result on a second replay. */
+const blockingDisproofs = (findings: ClaimFinding[]) =>
+  findings.filter((finding) => disproves(finding) && finding.again);
+
+/** Why a second replay differs from the first, or undefined when both stopped at the same step on the same screen. */
+async function difference(
+  root: string,
+  first: ClaimReplay | undefined,
+  second: ClaimReplay,
+): Promise<string | undefined> {
+  const at = (replay: ClaimReplay | undefined) =>
+    replay?.ok ? 'replayed all its steps' : `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
+  if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
+    return `the first replay ${at(first)}, and the second ${at(second)}`;
+  const last = async (replay: ClaimReplay) =>
+    replay.shots.length ? await readFile(join(root, replay.shots.at(-1)!)) : Buffer.alloc(0);
+  if (!(await last(first)).equals(await last(second)))
+    return 'the second replay ended on a different screen than the first';
+  return undefined;
+}
+
+/**
+ * With blocking on, each disproof from a replay runs a second time on the
+ * pull request build before it can fail the check. A second replay that
+ * stops elsewhere, or ends on a different screen, makes the verdict untested.
+ */
+export async function replayDisproofs(
+  ctx: ReviewContext,
+  review: PrReview,
+  findings: ClaimFinding[],
+  flows: Map<string, ClaimFlow>,
+  build: StartBuild,
+): Promise<ClaimFinding[]> {
+  const routines = new Map<string, Routine>();
+  for (const finding of findings.filter(disproves)) {
+    const flow = flows.get(finding.claim.id);
+    if (flow?.kind === 'flow') routines.set(finding.claim.id, flow.routine);
+  }
+  if (!routines.size) return findings;
+  const again = await build('head', ctx.pr.head, (driver, vars, fresh) =>
+    replayClaims(ctx, review, 'again', routines, driver, vars, fresh),
+  );
+  const out: ClaimFinding[] = [];
+  for (const finding of findings) {
+    const second = again.get(finding.claim.id);
+    const differs = second && (await difference(ctx.root, finding.head, second));
+    if (!second) out.push(finding);
+    else if (!differs) out.push({ ...finding, again: second });
+    else {
+      const { evidence: _evidence, ...rest } = finding;
+      out.push({ ...rest, verdict: 'untested', reason: `Flaky replay: ${differs}.`, again: second });
+    }
+  }
+  return out;
+}
+
+/** The check run of the claim check: neutral unless a deterministic disproof exists. */
+export function claimCheckRun(findings: ClaimFinding[], head: string): ClaimCheckRun {
+  const failing = blockingDisproofs(findings);
+  if (!failing.length)
+    return {
+      conclusion: 'neutral',
+      title: 'No claim disproved by a replay',
+      summary:
+        'No replay or assertion disproved a claim. A verdict from the explorer and the judge, or from a benchmark, ' +
+        'never fails this check. The review on the pull request has every verdict.',
+    };
+  const evidence = (finding: ClaimFinding) =>
+    finding.evidence === 'replay'
+      ? `the claim routine \`${finding.routine}\`, replayed twice on \`${head.slice(0, 7)}\` with no model, ` +
+        'with the same result each time.'
+      : `an exact assertion on \`${head.slice(0, 7)}\`, replayed twice with the same result.`;
+  return {
+    conclusion: 'failure',
+    title: `${failing.length} claim${failing.length === 1 ? '' : 's'} disproved`,
+    summary: [
+      'Only a replay or an assertion that gives the same result twice can fail this check.',
+      ...failing.map((finding) =>
+        [
+          `#### ${finding.claim.id}: ${finding.claim.text}`,
+          `- Verdict: \`not-proven\`. ${finding.reason}`,
+          ...(finding.saw ? [`- Bugpatrol saw: ${finding.saw}`] : []),
+          `- Evidence: ${evidence(finding)}`,
+        ].join('\n'),
+      ),
+    ].join('\n\n'),
+  };
 }

@@ -91,6 +91,8 @@ function fakeGh(
     }
     if (args.includes('--paginate')) return (args[2]!.endsWith('/reviews') ? state.reviews : state.comments) ?? '';
     if (args.includes('DELETE')) return '';
+    if (args.some((arg) => arg.endsWith('/check-runs')))
+      return JSON.stringify({ html_url: 'https://github.com/o/r/runs/1' });
     if (args.some((arg) => arg.includes('/reviews')))
       return JSON.stringify({ html_url: 'https://github.com/o/r/pull/7#pullrequestreview-1' });
     if (args.includes('PUT')) return '{}';
@@ -650,11 +652,15 @@ function builds(root: string, make: (build: 'head' | 'base', index: number) => F
   return { drivers, prepare, createDriver };
 }
 
-const claimConfig = (prepare: string, github: Record<string, unknown> = { enabled: false }) =>
+const claimConfig = (
+  prepare: string,
+  github: Record<string, unknown> = { enabled: false },
+  review: Record<string, unknown> = {},
+) =>
   parseConfig({
     version: 1,
     app: { source: 'source', connect: { url: 'fake://home' } },
-    agents: { github, review: { claims: true }, fixer: { retest: { prepare } } },
+    agents: { github, review: { claims: true, ...review }, fixer: { retest: { prepare } } },
   });
 
 type ClaimPlan = {
@@ -915,6 +921,143 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(record!.claims?.some((finding) => finding.verdict !== 'untested') ?? false).toBe(false);
       expect(existsSync(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'))).toBe(false);
       expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+type CheckRun = {
+  name: string;
+  head_sha: string;
+  status: string;
+  conclusion: string;
+  output: { title: string; summary: string };
+};
+
+describe('blocking claim check', { timeout: 30_000 }, () => {
+  const disproof = {
+    verdict: 'not-proven',
+    reason: 'The page goes dark on this build, and the header stays light.',
+    saw: 'The header kept its light background.',
+  };
+  const github = { enabled: true, repo: 'o/r' };
+  const run = (
+    f: Awaited<ReturnType<typeof fixture>>,
+    app: ReturnType<typeof builds>,
+    review: Record<string, unknown>,
+    plan: ClaimPlan,
+  ) => {
+    const gh = fakeGh({
+      body: claimsBody('The dark mode switch makes the header dark.', 'A save shows a toast.'),
+    });
+    const agents = claimAgents(plan);
+    const done = reviewPullRequest(f.root, claimConfig(app.prepare, github, review), 7, {
+      gh: gh.gh,
+      createRuntime: agents.createRuntime,
+      createDriver: app.createDriver,
+    });
+    const checks = () => gh.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
+    return { done, checks, gh };
+  };
+
+  it('fails the check on a replayed disproof that a second replay repeats, and names the claim and the evidence', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      const { done, checks } = run(
+        f,
+        app,
+        { block: true },
+        { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
+      );
+      const review = await done;
+      // The explorer, the first replay, and the second replay on the pull request build.
+      expect(app.drivers.head).toHaveLength(3);
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'replay',
+        head: { ok: true },
+        again: { ok: true },
+      });
+      const [check] = checks();
+      expect(checks()).toHaveLength(1);
+      expect(check).toMatchObject({
+        name: 'Bugpatrol claim check',
+        head_sha: f.head,
+        status: 'completed',
+        conclusion: 'failure',
+      });
+      expect(check!.output.title).toContain('1 claim disproved');
+      expect(check!.output.summary).toContain('claim-1: The dark mode switch makes the header dark.');
+      expect(check!.output.summary).toContain('The header kept its light background.');
+      expect(check!.output.summary).toContain('.bugpatrol/runs/reviews/pr-7/routines/claim-1.json');
+      expect(check!.output.summary).toContain('replayed twice');
+      expect(review.check).toMatchObject({ conclusion: 'failure', url: 'https://github.com/o/r/runs/1' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes a disproof that a second replay does not repeat untested, as a flaky replay', async () => {
+    const f = await fixture();
+    try {
+      // The third pull request build does not go dark.
+      const app = builds(f.root, (build, index) => darkApp(build === 'head' && index === 2 ? 'base' : build));
+      const { done, checks } = run(
+        f,
+        app,
+        { block: true },
+        { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
+      );
+      const review = await done;
+      expect(review.claims![0]).toMatchObject({ verdict: 'untested', again: { ok: true } });
+      expect(review.claims![0]!.evidence).toBeUndefined();
+      expect(review.claims![0]!.reason).toMatch(/^Flaky replay/);
+      expect(checks()).toMatchObject([{ conclusion: 'neutral' }]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('never fails the check on a disproof of the explorer and the judge', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      const { done, checks } = run(
+        f,
+        app,
+        { block: true },
+        { explore: { 'claim-2': 'note' }, verdicts: { 'claim-2': disproof } },
+      );
+      const review = await done;
+      expect(review.claims![1]).toMatchObject({ verdict: 'not-proven', evidence: 'explored' });
+      // Nothing to replay a second time.
+      expect(app.drivers.head).toHaveLength(1);
+      expect(checks()).toMatchObject([{ conclusion: 'neutral' }]);
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('sets no check and replays nothing a second time when blocking is off', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root);
+      const { done, checks, gh } = run(
+        f,
+        app,
+        {},
+        { explore: { 'claim-1': 'flow' }, verdicts: { 'claim-1': disproof } },
+      );
+      const review = await done;
+      expect(review.claims![0]).toMatchObject({ verdict: 'not-proven', evidence: 'replay' });
+      expect(review.claims![0]!.again).toBeUndefined();
+      expect(app.drivers.head).toHaveLength(2);
+      expect(checks()).toEqual([]);
+      expect(review.check).toBeUndefined();
+      expect(gh.posted()).toHaveLength(1);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
