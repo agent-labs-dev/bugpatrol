@@ -1,4 +1,5 @@
 import type {
+  AssertionResult,
   BenchBuild,
   ClaimBench,
   ClaimEvidence,
@@ -8,6 +9,7 @@ import type {
   ReviewFinding,
   ReviewVerdict,
 } from '@bugpatrol/core';
+import { assertionWords } from './replay.js';
 
 /** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
 export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
@@ -134,14 +136,38 @@ function claimLines(
     const replay = finding[build];
     return replay && !replay.ok ? `Stopped at step ${(replay.failedStep ?? 0) + 1}.` : 'No screenshot.';
   };
-  /** The GIF of a build or its last screen, then a link to the full video. */
+  /** The GIF of a build or its last screen, then a link to the full recording: a video, or a terminal cast. */
   const last = (finding: ClaimFinding, build: 'head' | 'base') => {
     const replay = finding[build];
     const video = replay?.recording && url(replay.recording.file);
+    const label = replay?.recording?.file.endsWith('.cast') ? 'Terminal recording' : 'Full video';
     return (
       cell(replay?.recording?.gif ?? replay?.shots.at(-1), stopped(finding, build)) +
-      (video ? `<br><a href="${video}">Full video</a>` : '')
+      (video ? `<br><a href="${video}">${label}</a>` : '')
     );
+  };
+  /** Each exact check of a claim on both builds. */
+  const checks = (finding: ClaimFinding) => {
+    const results = finding.head?.assertions;
+    if (!results?.length) return [];
+    const cellText = (text: string) => text.replaceAll('|', '\\|');
+    const result = (item?: AssertionResult) =>
+      !item
+        ? '-'
+        : item.ok
+          ? 'Passed'
+          : item.assertion.kind === 'exit-code'
+            ? `Failed, ${assertionWords(item, true)}`
+            : 'Failed';
+    return [
+      `| Check | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
+        results
+          .map(
+            (item, index) =>
+              `| ${cellText(assertionWords(item))} | ${cellText(result(finding.base?.assertions?.[index]))} | ${cellText(result(item))} |`,
+          )
+          .join('\n'),
+    ];
   };
   const section = (finding: ClaimFinding) => {
     const replayed = Boolean(finding.head);
@@ -159,6 +185,7 @@ function claimLines(
             `${replayed ? 'What Bugpatrol did on both builds' : 'What Bugpatrol did on this pull request'}: ${finding.did}`,
           ]
         : []),
+      ...checks(finding),
       ...(replayed
         ? [
             `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +

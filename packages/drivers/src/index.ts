@@ -1,4 +1,6 @@
 export * from './api.js';
+export * from './cast.js';
+export * from './cli.js';
 export * from './cua/driver.js';
 export * from './dom.js';
 export * from './electron.js';

@@ -67,6 +67,9 @@ async function missingFor(config: BugpatrolConfig, platform: Platform): Promise<
         return 'No Android emulator runs on this machine, and it has no KVM to run one.';
       return 'No Android emulator runs on this machine.';
     }
+    case 'cli':
+      if (onPath('python3')) return;
+      return 'The CLI app runs each command in a terminal through python3, and this machine has no python3.';
     default:
       return;
   }

@@ -179,7 +179,7 @@ export const appCommandSchema = z.object({
 
 export const appSchema = z
   .object({
-    platform: z.enum(['web', 'electron', 'ios', 'android', 'api', 'desktop']).default('web'),
+    platform: z.enum(['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli']).default('web'),
     /** The source repository the fixer edits. Relative to the config file. */
     source: z.string().default('.'),
     setup: z.array(appCommandSchema).default([]),
@@ -215,6 +215,12 @@ export const appSchema = z
           .optional(),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
+        /** CLI: each command runs in a terminal of 80 by 24 from the app source, and is stopped after this long. */
+        cli: z
+          .object({
+            timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+          })
+          .default({}),
         /** Mobile: the bundle id or package name. */
         appId: z.string().optional(),
         /** Mobile: the simulator UDID or emulator serial. Default: the booted one. */

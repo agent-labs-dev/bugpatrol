@@ -72,7 +72,7 @@ const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*
 const DIFF_LIMIT = 40_000;
 /** An issue that the pull request closes is context for the claims, and a long one would crowd out the diff. */
 const ISSUE_LIMIT = 4_000;
-const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop'];
+const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli'];
 
 /**
  * The explorer on a pull request build acts and reports, and writes nothing
@@ -90,6 +90,7 @@ const REVIEW_TOOLS = new Set([
   'open',
   'wait',
   'request',
+  'run_command',
   'run_routine',
   'switch_window',
   'report_bug',
@@ -288,7 +289,12 @@ async function withBuild<T>(
       const connect = async () => {
         await driver?.close();
         driver = undefined;
-        const next = (ctx.opts.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+        const next = (ctx.opts.createDriver ?? makeDriver)(
+          config,
+          vars.resolve.bind(vars),
+          (value) => vars.redact(value) as string,
+          worktree,
+        );
         driver = next;
         await next.connect();
         return next;

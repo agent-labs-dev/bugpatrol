@@ -14,6 +14,7 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   electron: 'The app is a desktop app. It can have several windows; use `switch_window` to change window.',
   ios: 'The app runs on an iPhone simulator. `back` swipes from the left edge. `open` takes a deep link.',
   android: 'The app runs on an Android emulator. `back` presses the system back button. `open` takes a deep link.',
+  cli: 'The app is a command line tool. Use run_command to run one command in a terminal, from the root of the source; it returns the screen, the exit code, and the output. A command that waits for input gets it from `input`. There are no elements to tap.',
 };
 
 function lessonPart(lessons: Lesson[]): string {

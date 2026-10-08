@@ -22,7 +22,7 @@ export type Lesson = {
 };
 export type MemoryFile = { version: 1; lessons: Lesson[] };
 
-export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop';
+export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop' | 'cli';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -62,6 +62,8 @@ export type RoutineStep = (
       body?: string;
       capture?: Record<string, string>;
     }
+  /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
+  | { kind: 'run'; command: string; input?: string }
 ) & { at?: string };
 
 export type Routine = {
@@ -94,7 +96,18 @@ export type Routine = {
   expect?: { elements: string[] };
   /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
   bug?: BugCheck;
+  /** Claim routines only: exact checks on the last command, after the steps ran. */
+  assert?: Assertion[];
 };
+
+/** An exact check on the last command of a CLI routine: its exit code, or a text in its output. */
+export type Assertion =
+  | { kind: 'exit-code'; value: number }
+  | { kind: 'output-includes'; value: string }
+  | { kind: 'output-excludes'; value: string };
+
+/** One assertion after one replay. `actual` is what the command gave, when the check is on a value. */
+export type AssertionResult = { assertion: Assertion; ok: boolean; actual?: string };
 
 /**
  * What the screen shows at the end of a repro while the bug is there. Each
@@ -383,6 +396,8 @@ export type ClaimReplay = {
   recording?: { file: string; gif?: string };
   /** Issue repros only: whether the bug check of the repro routine held at the end of a full replay. */
   bug?: boolean;
+  /** The assertions of the claim routine, checked at the end of a full replay. */
+  assertions?: AssertionResult[];
 };
 
 /** The numbers of one benchmark on one build. The spread is from `min` to `max`. */

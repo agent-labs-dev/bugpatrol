@@ -1562,6 +1562,155 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
   });
 });
 
+describe('CLI claim', { timeout: 60_000 }, () => {
+  const SECRET = 'cli-secret-4f1a9c';
+  /** A CLI app whose one command prints the settings file, run for real in a terminal on each build. */
+  const reviewCli = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    check: Record<string, unknown>,
+    review: Record<string, unknown> = {},
+    command = 'cat settings.txt; echo "token {{BUGPATROL_CLI_TOKEN}}"',
+  ) => {
+    process.env.BUGPATROL_CLI_TOKEN = SECRET;
+    const config = parseConfig({
+      version: 1,
+      app: { platform: 'cli', source: 'source', secrets: ['BUGPATROL_CLI_TOKEN'] },
+      agents: { github: { enabled: true, repo: 'o/r' }, review: { claims: true, ...review } },
+    });
+    const github = fakeGh({ body: claimsBody('The settings command says that save is broken.') });
+    const tasks: RoleTask[] = [];
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run(task) {
+        tasks.push(task);
+        // A CLI app has no screen to tap.
+        expect(task.tools.map((item) => item.name)).not.toContain('tap');
+        await tool(task, 'start_claim').run({ claim: 'claim-1' });
+        const ran = await tool(task, 'run_command').run({ command });
+        expect(ran.content.find((item) => item.type === 'text')!.text).toContain('Exit code: 0');
+        // Assertions are on the output of a command: this one is not a number.
+        expect(
+          (await tool(task, 'save_claim').run({ claim: 'claim-1', did: 'x', saw: 'y', exit_code: 'zero' })).isError,
+        ).toBe(true);
+        await tool(task, 'save_claim').run({
+          claim: 'claim-1',
+          did: 'Printed the settings file.',
+          saw: 'It says save is broken.',
+          ...check,
+        });
+        await tool(task, 'finish').run({ summary: 'Ran the settings command.' });
+        return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Ran the settings command.' };
+      },
+    };
+    try {
+      const result = await reviewPullRequest(f.root, config, 7, { gh: github.gh, createRuntime: () => runtime });
+      return { review: result, tasks, github };
+    } finally {
+      delete process.env.BUGPATROL_CLI_TOKEN;
+    }
+  };
+
+  it('checks the output of a command on both builds with no model, and shows both terminal recordings', async () => {
+    const f = await fixture();
+    try {
+      const { review, tasks, github } = await reviewCli(f, { exit_code: 0, output_includes: ['save is broken'] });
+      // The explorer only: the exact checks give the verdict.
+      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(review.claims).toMatchObject([
+        {
+          claim: { id: 'claim-1' },
+          verdict: 'proven',
+          evidence: 'assertion',
+          steps: ['Run `cat settings.txt; echo "token {{BUGPATROL_CLI_TOKEN}}"`'],
+          head: {
+            ok: true,
+            assertions: [
+              { assertion: { kind: 'exit-code', value: 0 }, ok: true, actual: '0' },
+              { assertion: { kind: 'output-includes', value: 'save is broken' }, ok: true },
+            ],
+          },
+          base: {
+            ok: true,
+            assertions: [
+              { assertion: { kind: 'exit-code', value: 0 }, ok: true },
+              { assertion: { kind: 'output-includes', value: 'save is broken' }, ok: false },
+            ],
+          },
+        },
+      ]);
+      const [finding] = review.claims!;
+      for (const build of ['head', 'base'] as const) {
+        const recording = finding![build]!.recording!;
+        expect(recording.file).toBe(`.bugpatrol/runs/reviews/pr-7/claim-1/${build}.cast`);
+        expect(recording.gif).toBe(`.bugpatrol/runs/reviews/pr-7/claim-1/${build}.gif`);
+        const cast = await readFile(join(f.root, recording.file), 'utf8');
+        expect(cast).toContain(build === 'head' ? 'save is broken' : 'save works');
+        expect(cast).toContain('token {{BUGPATROL_CLI_TOKEN}}');
+        expect(cast).not.toContain(SECRET);
+        expect((await readFile(join(f.root, recording.gif!))).subarray(0, 6).toString()).toBe('GIF89a');
+      }
+
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('Evidence: an exact check on both builds.');
+      expect(sent!.body).toMatch(/<img src="[^"]+head\.gif\?raw=true" width="360">/);
+      expect(sent!.body).toMatch(/<img src="[^"]+base\.gif\?raw=true" width="360">/);
+      expect(sent!.body).toContain('Terminal recording</a>');
+      expect(sent!.body).not.toContain('Full video');
+      expect(sent!.body).toContain('| The output has "save is broken" | Failed | Passed |');
+      expect(sent!.body).toContain('| The exit code is 0 | Passed | Passed |');
+      expect(sent!.body).not.toContain(SECRET);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a blocking check on an exact check that fails twice on the pull request build', async () => {
+    const f = await fixture();
+    try {
+      const { review, tasks, github } = await reviewCli(
+        f,
+        { output_includes: ['save works'], output_excludes: ['broken'] },
+        { block: true },
+      );
+      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'assertion',
+        saw: 'The output lacks "save works", and the output has "broken".',
+        again: { ok: true, assertions: [{ ok: false }, { ok: false }] },
+      });
+      expect(review.check).toMatchObject({ conclusion: 'failure' });
+      const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
+      expect(check!.output.summary).toContain('an exact assertion');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes an exact check that gives another result on the second replay untested', async () => {
+    const f = await fixture();
+    try {
+      // Each run exits with the number of runs before it: 1 on the first replay, 3 on the second.
+      const counter = JSON.stringify(join(f.root, 'runs.txt'));
+      const { review } = await reviewCli(
+        f,
+        { exit_code: 0 },
+        { block: true },
+        `n=$(cat ${counter} 2>/dev/null || echo 0); echo $((n + 1)) > ${counter}; exit $n`,
+      );
+      expect(review.claims![0]).toMatchObject({
+        verdict: 'untested',
+        reason: 'Flaky replay: the exact checks gave a different result.',
+        head: { assertions: [{ ok: false, actual: '1' }] },
+        again: { assertions: [{ ok: false, actual: '3' }] },
+      });
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('numbered diff', () => {
   it('numbers the lines of the new file, and lists the lines that take a comment', () => {
     const diff = [

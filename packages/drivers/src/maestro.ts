@@ -515,6 +515,7 @@ export class MaestroDriver implements Driver {
 
   async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'request') return { ok: false, error: 'HTTP requests require the API driver' };
+    if (action.kind === 'run') return { ok: false, error: 'Commands require the CLI driver' };
     try {
       let target: Target = {};
       switch (action.kind) {

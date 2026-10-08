@@ -180,10 +180,18 @@ describe('renderConfig', () => {
     answers({ platform: 'electron', start: 'npx electron . --remote-debugging-port=9222', cdpPort: 9222 }),
     answers({ platform: 'ios', start: 'npx expo start', appId: 'com.acme.app' }),
     answers({ platform: 'android', start: undefined, appId: undefined }),
+    answers({ platform: 'cli', start: 'pnpm build' }),
     answers({ providers: { explorer: 'openrouter', judge: 'vercel', fixer: 'codex' } }),
     answers({ providers: { explorer: 'pi', judge: 'kimi', fixer: 'pi' }, piPermissionModes: true }),
   ])('writes a config that parses: %#', (input) => {
     expect(() => parseConfig(parse(renderConfig(input)))).not.toThrow();
+  });
+
+  it('builds a CLI app to its end, with no server to wait for', () => {
+    const config = parseConfig(parse(renderConfig(answers({ platform: 'cli', start: 'pnpm build' }))));
+    expect(config.app.platform).toBe('cli');
+    expect(config.app.setup).toEqual([expect.objectContaining({ run: 'pnpm build', background: false })]);
+    expect(config.app.connect.cli.timeoutMs).toBe(60_000);
   });
 
   it('expands CLI presets per role, and keeps the fixer off', () => {

@@ -203,7 +203,12 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
         let driver: Driver | undefined;
         try {
           app = await startApp(config.app, { root, vars, emit: options.onLog });
-          driver = (options.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+          driver = (options.createDriver ?? makeDriver)(
+            config,
+            vars.resolve.bind(vars),
+            (value) => vars.redact(value) as string,
+            resolve(root, config.app.source),
+          );
           await driver.connect();
           let explorerId: string | undefined;
           if (config.agents.explorer.enabled && !interrupted) {

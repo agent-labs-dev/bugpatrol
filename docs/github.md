@@ -201,6 +201,16 @@ When both replays have a recording, the review shows a GIF of each build, with a
 
 Recording needs `ffmpeg` on the `PATH`. Without it, Bugpatrol logs why and the review shows screenshots, so `ffmpeg` is optional. Install it with your package manager, for example `brew install ffmpeg` or `apt-get install ffmpeg`. On iOS and Android the simulator or emulator records the replay itself, through `xcrun simctl io recordVideo` or `adb shell screenrecord`, so the MP4 needs no `ffmpeg` but the GIF does. Android stops a recording after 3 minutes, so the video of a longer replay misses its end. A recording holds the same pixels as the screenshots, so it hides a secret exactly where a screenshot does: in a password field, and nowhere else. Keep secrets out of the screens that a claim flow passes through.
 
+### Claims of a command line app
+
+With `app.platform: cli`, the app is a command line tool, and each step of a claim routine runs one command. Bugpatrol runs the command in a terminal of 80 by 24 from the worktree of the build, and stops it after `app.connect.cli.timeoutMs` (60 seconds by default). A command that waits for input gets the text that the explorer gave it, typed at the start. The terminal comes from the `pty` module of `python3`, the same way on macOS and Linux, so `python3` must be on the `PATH`.
+
+When the explorer saves the flow of a claim, it can add exact checks on the last command: its exit code, texts that the output must have, and texts that it must not have. Each check gives the same result on each run, so a claim with checks gets its verdict from them, with no judge. The checks must pass on the pull request build for `proven`, and one that fails gives `not-proven`. The evidence is `assertion`. The review shows a table of each check on both builds. With `agents.review.block` on, Bugpatrol runs the commands of a disproof a second time, and only the same results fail the check run. Different results make the claim `untested`, as a flaky replay.
+
+Each replay records the terminal as an asciicast v2 file, `<build>.cast` next to the screenshots. Bugpatrol draws the cast into the GIF of the review itself, with the Terminus bitmap font, so it needs no `ffmpeg` and no browser. The GIF is 640 px wide and at most 15 seconds and 2 MB. Bugpatrol cuts each pause to 2 seconds at most, and a cast that is still too long plays faster. Unlike a video, the GIF keeps the start of the cast, since the start shows the command. A link under each GIF opens the cast, and the dashboard plays it.
+
+Bugpatrol redacts the secrets of `app.secrets` from the output line by line, before the screen, the cast, the GIF, or the explorer sees it. A secret that a command prints in two pieces is still redacted, unless a line break splits it.
+
 A replay that stops partway on the pull request build makes the claim `untested`, never `not-proven`. A base build that stops partway is evidence: the judge sees where it stopped, and a new control is often missing there. An app that does not start on either build stops the review with an error, as above.
 
 To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:

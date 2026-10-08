@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
+  type Assertion,
   type BugCheck,
   type Claim,
   type ClaimBench,
@@ -14,9 +15,9 @@ import {
   type Routine,
   type RoutineStep,
 } from '@bugpatrol/core';
-import { type Driver, inlineGif, type Observation } from '@bugpatrol/drivers';
+import { castGif, type Driver, inlineGif, type Observation } from '@bugpatrol/drivers';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
-import { bugMisses, replaySteps } from '../replay.js';
+import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
@@ -121,6 +122,25 @@ export async function reproClaims(
   return { claims, flows };
 }
 
+/** The assertions of save_claim, or what is wrong with them. */
+function assertionsOf(input: Record<string, unknown>, redact: (value: unknown) => string): Assertion[] | string {
+  const assert: Assertion[] = [];
+  if (input.exit_code !== undefined) {
+    if (!Number.isInteger(input.exit_code)) return 'exit_code is a whole number, such as 0.';
+    assert.push({ kind: 'exit-code', value: input.exit_code as number });
+  }
+  for (const [key, kind] of [
+    ['output_includes', 'output-includes'],
+    ['output_excludes', 'output-excludes'],
+  ] as const) {
+    const values = input[key] ?? [];
+    if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !value.trim()))
+      return `${key} is a list of texts.`;
+    for (const value of values) assert.push({ kind, value: redact(value) });
+  }
+  return assert;
+}
+
 /**
  * The explorer tools of the claim check. A claim routine holds every step
  * from the start of the app, also the steps of the routines it began with,
@@ -134,6 +154,7 @@ export function claimTools(
   flows: Map<string, ClaimFlow>,
 ): Tool[] {
   let started: string | undefined;
+  const cli = session.config.app.platform === 'cli';
   const redact = (value: unknown) => session.vars.redact(String(value ?? '').trim()) as string;
   const known = (input: Record<string, unknown>) => claims.find((claim) => claim.id === input.claim);
   const unknown = () => ({
@@ -159,13 +180,34 @@ export function claimTools(
       name: 'save_claim',
       description:
         'Save the flow since start_claim as the routine of the claim, when the screen shows the result. did: one ' +
-        'sentence on what the flow does. saw: what this build shows.',
-      inputSchema: schema({ claim: string, did: string, saw: string }, ['claim', 'did', 'saw']),
+        'sentence on what the flow does. saw: what this build shows.' +
+        (cli
+          ? ' Add the exact checks on the last command that the claim makes: exit_code, output_includes (texts ' +
+            'that the output must have), output_excludes (texts that it must not have). They give the verdict ' +
+            'on each build with no model, so check only what the claim says, never a value that changes on each run.'
+          : ''),
+      inputSchema: schema(
+        {
+          claim: string,
+          did: string,
+          saw: string,
+          ...(cli
+            ? {
+                exit_code: { type: 'integer' },
+                output_includes: { type: 'array', items: string },
+                output_excludes: { type: 'array', items: string },
+              }
+            : {}),
+        },
+        ['claim', 'did', 'saw'],
+      ),
       async run(input) {
         const claim = known(input);
         if (!claim) return unknown();
         if (started !== claim.id)
           return { ...response(`Call start_claim for ${claim.id} first, before its flow.`), isError: true };
+        const assert = cli ? assertionsOf(input, redact) : [];
+        if (typeof assert === 'string') return { ...response(assert), isError: true };
         const steps = [
           ...(await chainSteps(session.workspace, session.anchor.routineId)),
           ...session.trail.slice(session.anchor.index),
@@ -177,6 +219,7 @@ export function claimTools(
           description: redact(input.did),
           platform: session.config.app.platform,
           steps,
+          ...(assert.length ? { assert } : {}),
           createdAt: now,
           updatedAt: now,
         };
@@ -191,7 +234,13 @@ export function claimTools(
           path: relative(ctx.root, file),
         });
         started = undefined;
-        return response(`Saved the flow of ${claim.id} (${steps.length} steps).`);
+        if (!assert.length) return response(`Saved the flow of ${claim.id} (${steps.length} steps).`);
+        const screen = session.lastObservation ?? (await session.driver!.observe());
+        const results = checkAssertions(assert, screen).map(
+          (result) =>
+            `- ${assertionWords(result)}: ${result.ok ? 'passed' : `failed, ${assertionWords(result, true)}`}`,
+        );
+        return response(`Saved the flow of ${claim.id} (${steps.length} steps). On this build:\n${results.join('\n')}`);
       },
     },
     {
@@ -260,10 +309,10 @@ async function saveRecording(
     return undefined;
   }
   const recording = { file: relative(ctx.root, file) };
-  // Other recordings, such as terminal casts, are not videos.
-  if (!/\.(mp4|mov|webm)$/.test(file)) return recording;
+  const gif = file.endsWith('.cast') ? castGif : /\.(mp4|mov|webm)$/.test(file) ? inlineGif : undefined;
+  if (!gif) return recording;
   try {
-    if (await inlineGif(file, `${name}.gif`)) return { ...recording, gif: relative(ctx.root, `${name}.gif`) };
+    if (await gif(file, `${name}.gif`)) return { ...recording, gif: relative(ctx.root, `${name}.gif`) };
     ctx.log(`The GIF of ${what} is over the size budget. The review shows its screenshots.`);
   } catch (error) {
     ctx.log(`Could not make a GIF of ${what}: ${String(error).split('\n')[0]}`);
@@ -329,6 +378,9 @@ async function replayClaims(
       const result = await replaySteps(session, routine.steps, { windowMs: opts.replayWindowMs, onStep: shot });
       // The bug shows only at the end of a full replay.
       const bug = routine.bug && result.ok ? { bug: !bugMisses(routine.bug, last!, errors).length } : {};
+      // Like the bug check, the assertions hold only at the end of a full replay.
+      const assertions =
+        routine.assert?.length && result.ok ? { assertions: checkAssertions(routine.assert, last!) } : {};
       const recorded = recording ? await saveRecording(ctx, current, join(dir, build), what) : undefined;
       replays.set(claim, {
         ok: result.ok,
@@ -337,6 +389,7 @@ async function replayClaims(
         error: result.error,
         ...(recorded ? { recording: recorded } : {}),
         ...bug,
+        ...assertions,
       });
       session.emit({
         kind: 'session-end',
@@ -547,7 +600,11 @@ export async function checkClaims(
     const flow = flows.get(claim.id);
     const bench = measured.get(claim.id);
     if (bench?.kind === 'bench') tested.push({ claim, bench: bench.bench });
-    else if (flow?.kind === 'note' || (flow?.kind === 'flow' && headReplays.get(claim.id)?.ok))
+    // Assertions give their own verdict, with no judge.
+    else if (
+      flow?.kind === 'note' ||
+      (flow?.kind === 'flow' && !flow.routine.assert?.length && headReplays.get(claim.id)?.ok)
+    )
       tested.push({ claim, flow, head: headReplays.get(claim.id), base: baseReplays.get(claim.id) });
   }
   const verdicts = tested.length ? await judgeClaims(ctx, review, tested) : new Map();
@@ -594,6 +651,8 @@ export async function checkClaims(
         reason: `The replay on the pull request build stopped at step ${(replay?.failedStep ?? 0) + 1}: ${replay?.error ?? 'no reason'}.`,
         ...shown,
       };
+    if (flow.kind === 'flow' && flow.routine.assert?.length)
+      return assertionFinding(claim, replay!, baseReplays.get(claim.id), shown);
     const judged = verdicts.get(claim.id);
     if (!judged) return { claim, verdict: 'untested', reason: 'The judge gave no verdict.', ...shown };
     return {
@@ -608,6 +667,45 @@ export async function checkClaims(
 }
 
 type Replayed = Extract<ClaimFlow, { kind: 'flow' | 'repro' }>;
+
+/**
+ * The verdict on a claim with assertions, from the assertions alone: they
+ * must hold on the pull request build. The base build only tells whether
+ * the pull request is what made them hold.
+ */
+function assertionFinding(
+  claim: Claim,
+  head: ClaimReplay,
+  base: ClaimReplay | undefined,
+  shown: Pick<ClaimFinding, 'did' | 'routine' | 'steps' | 'head' | 'base'>,
+): ClaimFinding {
+  const results = head.assertions ?? [];
+  const failed = results.filter((result) => !result.ok);
+  const checks = `${results.length} exact check${results.length === 1 ? '' : 's'}`;
+  if (failed.length) {
+    const saw = failed.map((result) => assertionWords(result, true)).join(', and ');
+    return {
+      claim,
+      verdict: 'not-proven',
+      evidence: 'assertion',
+      reason: `${failed.length} of the ${checks} fail${failed.length === 1 ? 's' : ''} on the pull request build.`,
+      saw: `${saw[0]!.toUpperCase()}${saw.slice(1)}.`,
+      ...shown,
+    };
+  }
+  const onBase = !base?.ok
+    ? `The replay on the base build ${stoppedWords(base)}`
+    : base.assertions?.some((result) => !result.ok)
+      ? 'The base build fails at least one of them.'
+      : 'The base build passes them too, so this pull request may not be what made them pass.';
+  return {
+    claim,
+    verdict: 'proven',
+    evidence: 'assertion',
+    reason: `The pull request build passes ${results.length === 1 ? 'the' : 'each of the'} ${checks}. ${onBase}`,
+    ...shown,
+  };
+}
 
 const stoppedWords = (replay: ClaimReplay | undefined) =>
   `stopped at step ${(replay?.failedStep ?? 0) + 1}: ${replay?.error ?? 'no reason'}.`;
@@ -667,6 +765,12 @@ async function difference(
   if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
     return `the first replay ${at(first)}, and the second ${at(second)}`;
   if (first?.bug !== second.bug) return 'the bug showed on one replay only';
+  // The exact checks are the evidence. The screen may differ, for example by a time that the command prints.
+  if (first?.assertions || second.assertions) {
+    const results = (replay?: ClaimReplay) =>
+      JSON.stringify(replay?.assertions?.map((result) => [result.ok, result.actual]));
+    return results(first) === results(second) ? undefined : 'the exact checks gave a different result';
+  }
   const last = async (replay: ClaimReplay) =>
     replay.shots.length ? await readFile(join(root, replay.shots.at(-1)!)) : Buffer.alloc(0);
   if (!(await last(first)).equals(await last(second)))

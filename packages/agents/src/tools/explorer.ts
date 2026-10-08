@@ -89,6 +89,16 @@ function observationText(observation: Observation): string {
           observation.http.body,
         ]
       : []),
+    ...(observation.terminal
+      ? [
+          `$ ${observation.terminal.command}`,
+          observation.terminal.exitCode === undefined
+            ? 'The command did not exit.'
+            : `Exit code: ${observation.terminal.exitCode}`,
+          'Output:',
+          observation.terminal.output.slice(-8000) || '(none)',
+        ]
+      : []),
     'Elements:',
     ...observation.elements.slice(0, 117).map(elementLine),
   ]
@@ -220,6 +230,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `Switched to the "${action.match}" window`;
     case 'request':
       return `${action.method} ${session.vars.redact(action.url)}`;
+    case 'run':
+      return `Ran ${session.vars.redact(action.command)}`;
   }
 }
 
@@ -340,7 +352,7 @@ function compactSteps(steps: RoutineStep[]): RoutineStep[] {
   const compacted: RoutineStep[] = [];
   for (const step of steps) {
     if (step.kind === 'wait') continue;
-    if (step.kind === 'request') {
+    if (step.kind === 'request' || step.kind === 'run') {
       compacted.push(step);
       continue;
     }
@@ -383,7 +395,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'press') return `press:${step.key}`;
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
-  if (step.kind === 'request') return JSON.stringify(step);
+  if (step.kind === 'request' || step.kind === 'run') return JSON.stringify(step);
   return step.kind;
 }
 
@@ -449,6 +461,34 @@ export function explorerTools(
                 body: parsed.body === undefined ? undefined : session.vars.resolve(parsed.body),
               };
               return act(session, action, { kind: 'request', ...resolved });
+            },
+          },
+        ]
+      : []),
+    ...(session.driver?.platform === 'cli'
+      ? [
+          {
+            name: 'run_command',
+            description:
+              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output.',
+            inputSchema: schema({ command: string, input: string }, ['command']),
+            async run(input: Record<string, unknown>) {
+              const command = arg(input, 'command');
+              const typed = input.input === undefined ? undefined : arg(input, 'input');
+              if (!command.trim()) return { ...text('Give the command to run.'), isError: true };
+              const recorded = session.vars.redact({ command, ...(typed ? { input: typed } : {}) }) as {
+                command: string;
+                input?: string;
+              };
+              return act(
+                session,
+                {
+                  kind: 'run',
+                  command: session.vars.resolve(command),
+                  ...(typed ? { input: session.vars.resolve(typed) } : {}),
+                },
+                { kind: 'run', ...recorded },
+              );
             },
           },
         ]
@@ -775,7 +815,7 @@ export function explorerTools(
   }
   tools.push(...lessonTools(session, 'explorer'));
   if (session.driver?.platform === 'desktop') return tools.filter((tool) => tool.name !== 'open');
-  return session.driver?.platform === 'api'
+  return session.driver?.platform === 'api' || session.driver?.platform === 'cli'
     ? tools.filter((tool) => !['tap', 'type', 'press', 'scroll', 'back', 'open'].includes(tool.name))
     : tools;
 }

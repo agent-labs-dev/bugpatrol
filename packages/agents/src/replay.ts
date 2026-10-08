@@ -1,4 +1,4 @@
-import type { BugCheck, RoutineStep } from '@bugpatrol/core';
+import type { Assertion, AssertionResult, BugCheck, RoutineStep } from '@bugpatrol/core';
 import type { Driver, DriverAction, Observation } from '@bugpatrol/drivers';
 import type { AgentSession } from './session.js';
 
@@ -14,6 +14,7 @@ export function bugMisses(check: BugCheck, screen: Observation, errors: string[]
   const texts = [
     screen.title,
     screen.http?.body,
+    screen.terminal?.output,
     ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
   ].filter((text): text is string => Boolean(text));
   const onScreen = (part: string) => texts.some((text) => text.includes(part));
@@ -23,6 +24,39 @@ export function bugMisses(check: BugCheck, screen: Observation, errors: string[]
   if (check.error && !errors.some((error) => error.includes(check.error!)))
     misses.push(`no console or network error has "${check.error}"`);
   return misses;
+}
+
+/**
+ * Checks the assertions of a routine against the last command on a screen.
+ * Each one is exact, so the same output gives the same result on each run.
+ */
+export function checkAssertions(assertions: Assertion[], screen: Observation): AssertionResult[] {
+  const terminal = screen.terminal;
+  const output = terminal?.output ?? '';
+  return assertions.map((assertion) => {
+    if (assertion.kind === 'exit-code')
+      return {
+        assertion,
+        ok: terminal?.exitCode === assertion.value,
+        actual: terminal?.exitCode === undefined ? 'none' : String(terminal.exitCode),
+      };
+    const has = output.includes(assertion.value);
+    return { assertion, ok: assertion.kind === 'output-includes' ? has : !has };
+  });
+}
+
+/** An assertion as a sentence, or with `failed`, what the command did instead. */
+export function assertionWords(result: Pick<AssertionResult, 'assertion' | 'actual'>, failed = false): string {
+  const { assertion } = result;
+  if (assertion.kind === 'exit-code')
+    return failed
+      ? result.actual === 'none'
+        ? 'the command did not exit'
+        : `the exit code is ${result.actual}`
+      : `The exit code is ${assertion.value}`;
+  const has = assertion.kind === 'output-includes';
+  if (failed) return `the output ${has ? 'lacks' : 'has'} "${assertion.value}"`;
+  return `The output ${has ? 'has' : 'does not have'} "${assertion.value}"`;
 }
 
 /** Replay issue-local steps from the current screen; the first failure stops the path. */
@@ -218,6 +252,12 @@ function toAction(step: RoutineStep, session: AgentSession): DriverAction {
         ? Object.fromEntries(Object.entries(step.headers).map(([key, value]) => [key, session.vars.resolve(value)]))
         : undefined,
       body: step.body === undefined ? undefined : session.vars.resolve(step.body),
+    };
+  if (step.kind === 'run')
+    return {
+      kind: 'run',
+      command: session.vars.resolve(step.command),
+      ...(step.input === undefined ? {} : { input: session.vars.resolve(step.input) }),
     };
   return step;
 }

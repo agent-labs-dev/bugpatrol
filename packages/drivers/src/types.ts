@@ -49,6 +49,11 @@ export type Observation = {
   at: string;
   /** API only: sanitized response evidence, also rendered in the screenshot. */
   http?: { method: HttpMethod; status: number; body: string; contentType: string | null };
+  /**
+   * CLI only: the last command, redacted, and what it printed as a terminal
+   * shows it. `exitCode` is absent while no command ran to its end.
+   */
+  terminal?: { command: string; exitCode?: number; output: string };
 };
 
 /**
@@ -72,7 +77,8 @@ export type DriverAction =
       headers?: Record<string, string>;
       body?: string;
       capture?: Record<string, string>;
-    };
+    }
+  | { kind: 'run'; command: string; input?: string };
 
 export type ActResult = {
   ok: boolean;

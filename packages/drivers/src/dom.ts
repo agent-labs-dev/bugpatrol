@@ -276,6 +276,7 @@ export function stepFor(action: DriverAction, element?: UiElement, fallback?: St
     case 'window':
       return { kind: 'window', match: action.match };
     case 'request':
+    case 'run':
       return action;
   }
 }

@@ -32,6 +32,13 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
   });
 
   if (config) checks.push(...agentChecks(config));
+  if (config?.app.platform === 'cli')
+    checks.push({
+      name: 'cli:python3',
+      ok: onPath('python3'),
+      detail: onPath('python3') ? 'Installed' : 'The cli driver runs each command in a terminal through python3',
+      fatal: true,
+    });
   if (config?.app.platform === 'desktop') {
     checks.push({
       name: 'desktop-os',

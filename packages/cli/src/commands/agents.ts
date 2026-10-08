@@ -1,5 +1,5 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   AgentSession,
   applyRetest,
@@ -337,7 +337,12 @@ export async function runAgentCommand(
   process.on('SIGTERM', onSignal);
   try {
     app = await startApp(config.app, { root, vars, emit: log });
-    driver = createDriver(config, vars.resolve.bind(vars), (value) => vars.redact(value) as string);
+    driver = createDriver(
+      config,
+      vars.resolve.bind(vars),
+      (value) => vars.redact(value) as string,
+      resolve(root, config.app.source),
+    );
     await driver.connect();
     if (driver.viewerUrl) {
       const directory = join(root, '.bugpatrol', 'runs');

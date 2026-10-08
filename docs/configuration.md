@@ -24,11 +24,11 @@ Older versions kept `bugpatrol.yml` and `instructions.md` at the project root. I
 version: 1
 
 app:
-  platform: web                 # web | electron | ios | android | api | desktop
+  platform: web                 # web | electron | ios | android | api | desktop | cli
   source: .                     # the repo that the fixer edits, relative to the project root
   setup: []                     # commands: { run, cwd, capture, background, readyWhen, timeoutMs }
   teardown: []
-  connect: { url: http://localhost:3000 }   # or cdp, or appId + device
+  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { timeoutMs: 60000 }
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
 

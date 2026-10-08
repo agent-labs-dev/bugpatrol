@@ -5,3 +5,11 @@ This product includes software developed at the Bugpatrol project
 (https://github.com/agent-labs-dev/bugpatrol).
 
 Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product bundles the Terminus Font (https://terminus-font.sourceforge.net/),
+Copyright (c) 2010-2020 Dimitar Toshkov Zhekov, licensed under the SIL Open Font
+License 1.1, through the bdf-fonts package (MIT). Bugpatrol draws terminal
+recordings with it.
+
+This product bundles gifenc (https://github.com/mattdesl/gifenc), Copyright (c)
+Matt DesLauriers, licensed under the MIT License.
