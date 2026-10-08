@@ -1312,6 +1312,170 @@ describe('blocking claim check', { timeout: 30_000 }, () => {
   });
 });
 
+/**
+ * A settings page whose save button shows "Save failed" while the bug is
+ * there, and "Saved" once it is fixed.
+ */
+function saveApp(fixed: boolean) {
+  const button: UiElement = {
+    ref: 'e1',
+    role: 'button',
+    name: 'Save',
+    box: { x: 0, y: 0, width: 10, height: 10 },
+    interactive: true,
+    enabled: true,
+  };
+  const message: UiElement = { ...button, ref: 'e2', role: 'status', name: fixed ? 'Saved' : 'Save failed' };
+  return new FakeDriver(
+    {
+      home: { elements: [button], next: { e1: 'saved' } },
+      saved: { elements: [button, message], color: fixed ? 5 : 9 },
+    },
+    'home',
+  );
+}
+
+/** Writes the committed routines of issue #12, as a fresh clone has them: no run directory. */
+async function commitRepro(root: string, bug: Routine['bug'] | null = { shows: 'Save failed', lacks: 'Saved' }) {
+  const workspace = new Workspace(root);
+  const at = '2026-10-01T00:00:00.000Z';
+  await workspace.saveRoutine({
+    version: 1,
+    id: 'open-home',
+    description: 'Opens the home page',
+    platform: 'web',
+    steps: [{ kind: 'open', url: 'fake://home' }],
+    createdAt: at,
+    updatedAt: at,
+  });
+  await workspace.saveRoutine({
+    version: 1,
+    id: 'repro-a1b2c3',
+    description: 'Reproduces: Save fails on settings',
+    platform: 'web',
+    requires: ['open-home'],
+    steps: [{ kind: 'tap', target: { role: 'button', name: 'Save' } }],
+    ...(bug ? { bug } : {}),
+    createdAt: at,
+    updatedAt: at,
+  });
+  expect(existsSync(paths.data(root))).toBe(false);
+}
+
+const reproIssue = {
+  number: 12,
+  title: 'Save fails on settings',
+  body: '<!-- bugpatrol:routine repro-a1b2c3 -->\n\nThe save button shows an error.',
+};
+
+describe('issue repro claim', { timeout: 30_000 }, () => {
+  const reviewRepro = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    fixed: { head: boolean; base: boolean },
+    review: Record<string, unknown> = {},
+  ) => {
+    const app = builds(f.root, (build) => saveApp(fixed[build]));
+    const github = fakeGh({ body: claimsBody('Saving works again.'), issues: [reproIssue] });
+    const agents = claimAgents({ explore: {}, verdicts: {} });
+    const config = claimConfig(app.prepare, { enabled: true, repo: 'o/r' }, review);
+    const result = await reviewPullRequest(f.root, config, 7, {
+      gh: github.gh,
+      createRuntime: agents.createRuntime,
+      createDriver: app.createDriver,
+    });
+    return { review: result, app, agents, github };
+  };
+
+  it('proves a fix by replaying the repro routine of the issue that it closes, with no model', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      const { review, app, agents } = await reviewRepro(f, { head: true, base: false });
+      // The explorer looks for bugs. No model takes part in the verdict of the issue.
+      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(agents.tasks[0]!.prompt).not.toContain('claim-2');
+      expect(review.claims).toMatchObject([
+        { claim: { id: 'claim-1' }, verdict: 'untested' },
+        {
+          claim: {
+            id: 'claim-2',
+            text: 'Fixes #12: Save fails on settings',
+            source: { kind: 'issue', number: 12 },
+            testable: true,
+          },
+          verdict: 'proven',
+          evidence: 'replay',
+          routine: '.bugpatrol/routines/repro-a1b2c3.json',
+          head: { ok: true, bug: false },
+          base: { ok: true, bug: true },
+        },
+      ]);
+      expect(review.claims![1]!.steps).toHaveLength(2);
+      expect(app.drivers.base[0]!.current).toBe('saved');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a blocking check on a fix that does not fix, once a second replay agrees', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      const { review, app, agents, github } = await reviewRepro(f, { head: false, base: false }, { block: true });
+      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+      // The explorer, the first replay, and the second replay on the pull request build.
+      expect(app.drivers.head).toHaveLength(3);
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'not-proven',
+        evidence: 'replay',
+        saw: 'The last screen of the repro still shows "Save failed" and lacks "Saved".',
+        head: { ok: true, bug: true },
+        base: { ok: true, bug: true },
+        again: { ok: true, bug: true },
+      });
+      expect(review.check).toMatchObject({ conclusion: 'failure' });
+      const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
+      expect(check).toMatchObject({ conclusion: 'failure' });
+      expect(check!.output.summary).toContain('Fixes #12: Save fails on settings');
+      expect(check!.output.summary).toContain('.bugpatrol/routines/repro-a1b2c3.json');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('never counts a repro that does not show the bug on the base build', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      const { review } = await reviewRepro(f, { head: true, base: true }, { block: true });
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'untested',
+        reason: 'The repro no longer reproduces on the base build.',
+        base: { ok: true, bug: false },
+      });
+      expect(review.claims![1]!.evidence).toBeUndefined();
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists a repro routine with no bug check as untested, and replays nothing for it', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root, null);
+      const { review, app } = await reviewRepro(f, { head: true, base: false });
+      expect(review.claims![1]).toMatchObject({ claim: { testable: false }, verdict: 'untested' });
+      expect(review.claims![1]!.reason).toContain('has no check that tells when the bug shows');
+      // The explorer only.
+      expect(app.drivers.head).toHaveLength(1);
+      expect(app.drivers.base).toHaveLength(0);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('numbered diff', () => {
   it('numbers the lines of the new file, and lists the lines that take a comment', () => {
     const diff = [

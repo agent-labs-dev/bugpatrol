@@ -10,6 +10,7 @@ const apiRequestSchema = z.object({
 });
 
 import {
+  type BugCheck,
   type Candidate,
   fingerprint,
   type Locator,
@@ -20,7 +21,7 @@ import {
 } from '@bugpatrol/core';
 import type { DriverAction, Observation, UiElement } from '@bugpatrol/drivers';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
-import { replayRoutine } from '../replay.js';
+import { bugMisses, replayRoutine } from '../replay.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -665,7 +666,11 @@ export function explorerTools(
     {
       name: 'report_bug',
       description:
-        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'.",
+        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+        'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+        'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+        'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+        'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
           screen_id: string,
@@ -673,14 +678,29 @@ export function explorerTools(
           what_is_wrong: string,
           expected: string,
           severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
+          shows: string,
+          lacks: string,
+          error: string,
         },
         ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
-        if (!session.lastScreenshot) {
+        if (!session.lastScreenshot || !session.lastObservation) {
           await session.capture(await session.driver!.observe(), 'reported-bug');
         }
+        const bug: BugCheck = {};
+        for (const key of ['shows', 'lacks', 'error'] as const) {
+          const value = session.vars.redact(arg(input, key).trim()) as string;
+          if (value) bug[key] = value;
+        }
+        const observation = session.lastObservation!;
+        const misses = bugMisses(bug, observation, [
+          ...observation.consoleErrors,
+          ...(observation.networkErrors ?? []),
+        ]);
+        if (misses.length)
+          return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };
         const requested = arg(input, 'screen_id');
         const known = (await session.workspace.readAppMap())?.screens.some((screen) => screen.id === requested);
         const screenId = known ? requested : currentScreenId(session);
@@ -702,6 +722,7 @@ export function explorerTools(
             screenshot: session.lastScreenshot,
             routineId: session.anchor.routineId,
             steps: session.trail.slice(session.anchor.index).map(({ at: _at, ...step }) => step as RoutineStep),
+            ...(Object.keys(bug).length ? { bug } : {}),
           },
           route: { to: 'judge', reason: 'Explorer reported a visible bug' },
           createdAt: new Date().toISOString(),

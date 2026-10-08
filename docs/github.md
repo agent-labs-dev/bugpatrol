@@ -73,7 +73,7 @@ The command lists each URL:
 Opened 1 PR(s) and 1 issue(s); skipped 0.
 ```
 
-Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue.
+Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue ([Issues that Bugpatrol filed](#issues-that-bugpatrol-filed)). The routine also holds a bug check: text that the last screen shows or lacks, or an error that the flow logs, while the bug is there.
 
 `patrol` runs the same step at the end of each cycle.
 
@@ -209,6 +209,26 @@ To choose the claims yourself, add a `Claims` heading to the pull request descri
 ```
 
 Bugpatrol uses each list item as written. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
+
+### Issues that Bugpatrol filed
+
+A pull request that closes a Bugpatrol issue gets one more claim, "Fixes #12: <issue title>". Bugpatrol reads the routine id from the hidden line in the issue body and loads the routine from `.bugpatrol/routines/` of the checkout, so a fresh clone in CI finds it. The explorer and the judge play no part in this claim. Bugpatrol replays the repro routine on both builds and decides from the routine's bug check alone.
+
+The explorer writes the bug check when it reports the bug, and Bugpatrol checks it against the screen right then. It has up to three parts, and each part that is set must hold at the end of a full replay:
+
+| Part | The bug shows when |
+| --- | --- |
+| `shows` | The last screen has this text, in an element's name, text, value or test id, or in the body of an API response |
+| `lacks` | The last screen does not have this text |
+| `error` | A console or network error during the replay has this text |
+
+| Base build | Pull request build | Verdict |
+| --- | --- | --- |
+| The bug shows | The bug does not show | `proven`, evidence `replay` |
+| The bug shows | The bug shows | `not-proven`, evidence `replay` |
+| The bug does not show, or the replay stops | any | `untested`: the repro no longer reproduces on the base build |
+
+A stale repro never counts as proof. An issue filed before the bug check existed has a routine with no check, and its claim is `untested` with the reason. So is an issue whose routine is missing from the checkout. With [blocking](#block-a-merge-on-a-disproved-claim) on, a `not-proven` repro gets the second replay like any other replayed claim, and both replays must show the bug before the check fails.
 
 ### Speed claims and benchmarks
 

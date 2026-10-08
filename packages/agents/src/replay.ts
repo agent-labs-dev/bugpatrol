@@ -1,9 +1,29 @@
-import type { RoutineStep } from '@bugpatrol/core';
-import type { Driver, DriverAction } from '@bugpatrol/drivers';
+import type { BugCheck, RoutineStep } from '@bugpatrol/core';
+import type { Driver, DriverAction, Observation } from '@bugpatrol/drivers';
 import type { AgentSession } from './session.js';
 
 /** Carries a replay failure back to the explorer without creating a finding. */
 export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; degraded: boolean };
+
+/**
+ * The parts of a bug check that do not hold on a screen, in words, so an
+ * empty list means the bug shows. `errors` are the console and network
+ * errors of the whole flow: a driver reports each one once only.
+ */
+export function bugMisses(check: BugCheck, screen: Observation, errors: string[]): string[] {
+  const texts = [
+    screen.title,
+    screen.http?.body,
+    ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
+  ].filter((text): text is string => Boolean(text));
+  const onScreen = (part: string) => texts.some((text) => text.includes(part));
+  const misses: string[] = [];
+  if (check.shows && !onScreen(check.shows)) misses.push(`the screen does not show "${check.shows}"`);
+  if (check.lacks && onScreen(check.lacks)) misses.push(`the screen shows "${check.lacks}"`);
+  if (check.error && !errors.some((error) => error.includes(check.error!)))
+    misses.push(`no console or network error has "${check.error}"`);
+  return misses;
+}
 
 /** Replay issue-local steps from the current screen; the first failure stops the path. */
 export async function replaySteps(

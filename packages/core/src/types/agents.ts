@@ -92,6 +92,22 @@ export type Routine = {
    * that did not appear this time, a detour) only if it still ends here.
    */
   expect?: { elements: string[] };
+  /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
+  bug?: BugCheck;
+};
+
+/**
+ * What the screen shows at the end of a repro while the bug is there. Each
+ * part that is set must hold. The explorer names it when it reports the bug,
+ * and Bugpatrol checks it against the screen right then.
+ */
+export type BugCheck = {
+  /** Text on the last screen: an element's name, text, value or test id, or an API response body. */
+  shows?: string;
+  /** Text that the last screen lacks while the bug is there. */
+  lacks?: string;
+  /** Part of a console or network error that the flow logs. */
+  error?: string;
 };
 
 export type ScreenTransition = {
@@ -164,6 +180,8 @@ export type IssueEvidence = {
   steps?: RoutineStep[];
   /** The committed routine that replays `routineId` and then `steps`. Set when the issue is filed. */
   reproRoutineId?: string;
+  /** How a replay of the flow tells that the bug shows. */
+  bug?: BugCheck;
   console?: string[];
 };
 
@@ -357,6 +375,8 @@ export type ClaimReplay = {
   /** Where a replay that failed partway stopped, counted from 0. */
   failedStep?: number;
   error?: string;
+  /** Issue repros only: whether the bug check of the repro routine held at the end of a full replay. */
+  bug?: boolean;
 };
 
 /** The numbers of one benchmark on one build. The spread is from `min` to `max`. */

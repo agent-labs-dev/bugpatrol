@@ -54,7 +54,7 @@ async function saveRepro(
   candidate: Candidate,
   now: string,
 ): Promise<string | undefined> {
-  const { routineId, steps = [] } = candidate.evidence;
+  const { routineId, steps = [], bug } = candidate.evidence;
   if (!routineId && !steps.length) return undefined;
   const routine: Routine = {
     version: 1,
@@ -64,6 +64,7 @@ async function saveRepro(
     ...(routineId ? { requires: [routineId] } : {}),
     steps,
     screenId: candidate.screenId,
+    ...(bug ? { bug } : {}),
     createdAt: now,
     updatedAt: now,
   };

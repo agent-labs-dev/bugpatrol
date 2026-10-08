@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
+  type BugCheck,
   type Claim,
   type ClaimBench,
   type ClaimCheckRun,
@@ -13,9 +14,10 @@ import {
   type Routine,
   type RoutineStep,
 } from '@bugpatrol/core';
-import type { Driver } from '@bugpatrol/drivers';
+import type { Driver, Observation } from '@bugpatrol/drivers';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
-import { replaySteps } from '../replay.js';
+import { bugMisses, replaySteps } from '../replay.js';
+import { reproRoutineId } from '../report.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
@@ -37,13 +39,16 @@ const response = (value: string) => ({ content: [{ type: 'text' as const, text: 
 const VERDICTS: ClaimVerdict[] = ['proven', 'not-proven', 'partly-proven', 'untested'];
 
 /**
- * What the explorer did with one claim on the pull request build. A `flow`
- * is a claim routine that Bugpatrol replays on both builds. A `note` is a
- * claim that the explorer checked, and whose flow cannot be replayed. A
- * `skip` is a claim that the explorer could not test.
+ * How Bugpatrol tests one claim. A `flow` is a claim routine that the
+ * explorer saved on the pull request build, and Bugpatrol replays on both
+ * builds. A `note` is a claim that the explorer checked, and whose flow
+ * cannot be replayed. A `skip` is a claim that the explorer could not test.
+ * A `repro` is the committed repro routine of an issue that the pull request
+ * closes: its bug check gives the verdict, with no model.
  */
 export type ClaimFlow =
   | { kind: 'flow'; did: string; saw: string; routine: Routine; path: string }
+  | { kind: 'repro'; issue: number; did: string; routine: Routine; check: BugCheck; path: string }
   | { kind: 'note'; did: string; saw: string; reason: string }
   | { kind: 'skip'; reason: string };
 
@@ -60,6 +65,60 @@ async function chainSteps(workspace: Workspace, id: string | undefined, seen = n
   const before: RoutineStep[] = [];
   for (const required of routine.requires ?? []) before.push(...(await chainSteps(workspace, required, seen)));
   return [...before, ...routine.steps];
+}
+
+const checkWords = (check: BugCheck) =>
+  [
+    check.shows && `shows "${check.shows}"`,
+    check.lacks && `lacks "${check.lacks}"`,
+    check.error && `logs an error with "${check.error}"`,
+  ]
+    .filter(Boolean)
+    .join(' and ');
+
+/**
+ * A claim for each Bugpatrol issue that the pull request closes. The issue
+ * body names its repro routine, and the checkout has the routine committed
+ * (ADR 0006), so a fresh clone finds it. A routine that is gone, or that has
+ * no bug check, gives a claim that cannot be tested, with the reason.
+ */
+export async function reproClaims(
+  ctx: Pick<ReviewContext, 'root' | 'config' | 'workspace' | 'pr'>,
+  first: number,
+): Promise<{ claims: Claim[]; flows: Map<string, ClaimFlow> }> {
+  const claims: Claim[] = [];
+  const flows = new Map<string, ClaimFlow>();
+  for (const issue of ctx.pr.issues) {
+    const id = reproRoutineId(issue.body);
+    if (!id) continue;
+    const routine = await ctx.workspace.readRoutine(id);
+    const claim: Claim = {
+      id: `claim-${first + claims.length}`,
+      text: `Fixes #${issue.number}: ${issue.title}`,
+      platform: routine?.platform ?? ctx.config.app.platform,
+      source: { kind: 'issue', number: issue.number },
+      testable: Boolean(routine?.bug),
+    };
+    claims.push(claim);
+    if (!routine) {
+      claim.untestable = `Issue #${issue.number} names the repro routine ${id}, and this checkout has no such routine.`;
+      continue;
+    }
+    if (!routine.bug) {
+      claim.untestable = `The repro routine ${id} has no check that tells when the bug shows, so a replay cannot prove the fix.`;
+      continue;
+    }
+    const steps = (await chainSteps(ctx.workspace, id)).map(({ at: _at, ...step }) => step as RoutineStep);
+    flows.set(claim.id, {
+      kind: 'repro',
+      issue: issue.number,
+      did: `Replayed the repro routine of #${issue.number}, and checked whether the last screen ${checkWords(routine.bug)}.`,
+      routine: { ...routine, steps, requires: undefined },
+      check: routine.bug,
+      path: relative(ctx.root, paths.routine(ctx.root, id)),
+    });
+  }
+  return { claims, flows };
 }
 
 /**
@@ -214,14 +273,20 @@ async function replayClaims(
       const dir = join(paths.reviewDir(root, pr.number), claim);
       await mkdir(dir, { recursive: true });
       const shots: string[] = [];
+      const errors: string[] = [];
+      let last: Observation | undefined;
       const shot = async () => {
         const file = join(dir, `${build}-${String(shots.length).padStart(2, '0')}.png`);
-        await writeFile(file, (await current.observe()).screenshot);
+        last = await current.observe();
+        errors.push(...last.consoleErrors, ...(last.networkErrors ?? []));
+        await writeFile(file, last.screenshot);
         shots.push(relative(root, file));
       };
       await shot();
       const result = await replaySteps(session, routine.steps, { windowMs: opts.replayWindowMs, onStep: shot });
-      replays.set(claim, { ok: result.ok, shots, failedStep: result.failedStep, error: result.error });
+      // The bug shows only at the end of a full replay.
+      const bug = routine.bug && result.ok ? { bug: !bugMisses(routine.bug, last!, errors).length } : {};
+      replays.set(claim, { ok: result.ok, shots, failedStep: result.failedStep, error: result.error, ...bug });
       session.emit({
         kind: 'session-end',
         summary: `${claim} on ${where}: ${result.ok ? 'replayed' : `stopped at step ${(result.failedStep ?? 0) + 1}`}`,
@@ -410,8 +475,8 @@ export async function checkClaims(
   const routines = (keep: (claim: string) => boolean) =>
     new Map(
       [...flows]
-        .filter(([claim, flow]) => flow.kind === 'flow' && keep(claim))
-        .map(([claim, flow]) => [claim, (flow as Extract<ClaimFlow, { kind: 'flow' }>).routine]),
+        .filter(([claim, flow]) => (flow.kind === 'flow' || flow.kind === 'repro') && keep(claim))
+        .map(([claim, flow]) => [claim, (flow as Replayed).routine]),
     );
   const head = routines(() => true);
   const headReplays = head.size
@@ -457,6 +522,7 @@ export async function checkClaims(
     const flow = flows.get(claim.id);
     if (!flow) return { claim, verdict: 'untested', reason: 'The explorer did not reach this claim.' };
     if (flow.kind === 'skip') return { claim, verdict: 'untested', reason: flow.reason };
+    if (flow.kind === 'repro') return reproFinding(claim, flow, headReplays.get(claim.id), baseReplays.get(claim.id));
     const evidence: ClaimEvidence = flow.kind === 'flow' ? 'replay' : 'explored';
     const shown = {
       did: flow.did,
@@ -490,6 +556,45 @@ export async function checkClaims(
   });
 }
 
+type Replayed = Extract<ClaimFlow, { kind: 'flow' | 'repro' }>;
+
+const stoppedWords = (replay: ClaimReplay | undefined) =>
+  `stopped at step ${(replay?.failedStep ?? 0) + 1}: ${replay?.error ?? 'no reason'}.`;
+
+/**
+ * The verdict on an issue repro, from its bug check alone: the bug must show
+ * on the base build and must not show on the pull request build. A repro
+ * that does not show the bug on the base build is stale, and proves nothing.
+ */
+function reproFinding(
+  claim: Claim,
+  flow: Extract<ClaimFlow, { kind: 'repro' }>,
+  head: ClaimReplay | undefined,
+  base: ClaimReplay | undefined,
+): ClaimFinding {
+  const shown = { did: flow.did, routine: flow.path, steps: flow.routine.steps.map(stepWords), head, base };
+  const untested = (reason: string): ClaimFinding => ({ claim, verdict: 'untested', reason, ...shown });
+  if (!head?.ok) return untested(`The replay on the pull request build ${stoppedWords(head)}`);
+  if (!base?.ok) return untested(`The repro no longer reproduces on the base build: the replay ${stoppedWords(base)}`);
+  if (!base.bug) return untested('The repro no longer reproduces on the base build.');
+  if (head.bug)
+    return {
+      claim,
+      verdict: 'not-proven',
+      evidence: 'replay',
+      reason: `The bug of #${flow.issue} shows on the pull request build, as on the base build.`,
+      saw: `The last screen of the repro still ${checkWords(flow.check)}.`,
+      ...shown,
+    };
+  return {
+    claim,
+    verdict: 'proven',
+    evidence: 'replay',
+    reason: `The bug of #${flow.issue} shows on the base build, and not on the pull request build.`,
+    ...shown,
+  };
+}
+
 /** Only a replay and an assertion give the same result on each run (ADR 0001, ADR 0007). */
 const DETERMINISTIC: ClaimEvidence[] = ['replay', 'assertion'];
 
@@ -510,6 +615,7 @@ async function difference(
     replay?.ok ? 'replayed all its steps' : `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
   if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
     return `the first replay ${at(first)}, and the second ${at(second)}`;
+  if (first?.bug !== second.bug) return 'the bug showed on one replay only';
   const last = async (replay: ClaimReplay) =>
     replay.shots.length ? await readFile(join(root, replay.shots.at(-1)!)) : Buffer.alloc(0);
   if (!(await last(first)).equals(await last(second)))
@@ -532,7 +638,7 @@ export async function replayDisproofs(
   const routines = new Map<string, Routine>();
   for (const finding of findings.filter(disproves)) {
     const flow = flows.get(finding.claim.id);
-    if (flow?.kind === 'flow') routines.set(finding.claim.id, flow.routine);
+    if (flow?.kind === 'flow' || flow?.kind === 'repro') routines.set(finding.claim.id, flow.routine);
   }
   if (!routines.size) return findings;
   const again = await build('head', ctx.pr.head, (driver, vars, fresh) =>

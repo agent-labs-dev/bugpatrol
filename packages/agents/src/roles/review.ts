@@ -48,7 +48,7 @@ import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
-import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs } from './claims.js';
+import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
 import { linkEnvFiles, stepWords } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
@@ -809,6 +809,10 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
   await workspace.saveReview(review);
   try {
     const claims = claimCheck(ctx) ? await readClaims(ctx, review) : undefined;
+    // The issues that it closes with a repro routine: a replay checks them, never the explorer or a benchmark.
+    const repros = claims ? await reproClaims(ctx, claims.length + 1) : { claims: [], flows: new Map() };
+    claims?.push(...repros.claims);
+    const explorable = (claim: Claim) => !repros.flows.has(claim.id);
     // Each claim is untested until a test gives it a verdict, also when the review fails on the way.
     const notYet = (claim: Claim, reason: string): ClaimFinding => ({
       claim,
@@ -838,13 +842,13 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       review.tested = `Bugpatrol could not run the app on this machine. ${missing[platform]}`;
       review.claims = claims!.map(untestedHere);
     } else {
-      const flows = new Map<string, ClaimFlow>();
+      const flows = new Map<string, ClaimFlow>(repros.flows);
       const picks =
-        testable.length && ctx.config.agents.review.benches.length
-          ? await pickBenches(ctx, review, testable)
+        testable.some(explorable) && ctx.config.agents.review.benches.length
+          ? await pickBenches(ctx, review, testable.filter(explorable))
           : new Map<string, string>();
       // A benchmark measures its claims; the explorer tests the others.
-      const toExplore = toTest.filter((claim) => !picks.has(claim.id));
+      const toExplore = toTest.filter((claim) => explorable(claim) && !picks.has(claim.id));
       const candidates = await exploreHead(ctx, review, toExplore, flows);
       if (claims) {
         const measured = await runBenches(ctx, picks, (run) =>
@@ -857,7 +861,11 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
           commit: string,
           run: (driver: Driver, vars: Vars, fresh: () => Promise<Driver>) => Promise<T>,
         ) => withBuild(ctx, name, commit, run);
-        const toCheck = [...toExplore, ...testable.filter((claim) => picks.has(claim.id))];
+        const toCheck = [
+          ...toExplore,
+          ...testable.filter((claim) => picks.has(claim.id)),
+          ...toTest.filter((claim) => !explorable(claim)),
+        ];
         const checked = await checkClaims(ctx, review, toCheck, flows, measured, build);
         const tested = blocking(ctx) ? await replayDisproofs(ctx, review, checked, flows, build) : checked;
         review.claims = claims.map(
