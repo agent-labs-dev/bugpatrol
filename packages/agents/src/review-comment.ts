@@ -17,7 +17,8 @@ export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
 export const SUPERSEDED_MARKER = '<!-- bugpatrol:superseded -->';
 
 const rank = { cosmetic: 0, minor: 1, major: 2, critical: 3 };
-const short = (commit: string) => commit.slice(0, 7);
+/** The short hash of a commit, as GitHub shows it. */
+export const short = (commit: string) => commit.slice(0, 7);
 
 function details(summary: string, lines: string[]): string[] {
   return lines.length ? [`<details><summary>${summary}</summary>\n\n${lines.join('\n')}\n\n</details>`] : [];

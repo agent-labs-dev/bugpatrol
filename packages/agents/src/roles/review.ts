@@ -38,6 +38,7 @@ import {
   REVIEW_MARKER,
   renderReview,
   SUPERSEDED_MARKER,
+  short,
   supersededBody,
 } from '../review-comment.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
@@ -64,7 +65,6 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 });
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
-const short = (commit: string) => commit.slice(0, 7);
 const CHECK_NAME = 'Bugpatrol claim check';
 
 /** A lockfile diff is long and says nothing about a screen. */

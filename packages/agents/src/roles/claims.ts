@@ -22,6 +22,7 @@ import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
+import { short } from '../review-comment.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
@@ -957,14 +958,19 @@ export function claimCheckRun(findings: ClaimFinding[], head: string): ClaimChec
         'No replay or assertion disproved a claim. A verdict from the explorer and the judge, or from a benchmark, ' +
         'never fails this check. The review on the pull request has every verdict.',
     };
-  const evidence = (finding: ClaimFinding) =>
-    finding.compared
-      ? `the normalised outputs of \`${head.slice(0, 7)}\` and its base, replayed twice on each build with the ` +
-        'same diff.'
-      : finding.evidence === 'replay'
-        ? `the claim routine \`${finding.routine}\`, replayed twice on \`${head.slice(0, 7)}\` with no model, ` +
-          'with the same result each time.'
-        : `an exact assertion on \`${head.slice(0, 7)}\`, replayed twice with the same result.`;
+  const commit = `\`${short(head)}\``;
+  const evidence = (finding: ClaimFinding) => {
+    if (finding.compared)
+      return `the normalised outputs of ${commit} and its base, replayed twice on each build with the same diff.`;
+    if (finding.evidence === 'assertion')
+      return `an exact assertion on ${commit}, replayed twice with the same result.`;
+    // Only the bug check of an issue repro gives a verdict from a replay alone.
+    const issue = finding.claim.source.kind === 'issue' ? ` of #${finding.claim.source.number}` : '';
+    return (
+      `the repro routine${issue}, \`${finding.routine}\`, replayed twice on ${commit} and twice on its base, ` +
+      'with no model, with the same bug check each time.'
+    );
+  };
   return {
     conclusion: 'failure',
     title: `${failing.length} claim${failing.length === 1 ? '' : 's'} disproved`,

@@ -1496,7 +1496,10 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
       expect(check).toMatchObject({ conclusion: 'failure' });
       expect(check!.output.summary).toContain('Fixes #12: Save fails on settings');
-      expect(check!.output.summary).toContain('.bugpatrol/routines/repro-a1b2c3.json');
+      expect(check!.output.summary).toContain(
+        `the repro routine of #12, \`.bugpatrol/routines/repro-a1b2c3.json\`, replayed twice on \`${f.head.slice(0, 7)}\` and twice on its base`,
+      );
+      expect(check!.output.summary).not.toContain('claim routine');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
