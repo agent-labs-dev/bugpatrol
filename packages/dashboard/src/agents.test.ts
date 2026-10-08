@@ -281,6 +281,57 @@ describe('AgentReader', () => {
   });
 });
 
+describe('reviews', () => {
+  it('lists each reviewed pull request, newest first, with its claim verdicts', () => {
+    writeAgentFixture(root);
+    writeFileSync(join(root, '.bugpatrol', 'runs', 'reviews', 'pr-9.json'), '{');
+    const reviews = new AgentReader(root).reviews();
+    expect(reviews).toMatchObject([
+      {
+        pr: { number: 42, title: 'Let users rename a project' },
+        head: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        base: '0f1e2d3c4b5a69788796a5b4c3d2e1f012345678',
+        status: 'finished',
+        verdicts: { proven: 1, 'not-proven': 1, 'partly-proven': 1, untested: 1 },
+        introduced: 1,
+      },
+      { pr: { number: 41 }, status: 'failed', error: 'The app did not start.', introduced: 0 },
+    ]);
+    expect(reviews[1]).not.toHaveProperty('verdicts');
+    expect(reviews[0]).not.toHaveProperty('claims');
+  });
+
+  it('gives one review with the recordings in its run directory, matched to claim and build', () => {
+    writeAgentFixture(root);
+    const reader = new AgentReader(root);
+    const detail = reader.review(42);
+    expect(detail?.review.claims?.[0]?.claim.id).toBe('claim-1');
+    expect(detail?.review.findings.map((finding) => finding.verdict)).toEqual(['introduced', 'pre-existing']);
+    const dir = '.bugpatrol/runs/reviews/pr-42';
+    expect(detail?.recordings).toEqual([
+      { path: `${dir}/claim-1/base.mp4`, kind: 'video', claimId: 'claim-1', build: 'base' },
+      { path: `${dir}/claim-1/head.gif`, kind: 'image', claimId: 'claim-1', build: 'head' },
+      { path: `${dir}/claim-1/head.mp4`, kind: 'video', claimId: 'claim-1', build: 'head' },
+      { path: `${dir}/claim-3/head.cast`, kind: 'cast', claimId: 'claim-3', build: 'head' },
+    ]);
+    expect(reader.review(7)).toBeUndefined();
+  });
+
+  it('matches claim-1 and claim-10 apart, and keeps a recording that names neither', () => {
+    const dir = join(root, '.bugpatrol', 'runs', 'reviews');
+    mkdirSync(join(dir, 'pr-5'), { recursive: true });
+    writeFileSync(
+      join(dir, 'pr-5.json'),
+      JSON.stringify({ version: 1, pr: { number: 5 }, head: 'h', base: 'b', startedAt: 'now', findings: [] }),
+    );
+    for (const name of ['claim-10-base.webm', 'session.mp4']) writeFileSync(join(dir, 'pr-5', name), 'x');
+    expect(new AgentReader(root).review(5)?.recordings).toEqual([
+      { path: '.bugpatrol/runs/reviews/pr-5/claim-10-base.webm', kind: 'video', claimId: 'claim-10', build: 'base' },
+      { path: '.bugpatrol/runs/reviews/pr-5/session.mp4', kind: 'video' },
+    ]);
+  });
+});
+
 const canBind = await new Promise<boolean>((done) => {
   const server = createServer();
   server.once('error', () => done(false));
@@ -322,6 +373,46 @@ describe.skipIf(!canBind)('agent API', () => {
     const routines = await (await fetch(`${dashboard.url}/api/routines`)).json();
     expect(routines).toHaveLength(2);
     expect(routines[0].steps).toBe(1);
+  });
+
+  it('serves reviews and plays their recordings, with byte ranges for seeking', async () => {
+    writeAgentFixture(root);
+    const video = join(root, '.bugpatrol', 'runs', 'reviews', 'pr-42', 'claim-1', 'head.mp4');
+    writeFileSync(video, '0123456789');
+    dashboard = await startDashboard({ root, port: 0 });
+    const list = await (await fetch(`${dashboard.url}/api/reviews`)).json();
+    expect(list.map((review: { pr: { number: number } }) => review.pr.number)).toEqual([42, 41]);
+    const detail = await (await fetch(`${dashboard.url}/api/reviews/42`)).json();
+    expect(detail.review.claims).toHaveLength(4);
+    expect((await fetch(`${dashboard.url}/api/reviews/7`)).status).toBe(404);
+    expect((await fetch(`${dashboard.url}/api/reviews/abc`)).status).toBe(404);
+
+    const url = `${dashboard.url}/api/artifact?path=${encodeURIComponent('.bugpatrol/runs/reviews/pr-42/claim-1/head.mp4')}`;
+    const whole = await fetch(url);
+    expect(whole.headers.get('content-type')).toBe('video/mp4');
+    expect(whole.headers.get('accept-ranges')).toBe('bytes');
+    expect(await whole.text()).toBe('0123456789');
+    const part = await fetch(url, { headers: { range: 'bytes=2-5' } });
+    expect(part.status).toBe(206);
+    expect(part.headers.get('content-range')).toBe('bytes 2-5/10');
+    expect(await part.text()).toBe('2345');
+    const tail = await fetch(url, { headers: { range: 'bytes=7-' } });
+    expect(await tail.text()).toBe('789');
+    const suffix = await fetch(url, { headers: { range: 'bytes=-2' } });
+    expect(await suffix.text()).toBe('89');
+    const outside = await fetch(url, { headers: { range: 'bytes=20-30' } });
+    expect(outside.status).toBe(416);
+    expect(outside.headers.get('content-range')).toBe('bytes */10');
+
+    for (const [file, type] of [
+      ['claim-1/head.gif', 'image/gif'],
+      ['claim-3/head.cast', 'application/x-asciicast'],
+    ]) {
+      const response = await fetch(
+        `${dashboard.url}/api/artifact?path=${encodeURIComponent(`.bugpatrol/runs/reviews/pr-42/${file}`)}`,
+      );
+      expect(response.headers.get('content-type')).toBe(type);
+    }
   });
 });
 

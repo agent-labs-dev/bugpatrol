@@ -15,7 +15,8 @@
       ]
     },
     "packages/dashboard": {
-      "entry": ["src/ui/app.js", "scripts/*.mjs"]
+      "entry": ["src/ui/app.js", "scripts/*.mjs"],
+      "ignoreBinaries": ["ffmpeg"]
     }
   }
 }

@@ -7,6 +7,7 @@ import type {
   Candidate,
   FixProposal,
   Issue,
+  PrReview,
   Routine,
   SessionSummary,
 } from '@bugpatrol/core';
@@ -224,4 +225,148 @@ export function writeAgentFixture(root: string): void {
     lastReplay: { at: at(5), ok: true },
   }));
   for (const routine of routines) save(`routines/${routine.id}.json`, routine, committed);
+  writeReviewFixture(root, at);
+}
+
+/**
+ * A finished review of pull request 42 with a claim check: one claim proven by a
+ * recorded replay, one not proven with screenshots only, one untested, and an
+ * introduced and a pre-existing finding. The recordings are stand-in bytes;
+ * `scripts/fixture.mjs` swaps in real ones when ffmpeg is installed.
+ */
+function writeReviewFixture(root: string, at: (minutes: number) => string): void {
+  const dir = join(root, '.bugpatrol', 'runs', 'reviews');
+  const shots = '.bugpatrol/runs/reviews/pr-42/shots';
+  const file = (relative: string, bytes: Buffer | string): string => {
+    const path = join(root, relative);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, bytes);
+    return relative;
+  };
+  const png = Buffer.from(PNG, 'base64');
+  const shot = (name: string): string => file(`${shots}/${name}.png`, png);
+  file('.bugpatrol/runs/reviews/pr-42/claim-1/head.mp4', 'mp4');
+  file('.bugpatrol/runs/reviews/pr-42/claim-1/base.mp4', 'mp4');
+  file('.bugpatrol/runs/reviews/pr-42/claim-1/head.gif', 'gif');
+  const cast = [
+    { version: 2, width: 60, height: 8 },
+    [0.1, 'o', '$ acme export --json\r\n'],
+    [0.6, 'o', '\u001b[32m{"ok": true}\u001b[0m\r\n'],
+  ];
+  file('.bugpatrol/runs/reviews/pr-42/claim-3/head.cast', `${cast.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  const review: PrReview = {
+    version: 1,
+    pr: { number: 42, url: 'https://github.com/acme/desktop/pull/42', title: 'Let users rename a project' },
+    head: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+    base: '0f1e2d3c4b5a69788796a5b4c3d2e1f012345678',
+    baseRef: 'main',
+    status: 'finished',
+    startedAt: at(40),
+    endedAt: at(30),
+    sessions: { explorer: 'ses_done', claims: 'ses_claims', headReplay: 'ses_head', baseReplay: 'ses_base' },
+    tested: 'Opened projects, renamed one, and checked the list.',
+    claims: [
+      {
+        claim: {
+          id: 'claim-1',
+          text: 'A project can be renamed from its menu.',
+          platform: 'electron',
+          source: { kind: 'section' },
+          testable: true,
+        },
+        verdict: 'proven',
+        evidence: 'replay',
+        reason: 'The new name shows in the list on this pull request and the menu item is missing on the base.',
+        did: 'Opened the project menu and renamed the project on both builds.',
+        routine: '.bugpatrol/runs/reviews/pr-42/routines/claim-1.json',
+        steps: ['Open Projects', 'Open the menu of "Acme"', 'Tap "Rename"', 'Type "Acme 2"'],
+        head: { ok: true, shots: [shot('claim-1-head-0'), shot('claim-1-head-1')] },
+        base: { ok: false, shots: [shot('claim-1-base-0')], failedStep: 1, error: 'No element named "Rename".' },
+      },
+      {
+        claim: {
+          id: 'claim-2',
+          text: 'Renaming keeps the project open.',
+          platform: 'electron',
+          source: { kind: 'commit', commit: 'a1b2c3d' },
+          testable: true,
+        },
+        verdict: 'not-proven',
+        evidence: 'explored',
+        reason: 'The project closed after the rename.',
+        saw: 'The app went back to the project list.',
+        head: { ok: true, shots: [shot('claim-2-head-0')] },
+        base: { ok: true, shots: [shot('claim-2-base-0')] },
+      },
+      {
+        claim: {
+          id: 'claim-3',
+          text: 'The export command prints JSON.',
+          platform: 'desktop',
+          source: { kind: 'issue', number: 12 },
+          testable: true,
+        },
+        verdict: 'partly-proven',
+        evidence: 'assertion',
+        reason: 'The output is JSON, but the exit code was 1.',
+        head: { ok: true, shots: [] },
+      },
+      {
+        claim: {
+          id: 'claim-4',
+          text: 'Clean up the project store.',
+          platform: 'electron',
+          source: { kind: 'body' },
+          testable: false,
+          untestable: 'A refactor has no behavior to test.',
+        },
+        verdict: 'untested',
+        reason: 'The claim is not testable.',
+      },
+    ],
+    findings: [
+      {
+        candidateId: 'cand-pr-1',
+        screenId: 'projects',
+        verdict: 'introduced',
+        title: 'Rename field overflows the menu',
+        severity: 'minor',
+        reason: 'The field is wider than the menu on this pull request only.',
+        file: 'src/projects/menu.tsx',
+        line: 18,
+        steps: ['Open Projects', 'Open the menu of "Acme"'],
+        head: shot('finding-1-head'),
+        base: shot('finding-1-base'),
+      },
+      {
+        candidateId: 'cand-pr-2',
+        verdict: 'pre-existing',
+        title: 'Project list flickers on load',
+        severity: 'cosmetic',
+        reason: 'The base build flickers too.',
+        steps: ['Open Projects'],
+      },
+    ],
+    posted: { url: 'https://github.com/acme/desktop/pull/42#pullrequestreview-1', at: at(29) },
+    costUsd: 0.12,
+  };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'pr-42.json'), JSON.stringify(review, null, 2));
+  writeFileSync(
+    join(dir, 'pr-41.json'),
+    JSON.stringify(
+      {
+        ...review,
+        pr: { ...review.pr, number: 41, title: 'Faster start' },
+        status: 'failed',
+        error: 'The app did not start.',
+        claims: undefined,
+        findings: [],
+        startedAt: at(300),
+        endedAt: at(299),
+      },
+      null,
+      2,
+    ),
+  );
 }

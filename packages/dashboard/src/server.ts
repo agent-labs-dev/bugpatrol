@@ -30,9 +30,18 @@ const MIME: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.cast': 'application/x-asciicast',
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
 };
+
+/** The artifact types the UI renders: screenshots, records, and the recordings of a review. */
+const ARTIFACTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.cast', '.json'];
 
 export async function startDashboard(options: DashboardOptions): Promise<Dashboard> {
   const root = resolve(options.root);
@@ -93,6 +102,12 @@ async function handle(
     const flow = ctx.agents.flow(decodeURIComponent(path.slice('/api/flow/'.length)));
     return flow ? json(res, flow) : json(res, { error: 'no such flow' }, 404);
   }
+  if (path === '/api/reviews') return json(res, ctx.agents.reviews());
+  if (path.startsWith('/api/reviews/')) {
+    const pr = path.slice('/api/reviews/'.length);
+    const detail = /^\d+$/.test(pr) ? ctx.agents.review(Number(pr)) : undefined;
+    return detail ? json(res, detail) : json(res, { error: 'no such review' }, 404);
+  }
   if (path === '/api/appmap') return json(res, ctx.agents.screens());
   if (path === '/api/routines')
     return json(
@@ -139,7 +154,7 @@ async function handle(
   if (path === '/api/artifact') {
     const requested = url.searchParams.get('path');
     if (!requested) return json(res, { error: 'path is required' }, 400);
-    return serveArtifact(res, ctx.root, requested);
+    return serveArtifact(res, ctx.root, requested, req.headers.range);
   }
 
   return serveUi(res, path);
@@ -179,23 +194,56 @@ export function resolveArtifactPath(root: string, requested: string): string | u
 
   // Only artifact types the UI actually renders. A traversal that somehow
   // landed on a readable file still cannot exfiltrate a .env or a key.
-  if (!['.png', '.jpg', '.jpeg', '.webp', '.json'].includes(extname(real).toLowerCase())) return undefined;
+  if (!ARTIFACTS.includes(extname(real).toLowerCase())) return undefined;
 
   return real;
 }
 
-function serveArtifact(res: ServerResponse, root: string, requested: string): void {
+/**
+ * Serves an artifact whole, or one byte range of it. A browser asks for ranges
+ * to seek in a video, and Safari will not play a video without them.
+ */
+function serveArtifact(res: ServerResponse, root: string, requested: string, range: string | undefined): void {
   const file = resolveArtifactPath(root, requested);
   if (!file) {
     json(res, { error: 'not found' }, 404);
     return;
   }
 
-  res.writeHead(200, {
+  const size = statSync(file).size;
+  const headers = {
     'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'cache-control': 'no-cache',
+    'accept-ranges': 'bytes',
+  };
+  if (!range) {
+    res.writeHead(200, { ...headers, 'content-length': String(size) });
+    createReadStream(file).pipe(res);
+    return;
+  }
+  const bytes = byteRange(range, size);
+  if (!bytes) {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${size}` });
+    res.end();
+    return;
+  }
+  const [start, end] = bytes;
+  res.writeHead(206, {
+    ...headers,
+    'content-range': `bytes ${start}-${end}/${size}`,
+    'content-length': String(end - start + 1),
   });
-  createReadStream(file).pipe(res);
+  createReadStream(file, { start, end }).pipe(res);
+}
+
+/** The first range of a `Range: bytes=...` header, inclusive, or undefined when it misses the file. */
+function byteRange(header: string, size: number): [number, number] | undefined {
+  const match = header.match(/^bytes=(\d*)-(\d*)/);
+  if (!match || (!match[1] && !match[2])) return undefined;
+  const [start, end] = match[1]
+    ? [Number(match[1]), match[2] ? Math.min(Number(match[2]), size - 1) : size - 1]
+    : [Math.max(0, size - Number(match[2])), size - 1];
+  return start <= end && start < size ? [start, end] : undefined;
 }
 
 function serveUi(res: ServerResponse, path: string): void {

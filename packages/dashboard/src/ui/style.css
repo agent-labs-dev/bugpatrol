@@ -1251,3 +1251,77 @@ h1 {
   gap: 0.35rem 0.5rem;
   margin-top: 0.2rem;
 }
+
+/* Pull request reviews: each claim, then its evidence on the base and the pull request side by side. */
+.claim-block {
+  border-top: 1px solid var(--line);
+  padding: 0.75rem 0;
+}
+.claim-block h3 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+.claim-block p {
+  margin: 0.35rem 0;
+}
+.build-evidence {
+  margin: 0;
+  min-width: 0;
+}
+.build-evidence figcaption {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.build-note {
+  color: var(--major);
+}
+.build-shots summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.shot-strip {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+}
+.retest-shots .shot-strip img {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+  height: 220px;
+}
+.recording {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.recording video {
+  width: 100%;
+  max-height: 360px;
+  background: var(--panel-2);
+}
+.recording small {
+  text-align: center;
+}
+.cast-screen {
+  margin: 0;
+  height: 220px;
+  overflow: auto;
+  padding: 0.5rem;
+  background: #0b0d10;
+  color: #e7e9ee;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+.review-error {
+  color: var(--critical);
+}
+.review-others summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
