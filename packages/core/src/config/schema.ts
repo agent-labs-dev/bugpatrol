@@ -432,6 +432,42 @@ export const agentsSchema = z
       .object({
         /** The claim check: test what the pull request says it does. Off until a team opts in. */
         claims: z.boolean().default(false),
+        /**
+         * The benchmarks that can measure a speed claim. The judge picks from
+         * these only. Each command runs in the worktree of a build, and starts
+         * what it measures itself.
+         */
+        benches: z
+          .array(
+            z.object({
+              name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lowercase letters, digits and dashes'),
+              command: z.string().min(1),
+              /** What the number means, with its unit: 'p99 latency in ms'. */
+              metric: z.string().min(1),
+              /** A regular expression whose first group is the number in the output of the command. */
+              parse: z.string().refine((value) => {
+                try {
+                  new RegExp(value);
+                  return true;
+                } catch {
+                  return false;
+                }
+              }, 'Use a valid regular expression'),
+              better: z.enum(['lower', 'higher']).default('lower'),
+              /** Runs on each build, alternating between the builds. */
+              runs: z.number().int().positive().default(5),
+              timeoutMs: z
+                .number()
+                .int()
+                .positive()
+                .default(10 * 60 * 1000),
+            }),
+          )
+          .default([])
+          .refine(
+            (benches) => new Set(benches.map((bench) => bench.name)).size === benches.length,
+            'Give each benchmark its own name',
+          ),
         /** Limits for the claim check of one review, across its sessions. */
         maxSteps: z.number().int().positive().default(60),
         budgetUsd: z.number().nonnegative().optional(),

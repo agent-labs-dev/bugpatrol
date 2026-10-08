@@ -62,6 +62,13 @@ agents:
     claims: false               # the claim check of `bugpatrol review`: test what the pull request says it does
     maxSteps: 60                # the step limit of the claim check
     budgetUsd: 2                # optional: its cost limit in USD; no limit by default
+    benches:                    # optional: benchmarks that can measure a speed claim
+      - name: settings-load
+        command: hyperfine --runs 10 'node scripts/load-settings.js' # runs in each build's worktree
+        metric: mean time in ms
+        parse: 'Time \(mean ± σ\):\s+([\d.]+) ms' # the first group is the number
+        better: lower           # lower | higher
+        runs: 5                 # runs on each build, alternating between the builds
   memory:
     enabled: true
   checks: []                    # optional automatic checks, for example [usability/contrast, usability/tap-target]

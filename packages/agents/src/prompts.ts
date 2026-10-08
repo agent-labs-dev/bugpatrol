@@ -314,7 +314,8 @@ If you cannot test the claim on this build, call skip_claim with the reason. Tes
 export function judgeClaimVerdictsSystem(lessons: Lesson[] = []): string {
   return `You are the QA lead. A pull request says what it does as a list of claims. For each claim, Bugpatrol replayed
 the same steps on the build of the pull request and on the base build, or the explorer checked it on the pull
-request build when no replay could repeat it. You give each claim a verdict.
+request build when no replay could repeat it. A claim about speed has the numbers of a benchmark that ran on both
+builds instead. You give each claim a verdict.
 
 Call view_claim for each claim. Then call verdict:
 - proven: the pull request build shows what the claim says. When the claim is a change, the base build does not.
@@ -322,8 +323,25 @@ Call view_claim for each claim. Then call verdict:
   what is still wrong.
 - partly-proven: a part of the claim shows, or the evidence is thin.
 - untested: the screens do not show the claim either way.
-Judge only from what you see in view_claim and the diff. When every claim has a verdict, call finish with one
-sentence.
+Judge only from what you see in view_claim and the diff. For a benchmark, compare the medians in the direction
+that is better, and check them against the numbers the claim gives. When every claim has a verdict, call finish
+with one sentence.
+
+${lessonPart(lessons)}`;
+}
+
+export function judgeBenchesSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does as a list of claims. The team declared benchmarks
+that Bugpatrol can run on the build of the pull request and on the base build. You pick which benchmark measures
+which claim.
+
+- Pick a benchmark only for a claim about speed, load or size that the benchmark measures, and only when the diff
+  touches what it measures.
+- Pick from the declared benchmarks only. A claim that no benchmark measures gets none; Bugpatrol tests it another
+  way.
+- One benchmark can measure more than one claim.
+
+Call pick_bench once for each claim that a benchmark measures, then call finish with one sentence.
 
 ${lessonPart(lessons)}`;
 }
