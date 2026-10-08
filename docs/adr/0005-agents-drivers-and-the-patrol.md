@@ -120,19 +120,20 @@ the issue returns it to filed.
 ### 8. State on disk
 
 All agent state is files under `.bugpatrol/`, so the dashboard can read it and a
-human can audit it:
+human can audit it. The routines and the app map are committed (ADR 0006).
+Everything else is in the gitignored `runs/` folder:
 
 | Path | Content |
 |---|---|
-| `appmap.json` | Screens that the explorer found, with the routine to each one |
-| `routines/*.json` | Replayable action lists |
-| `issues/*.json` | Judged issues, with evidence and status |
-| `fixes/*.json` | Fix proposals: branch, diff, verification |
-| `sessions/<id>/events.jsonl` | Each agent step: tool call, result, cost |
-| `sessions/<id>/*.png` | Screenshots for each step |
-| `triage.json` | The judge's decisions, by fingerprint |
-| `agent-baselines/` | The baseline screenshot and snapshot of each screen |
-| `agents.json` | The current status of each role |
+| `appmap.json` | Committed. Screens that the explorer found, with the routine to each one |
+| `routines/*.json` | Committed. Replayable action lists, and the repro routine of each issue |
+| `runs/issues/*.json` | Judged issues, with evidence and status |
+| `runs/fixes/*.json` | Fix proposals: branch, diff, verification |
+| `runs/sessions/<id>/events.jsonl` | Each agent step: tool call, result, cost |
+| `runs/sessions/<id>/*.png` | Screenshots for each step |
+| `runs/triage.json` | The judge's decisions, by fingerprint |
+| `runs/agent-baselines/` | The baseline screenshot and snapshot of each screen |
+| `runs/agents.json` | The current status of each role |
 
 ### 9. Noise control
 

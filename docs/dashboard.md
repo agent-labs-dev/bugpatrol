@@ -48,8 +48,8 @@ The dashboard shows the files that the agents write. You can also read them dire
 | `.bugpatrol/runs/issues/<id>.json` | One issue: title, severity, status, the judge's report and reason, and the evidence |
 | `.bugpatrol/runs/fixes/<id>.json` | One fix: branch, diff, retests, and PR |
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session: its actions and screenshots |
-| `.bugpatrol/runs/appmap.json` | The screens and how they connect |
-| `.bugpatrol/runs/routines/` | The learned routines |
+| `.bugpatrol/appmap.json` | The screens and how they connect. Committed |
+| `.bugpatrol/routines/` | The learned routines and the issue repros. Committed |
 | `.bugpatrol/runs/memory.json` | The lessons |
 | `.bugpatrol/runs/agents.json` | What each agent does now |
 | `.bugpatrol/runs/publish/` | The reports from `publish --dry-run` |

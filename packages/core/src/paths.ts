@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 
 /**
  * Everything Bugpatrol owns lives in one folder at the project root:
@@ -7,6 +7,8 @@ import { dirname, join, resolve } from 'node:path';
  *   .bugpatrol/
  *     bugpatrol.yml      committed: the config
  *     instructions.md    committed: the app guide for the explorer
+ *     appmap.json        committed: the screens the explorer found
+ *     routines/          committed: replayable flows, including issue repros
  *     runs/              gitignored: sessions, issues, fixes, worktrees, memory
  *
  * The gate's committed manifest is small, diffs cleanly, and makes a baseline
@@ -72,7 +74,8 @@ export const paths = {
   run: (root: string, runId: string) => data(root, 'gate', recordId(runId)),
   /** Progress for the gate run currently in flight. Rewritten per screen. */
   live: (root: string) => data(root, 'gate', 'live.json'),
-  appMap: (root: string) => data(root, 'appmap.json'),
+  /** Committed. Small JSON with no pixels, so a fresh clone knows the app (ADR 0006). */
+  appMap: (root: string) => join(dir(root), 'appmap.json'),
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
   triage: (root: string) => data(root, 'triage.json'),
   memory: (root: string) => data(root, 'memory.json'),
@@ -80,8 +83,9 @@ export const paths = {
   agentBaseline: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.png`),
   agentBaselineSnapshot: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.snapshot.json`),
   worktrees: (root: string) => data(root, 'worktrees'),
-  routines: (root: string) => data(root, 'routines'),
-  routine: (root: string, id: string) => data(root, 'routines', `${recordId(id)}.json`),
+  /** Committed, so a fresh clone can replay a routine and an issue's repro (ADR 0006). */
+  routines: (root: string) => join(dir(root), 'routines'),
+  routine: (root: string, id: string) => join(dir(root), 'routines', `${recordId(id)}.json`),
   issues: (root: string) => data(root, 'issues'),
   issue: (root: string, id: string) => data(root, 'issues', `${recordId(id)}.json`),
   fixes: (root: string) => data(root, 'fixes'),
@@ -136,6 +140,39 @@ export function legacyLayout(root: string): string | undefined {
     `  mkdir -p ${BUGPATROL_DIR} && mv ${LEGACY_CONFIG_FILENAME} ${BUGPATROL_DIR}/${CONFIG_FILENAME} && mv instructions.md ${BUGPATROL_DIR}/`,
     `Then remove the \`instructions:\` line from ${BUGPATROL_DIR}/${CONFIG_FILENAME}.`,
     `Bugpatrol now writes its local data in ${BUGPATROL_DIR}/${DATA_DIR}/. Add ${BUGPATROL_DIR}/${DATA_DIR}/ to .gitignore.`,
+  ].join('\n');
+}
+
+/**
+ * Earlier versions kept routines and the app map in the gitignored run
+ * directory. Moves them next to the config, once, and returns what it did,
+ * or undefined when there was nothing to move. A routine that is already in
+ * the committed folder wins over an old copy with the same id.
+ */
+export function moveRoutines(root: string): string | undefined {
+  const oldRoutines = data(root, 'routines');
+  const oldMap = data(root, 'appmap.json');
+  const hasRoutines = existsSync(oldRoutines);
+  const hasMap = existsSync(oldMap);
+  if (!hasRoutines && !hasMap) return undefined;
+  let moved = 0;
+  if (hasRoutines) {
+    mkdirSync(paths.routines(root), { recursive: true });
+    for (const name of readdirSync(oldRoutines).filter((file) => file.endsWith('.json'))) {
+      const target = join(paths.routines(root), name);
+      if (existsSync(target)) continue;
+      renameSync(join(oldRoutines, name), target);
+      moved += 1;
+    }
+    rmSync(oldRoutines, { recursive: true, force: true });
+  }
+  const movedMap = hasMap && !existsSync(paths.appMap(root));
+  if (movedMap) renameSync(oldMap, paths.appMap(root));
+  else rmSync(oldMap, { force: true });
+  const where = relative(root, dir(root));
+  return [
+    `Moved ${moved} routine(s)${movedMap ? ' and the app map' : ''} from ${where}/${DATA_DIR}/ to ${where}/.`,
+    `Commit them (${where}/routines/ and ${where}/appmap.json) so CI and a fresh clone can replay them.`,
   ].join('\n');
 }
 

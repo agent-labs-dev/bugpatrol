@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { type BugpatrolConfig, type FixProposal, type Issue, judgedRetests } from '@bugpatrol/core';
+import { type BugpatrolConfig, type FixProposal, type Issue, judgedRetests, type Routine } from '@bugpatrol/core';
+import { reproRoutineId } from './report.js';
 import { commitFix } from './roles/fixer.js';
 import { dismissedFingerprints, Workspace } from './workspace.js';
 
@@ -406,6 +407,17 @@ export async function createIssue(
       ]),
     ),
   );
+}
+
+/**
+ * The committed routine that reproduces a Bugpatrol issue, found from the
+ * issue number alone: the body names it, and `root` holds the committed
+ * routines. Undefined for an issue with no marker or a routine that is gone.
+ */
+export async function issueRepro(gh: Gh, repo: string, number: number, root: string): Promise<Routine | undefined> {
+  const body = await gh(['issue', 'view', String(number), '--repo', repo, '--json', 'body', '-q', '.body']);
+  const id = reproRoutineId(body);
+  return id ? new Workspace(root).readRoutine(id) : undefined;
 }
 
 export async function closeIssue(
