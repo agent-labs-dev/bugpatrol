@@ -67,7 +67,6 @@ export async function pickBenches(ctx: ReviewContext, review: PrReview, claims: 
       `CLAIMS\n${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}`,
     ].join('\n\n'),
     tools,
-    minSteps: claims.length + 4,
     summary: () => `PR #${pr.number}: ${picks.size} claim(s) to measure`,
   });
   return picks;
@@ -97,6 +96,10 @@ export async function runBenches(
   if (picked.length)
     await worktrees(async (dirs) => {
       for (const bench of picked) {
+        if (ctx.budget.late) {
+          results.set(bench.name, { kind: 'failed', reason: ctx.budget.late });
+          continue;
+        }
         const pattern = new RegExp(bench.parse);
         const values = { head: [] as number[], base: [] as number[] };
         try {

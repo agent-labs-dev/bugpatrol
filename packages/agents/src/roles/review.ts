@@ -50,7 +50,7 @@ import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
-import { claimJudge } from './claim-judge.js';
+import { ClaimBudget, claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
 import { linkEnvFiles, stepWords } from './fixer.js';
@@ -152,6 +152,8 @@ export type ReviewContext = {
   pr: PullRequest;
   opts: ReviewOptions;
   log: (message: string) => void;
+  /** The limits of the claim check, across its sessions. */
+  budget: ClaimBudget;
 };
 
 const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
@@ -329,6 +331,7 @@ async function exploreHead(
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, ctx.log);
     opts.onSession?.(session);
     const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.explorer.use);
+    const claimWork = claims.length ? claimTools(session, ctx, claims, flows) : undefined;
     const maxSteps = opts.maxSteps ?? config.agents.explorer.maxSteps;
     const guide = instructionsPath(root, config.app.instructions);
     await session.activity(`Reviewing PR #${pr.number}`, 0, runtime.label);
@@ -358,8 +361,8 @@ async function exploreHead(
               ].join('\n\n'),
               tools: [
                 ...explorerTools(session, { replay: { save: false } }).filter((tool) => REVIEW_TOOLS.has(tool.name)),
-                ...(claims.length ? claimTools(session, ctx, claims, flows) : []),
-              ].map((tool) => stopOnCancellation(session, tool)),
+                ...(claimWork?.tools ?? []),
+              ].map((tool) => stopOnCancellation(session, claimWork ? claimWork.meter(tool) : tool)),
               maxSteps,
               budgetUsd: config.agents.explorer.budgetUsd,
               timeoutMs: config.agents.explorer.timeoutMs,
@@ -372,6 +375,7 @@ async function exploreHead(
         throw new InfrastructureError(
           `The explorer did not finish (${outcome.stop}): ${outcome.error ?? outcome.summary ?? 'no result'}`,
         );
+      claimWork?.charge(outcome);
       const candidates = await workspace.readCandidates(record.id);
       review.costUsd += outcome.costUsd;
       review.tested =
@@ -731,7 +735,6 @@ async function classifyClaims(ctx: ReviewContext, review: PrReview, texts: strin
       `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
     ].join('\n\n'),
     tools,
-    minSteps: claims.length + 2,
     summary: () =>
       `PR #${pr.number}: ${claims.filter((claim) => claim.testable).length} of ${claims.length} claim(s) testable`,
   });
@@ -889,9 +892,11 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       const toExplore = toTest.filter((claim) => explorable(claim) && !picks.has(claim.id));
       const candidates = await exploreHead(ctx, review, toExplore, flows);
       if (claims) {
-        const measured = await runBenches(ctx, picks, (run) =>
-          withWorktree(ctx, 'base', pr.base, (base) =>
-            withWorktree(ctx, 'head', pr.head, (head) => run({ head, base })),
+        const measured = await ctx.budget.timed(() =>
+          runBenches(ctx, picks, (run) =>
+            withWorktree(ctx, 'base', pr.base, (base) =>
+              withWorktree(ctx, 'head', pr.head, (head) => run({ head, base })),
+            ),
           ),
         );
         const build = <T>(
@@ -1130,7 +1135,8 @@ export async function reviewPullRequest(
       allowFork: Boolean(opts.allowFork),
       claims: claimCheck({ config, opts }),
     });
-    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log };
+    const budget = new ClaimBudget(config.agents.review);
+    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log, budget };
     const last = await workspace.readReview(number);
     let review: PrReview;
     const covered = last && (last.claims || !claimCheck(ctx)) && (last.check || !blocking(ctx));

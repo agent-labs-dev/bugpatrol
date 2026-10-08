@@ -1191,6 +1191,80 @@ describe('claim check', { timeout: 30_000 }, () => {
   });
 });
 
+describe('claim check limits', { timeout: 30_000 }, () => {
+  const review = async (limits: Record<string, unknown>) => {
+    const f = await fixture();
+    const app = builds(f.root);
+    const { gh } = fakeGh({
+      body: claimsBody('The dark mode switch makes the page dark.', 'The switch keeps its state.'),
+    });
+    // Each scripted session takes 3 steps and $0.50. The claim work of the explorer is 5 tool calls for each flow.
+    const agents = claimAgents({
+      explore: { 'claim-1': 'flow', 'claim-2': 'flow' },
+      verdicts: {
+        'claim-1': { verdict: 'proven', reason: 'Dark.' },
+        'claim-2': { verdict: 'proven', reason: 'Kept.' },
+      },
+    });
+    const result = await reviewPullRequest(f.root, claimConfig(app.prepare, { enabled: false }, limits), 7, {
+      gh,
+      createRuntime: agents.createRuntime,
+      createDriver: app.createDriver,
+      dryRun: true,
+    });
+    return { f, review: result, agents, app };
+  };
+
+  it('counts the steps of every session of the claim check against one limit, and leaves the rest untested', async () => {
+    const { f, review: result, agents, app } = await review({ maxSteps: 6 });
+    try {
+      // The judge that read the claims took 3 steps, and the claim work on claim-1 took 5: no step is left.
+      const reason =
+        'The claim check reached its limit of 6 model steps (agents.review.maxSteps) before it finished this claim.';
+      expect(result.claims).toMatchObject([
+        { claim: { id: 'claim-1' }, verdict: 'untested', reason, head: { ok: true } },
+        { claim: { id: 'claim-2' }, verdict: 'untested', reason },
+      ]);
+      // claim-2 never started, and no judge gave a verdict.
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
+      expect(app.drivers.head).toHaveLength(2);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('counts the cost of every session of the claim check against one limit', async () => {
+    const { f, review: result, agents } = await review({ budgetUsd: 0.5 });
+    try {
+      const reason =
+        'The claim check reached its cost limit of $0.50 (agents.review.budgetUsd) before it finished this claim.';
+      expect(result.claims).toMatchObject([
+        { verdict: 'untested', reason },
+        { verdict: 'untested', reason },
+      ]);
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('counts the time of the claim check against one limit, also the replays', async () => {
+    const { f, review: result, app } = await review({ timeoutMs: 1 });
+    try {
+      const reason =
+        'The claim check reached its time limit of 1 ms (agents.review.timeoutMs) before it finished this claim.';
+      expect(result.claims).toMatchObject([
+        { verdict: 'untested', reason },
+        { verdict: 'untested', reason },
+      ]);
+      // The explorer only: nothing was left to replay.
+      expect(app.drivers.head).toHaveLength(1);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
 /** Reads `time: <n> ms` from the output of a benchmark. */
 const TIME = 'time: (\\d+(?:\\.\\d+)?) ms';
 

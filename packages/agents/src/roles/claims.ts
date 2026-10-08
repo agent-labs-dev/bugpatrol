@@ -184,19 +184,33 @@ function assertionsOf(
   return assert;
 }
 
+const CLAIM_TOOLS = new Set(['start_claim', 'save_claim', 'note_claim', 'skip_claim']);
+
 /**
  * The explorer tools of the claim check. A claim routine holds every step
  * from the start of the app, also the steps of the routines it began with,
  * so it replays on a build that does not have those routines. It goes into
  * the run directory of the review, never into the routines of the patrol.
+ *
+ * The explorer hunts for bugs in the same session, so only its claim work
+ * counts against the limits of the claim check: `meter` counts each tool
+ * call of the claim tools or inside a started claim, and the clock runs
+ * from start_claim until the claim is saved. `charge` takes the same share
+ * of the cost of the session once it ends. With no limit left, start_claim
+ * refuses, and the claims left over stay untested.
  */
 export function claimTools(
   session: AgentSession,
-  ctx: Pick<ReviewContext, 'root' | 'pr'>,
+  ctx: Pick<ReviewContext, 'root' | 'pr' | 'budget'>,
   claims: Claim[],
   flows: Map<string, ClaimFlow>,
-): Tool[] {
+): { tools: Tool[]; meter: (tool: Tool) => Tool; charge: (outcome: { steps: number; costUsd: number }) => void } {
   let started: string | undefined;
+  let claimSteps = 0;
+  const end = () => {
+    if (started) ctx.budget.stop();
+    started = undefined;
+  };
   const checks = CHECKS[session.config.app.platform];
   const redact = (value: unknown) => session.vars.redact(String(value ?? '').trim()) as string;
   const known = (input: Record<string, unknown>) => claims.find((claim) => claim.id === input.claim);
@@ -204,7 +218,7 @@ export function claimTools(
     ...response(`Unknown claim. The claims to test: ${claims.map((claim) => claim.id).join(', ')}.`),
     isError: true,
   });
-  return [
+  const tools: Tool[] = [
     {
       name: 'start_claim',
       description:
@@ -214,6 +228,9 @@ export function claimTools(
       async run(input) {
         const claim = known(input);
         if (!claim) return unknown();
+        if (ctx.budget.spent) return { ...response(`${ctx.budget.spent} Start no other claim.`), isError: true };
+        end();
+        ctx.budget.start();
         started = claim.id;
         session.anchor = { index: session.trail.length };
         return response(`Started ${claim.id}. Each step from now on is in its flow.`);
@@ -288,7 +305,7 @@ export function claimTools(
           routine,
           path: relative(ctx.root, file),
         });
-        started = undefined;
+        end();
         if (same)
           return response(
             `Saved the flow of ${claim.id} (${steps.length} steps). Bugpatrol compares ${checks!.same} on both builds.`,
@@ -322,6 +339,7 @@ export function claimTools(
           saw: redact(input.saw),
           reason: redact(input.reason),
         });
+        end();
         return response(`Noted ${claim.id}.`);
       },
     },
@@ -335,10 +353,32 @@ export function claimTools(
         const reason = redact(input.reason);
         if (!reason) return { ...response('Say in reason why you cannot test the claim.'), isError: true };
         flows.set(claim.id, { kind: 'skip', reason });
+        end();
         return response(`Skipped ${claim.id}.`);
       },
     },
   ];
+  return {
+    tools,
+    meter: (tool) => ({
+      ...tool,
+      async run(input) {
+        const counts = Boolean(started) || CLAIM_TOOLS.has(tool.name);
+        try {
+          return await tool.run(input);
+        } finally {
+          if (counts) {
+            claimSteps++;
+            ctx.budget.spend({ steps: 1 });
+          }
+        }
+      },
+    }),
+    charge(outcome) {
+      end();
+      if (outcome.steps) ctx.budget.spend({ costUsd: outcome.costUsd * Math.min(1, claimSteps / outcome.steps) });
+    },
+  };
 }
 
 /** A replay of each build, and `again`: the second replay on the pull request build. */
@@ -410,6 +450,8 @@ async function replayClaims(
   let status: 'finished' | 'failed' = 'finished';
   try {
     for (const [claim, routine] of routines) {
+      // The claims left over have no replay, and their findings say why.
+      if (ctx.budget.late) break;
       const current = first ? driver : await fresh();
       first = false;
       const session = new AgentSession(root, config, vars, record.id, 'explorer', current, ctx.log);
@@ -591,7 +633,6 @@ async function judgeClaims(
       `CLAIMS\n${tested.map((item) => `- ${item.claim.id}: ${item.claim.text}`).join('\n')}`,
     ].join('\n\n'),
     tools,
-    minSteps: tested.length * 2 + 4,
     summary: () => `PR #${pr.number}: ${verdicts.size} of ${tested.length} claim(s) judged`,
   });
   return verdicts;
@@ -619,7 +660,7 @@ export async function checkClaims(
   measured: Map<string, Measured>,
   build: StartBuild,
 ): Promise<ClaimFinding[]> {
-  const { pr } = ctx;
+  const { pr, budget } = ctx;
   const routines = (keep: (claim: string) => boolean) =>
     new Map(
       [...flows]
@@ -627,18 +668,20 @@ export async function checkClaims(
         .map(([claim, flow]) => [claim, (flow as Replayed).routine]),
     );
   const head = routines(() => true);
-  const headReplays = head.size
-    ? await build('head', pr.head, (driver, vars, fresh) =>
-        replayClaims(ctx, review, 'head', head, driver, vars, fresh),
-      )
-    : new Map<string, ClaimReplay>();
+  const headReplays =
+    head.size && !budget.late
+      ? await budget.timed(() =>
+          build('head', pr.head, (driver, vars, fresh) => replayClaims(ctx, review, 'head', head, driver, vars, fresh)),
+        )
+      : new Map<string, ClaimReplay>();
   // A flow that stops on the pull request build proves nothing on the base build.
   const base = routines((claim) => Boolean(headReplays.get(claim)?.ok));
-  const baseReplays = base.size
-    ? await build('base', pr.base, (driver, vars, fresh) =>
-        replayClaims(ctx, review, 'base', base, driver, vars, fresh),
-      )
-    : new Map<string, ClaimReplay>();
+  const baseReplays =
+    base.size && !budget.late
+      ? await budget.timed(() =>
+          build('base', pr.base, (driver, vars, fresh) => replayClaims(ctx, review, 'base', base, driver, vars, fresh)),
+        )
+      : new Map<string, ClaimReplay>();
   const tested: Tested[] = [];
   for (const claim of claims) {
     const flow = flows.get(claim.id);
@@ -652,12 +695,13 @@ export async function checkClaims(
       tested.push({ claim, flow, head: headReplays.get(claim.id), base: baseReplays.get(claim.id) });
   }
   const verdicts = tested.length ? await judgeClaims(ctx, review, tested) : new Map();
+  const noVerdict = () => budget.spent ?? 'The judge gave no verdict.';
   return claims.map((claim): ClaimFinding => {
     const bench = measured.get(claim.id);
     if (bench?.kind === 'failed') return { claim, verdict: 'untested', reason: bench.reason };
     if (bench) {
       const judged = verdicts.get(claim.id);
-      if (!judged) return { claim, verdict: 'untested', reason: 'The judge gave no verdict.', bench: bench.bench };
+      if (!judged) return { claim, verdict: 'untested', reason: noVerdict(), bench: bench.bench };
       // Inside the noise, a benchmark neither proves nor disproves a claim.
       const noise = overlaps(bench.bench) && judged.verdict !== 'untested';
       return {
@@ -672,8 +716,13 @@ export async function checkClaims(
       };
     }
     const flow = flows.get(claim.id);
-    if (!flow) return { claim, verdict: 'untested', reason: 'The explorer did not reach this claim.' };
+    if (!flow) return { claim, verdict: 'untested', reason: budget.spent ?? 'The explorer did not reach this claim.' };
     if (flow.kind === 'skip') return { claim, verdict: 'untested', reason: flow.reason };
+    // A claim whose replays the limits cut off has nothing to compare.
+    const cut = budget.late;
+    const first = headReplays.get(claim.id);
+    if (cut && flow.kind !== 'note' && (!first || (first.ok && !baseReplays.has(claim.id))))
+      return { claim, verdict: 'untested', reason: cut };
     if (flow.kind === 'repro') return reproFinding(claim, flow, headReplays.get(claim.id), baseReplays.get(claim.id));
     const shown = {
       did: flow.did,
@@ -698,7 +747,7 @@ export async function checkClaims(
       return assertionFinding(claim, replay!, baseReplays.get(claim.id), shown);
     if (flow.kind === 'flow' && flow.routine.same) return sameFinding(claim, replay!, baseReplays.get(claim.id), shown);
     const judged = verdicts.get(claim.id);
-    if (!judged) return { claim, verdict: 'untested', reason: 'The judge gave no verdict.', ...shown };
+    if (!judged) return { claim, verdict: 'untested', reason: noVerdict(), ...shown };
     return {
       claim,
       verdict: judged.verdict,
@@ -882,8 +931,15 @@ export async function replayDisproofs(
     if (flow?.kind === 'flow' || flow?.kind === 'repro') routines.set(finding.claim.id, flow.routine);
   }
   if (!routines.size) return findings;
-  const again = await build('head', ctx.pr.head, (driver, vars, fresh) =>
-    replayClaims(ctx, review, 'again', routines, driver, vars, fresh),
+  if (ctx.budget.late) {
+    // With no second replay, a disproof stays a comment.
+    ctx.log(`No second replay of the disproved claims. ${ctx.budget.late}`);
+    return findings;
+  }
+  const again = await ctx.budget.timed(() =>
+    build('head', ctx.pr.head, (driver, vars, fresh) =>
+      replayClaims(ctx, review, 'again', routines, driver, vars, fresh),
+    ),
   );
   const differs = new Map<string, string | undefined>();
   for (const finding of findings) {
@@ -895,11 +951,14 @@ export async function replayDisproofs(
       ([claim, routine]) => (routine.same || routine.bug) && differs.has(claim) && !differs.get(claim),
     ),
   );
-  const againBase = bases.size
-    ? await build('base', ctx.pr.base, (driver, vars, fresh) =>
-        replayClaims(ctx, review, 'againBase', bases, driver, vars, fresh),
-      )
-    : new Map<string, ClaimReplay>();
+  const againBase =
+    bases.size && !ctx.budget.late
+      ? await ctx.budget.timed(() =>
+          build('base', ctx.pr.base, (driver, vars, fresh) =>
+            replayClaims(ctx, review, 'againBase', bases, driver, vars, fresh),
+          ),
+        )
+      : new Map<string, ClaimReplay>();
   const out: ClaimFinding[] = [];
   for (const finding of findings) {
     const second = again.get(finding.claim.id);
@@ -907,7 +966,8 @@ export async function replayDisproofs(
     const baseDiffers = secondBase && difference(finding.base, secondBase);
     const why = differs.get(finding.claim.id) ?? (baseDiffers && `on the base build, ${baseDiffers}`);
     const repeated = { again: second, ...(secondBase ? { againBase: secondBase } : {}) };
-    if (!second) out.push(finding);
+    // A disproof that rests on both builds and has no second base replay stays a comment.
+    if (!second || (!why && bases.has(finding.claim.id) && !secondBase)) out.push(finding);
     else if (!why) out.push({ ...finding, ...repeated });
     else {
       const { evidence: _evidence, ...rest } = finding;

@@ -481,7 +481,7 @@ export const agentsSchema = z
          */
         block: z.boolean().default(false),
         /** Limits for the claim check of one review, across its sessions. */
-        maxSteps: z.number().int().positive().default(60),
+        maxSteps: z.number().int().positive().default(150),
         budgetUsd: z.number().nonnegative().optional(),
         timeoutMs: z
           .number()

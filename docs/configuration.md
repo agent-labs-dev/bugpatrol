@@ -61,8 +61,9 @@ agents:
   review:
     claims: false               # the claim check of `bugpatrol review`: test what the pull request says it does
     block: false                # set a check run that fails on a disproof from a replay (needs `checks: write`)
-    maxSteps: 60                # the step limit of the claim check
-    budgetUsd: 2                # optional: its cost limit in USD; no limit by default
+    maxSteps: 150               # the model steps of one claim check, across all its sessions
+    budgetUsd: 2                # optional: its cost limit in USD, across all its sessions; no limit by default
+    timeoutMs: 1200000          # its time limit: its judges, its claim work in the explorer, its replays and benchmarks
     benches:                    # optional: benchmarks that can measure a speed claim
       - name: settings-load
         command: hyperfine --runs 10 'node scripts/load-settings.js' # runs in each build's worktree
