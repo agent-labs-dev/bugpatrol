@@ -11,6 +11,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol fix [--issue <id>]` | Fix the worst open issues, then retest each fix |
 | `bugpatrol retest --issue <id>` | Retest one fix in the app, from its worktree |
 | `bugpatrol review <pr> [--dry-run] [--force] [--claims] [--steps N]` | Review one pull request in the running app, and post a GitHub review of what it introduces. Refer to [GitHub](github.md#7-review-a-pull-request) |
+| `bugpatrol promote <pr> <claim>...` | Keep the routine of each proven claim of a merged pull request as `.bugpatrol/routines/pr-<pr>-<claim>.json`. Commit it, and the patrol replays it. It refuses a pull request that is not merged and a claim that is not proven. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol publish [--issue <id>] [--dry-run]` | Open PRs and issues on GitHub, or write them to local files. Refer to [GitHub](github.md) |
 | `bugpatrol ci [--issue <id>] [--wait]` | Watch the CI checks of each Bugpatrol PR, and let the fixer fix a failed check. Refer to [GitHub](github.md#5-make-ci-green) |
 | `bugpatrol [--once] [--force]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again |
