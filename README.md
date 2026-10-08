@@ -117,6 +117,8 @@ PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium
    .bugpatrol/
      bugpatrol.yml     # the config: commit it
      instructions.md    # the app guide for the explorer: commit it
+     appmap.json        # the screens the explorer found: commit it
+     routines/          # the routines Bugpatrol replays with no model: commit them
      runs/              # sessions, issues, fixes, and screenshots: git ignores it
    ```
 
@@ -194,7 +196,7 @@ npx bugpatrol dashboard              # http://127.0.0.1:4311
 npx bugpatrol dashboard --port 5000  # use a different port
 ```
 
-The dashboard reads the files in `.bugpatrol/runs/`, so it works during a patrol and after it. It has these pages:
+The dashboard reads the files in `.bugpatrol/`, so it works during a patrol and after it. It has these pages:
 
 | Page | What it shows |
 | --- | --- |

@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createIssue, createPr, ensureAssetsBranch, type Gh, listFiled, syncGitHub, uploadImage } from './github.js';
+import {
+  createIssue,
+  createPr,
+  ensureAssetsBranch,
+  type Gh,
+  issueRepro,
+  listFiled,
+  syncGitHub,
+  uploadImage,
+} from './github.js';
 import { Workspace } from './workspace.js';
 
 let dirs: string[] = [];
@@ -324,5 +333,32 @@ describe('GitHub state sync', () => {
       expect(Object.keys((await f.workspace.readTriage()).fingerprints).sort()).toEqual(['candidate-fp', 'issue-fp']);
       expect((await f.workspace.readMemory()).lessons[0]).toMatchObject({ role: 'judge', source: 'human' });
     }
+  });
+});
+
+describe('issueRepro', () => {
+  it("finds an issue's committed repro routine from a fresh clone and the issue number", async () => {
+    const clone = await temp();
+    const routine = {
+      version: 1 as const,
+      id: 'repro-abc',
+      description: 'Reproduces: Save does nothing',
+      platform: 'web' as const,
+      requires: ['enter-app'],
+      steps: [{ kind: 'tap' as const, target: { name: 'Save' } }],
+      createdAt: 'now',
+      updatedAt: 'now',
+    };
+    await new Workspace(clone).saveRoutine(routine);
+    const calls: string[][] = [];
+    const gh: Gh = async (args) => {
+      calls.push(args);
+      if (args[2] === '123') return 'Save does nothing.\n\n<!-- bugpatrol:routine repro-abc -->\n\n---';
+      return 'A bug a person filed, with no marker.';
+    };
+
+    expect(await issueRepro(gh, 'o/r', 123, clone)).toEqual(routine);
+    expect(calls[0]).toEqual(['issue', 'view', '123', '--repo', 'o/r', '--json', 'body', '-q', '.body']);
+    expect(await issueRepro(gh, 'o/r', 9, clone)).toBeUndefined();
   });
 });

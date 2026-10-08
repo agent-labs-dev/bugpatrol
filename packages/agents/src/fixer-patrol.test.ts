@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { type Candidate, type FixProposal, type Issue, parseConfig, paths } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { pullSource, runPatrol } from './patrol.js';
+import { pullSource, runPatrol, sourceCommit } from './patrol.js';
 import { runFixer } from './roles/fixer.js';
 import { recheckMerged, retestFix, retestTargets, runFixCycle } from './roles/retest.js';
 import { AgentSession } from './session.js';
@@ -814,6 +814,34 @@ describe('patrol pull', () => {
       expect(await pullSource(f.root, f.config, (message) => logs.push(message))).toBe(false);
       expect(logs[0]).toContain('uncommitted changes');
       expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('work in progress\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('pulls over routines and an app map that the patrol changed and did not commit', async () => {
+    const f = await remoteFixture();
+    try {
+      const other = join(f.root, 'other');
+      await mkdir(join(other, '.bugpatrol', 'routines'), { recursive: true });
+      await writeFile(join(other, '.bugpatrol', 'appmap.json'), '{"screens":[]}\n');
+      await writeFile(join(other, '.bugpatrol', 'routines', 'enter-app.json'), '{"id":"enter-app"}\n');
+      await git(other, 'add', '-A');
+      await git(other, 'commit', '-qm', 'routines');
+      await git(other, 'push', '-q', 'origin', `HEAD:${f.branch}`);
+      // The patrol checks out the source repo; config and routines sit in it.
+      const config = parseConfig({ ...f.config, app: { ...f.config.app, source: '.' } });
+      expect(await pullSource(f.source, config)).toBe(true);
+      await writeFile(join(other, 'app.txt'), 'fixed again\n');
+      await git(other, 'commit', '-qam', 'again');
+      await git(other, 'push', '-q', 'origin', `HEAD:${f.branch}`);
+      await writeFile(join(f.source, '.bugpatrol', 'appmap.json'), '{"screens":[{"id":"home"}]}\n');
+      await writeFile(join(f.source, '.bugpatrol', 'routines', 'enter-app.json'), '{"id":"enter-app","steps":[]}\n');
+
+      expect(await sourceCommit(f.source, config)).toBe((await git(f.source, 'rev-parse', 'HEAD')).stdout.trim());
+      expect(await pullSource(f.source, config)).toBe(true);
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('fixed again\n');
+      expect(await readFile(join(f.source, '.bugpatrol', 'appmap.json'), 'utf8')).toContain('home');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

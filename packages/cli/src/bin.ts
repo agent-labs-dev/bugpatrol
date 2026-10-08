@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { cleanWorktrees, syncGitHub } from '@bugpatrol/agents';
-import { BugpatrolError, ExitCode, findProjectRoot, loadConfig } from '@bugpatrol/core';
+import { BugpatrolError, ExitCode, findProjectRoot, loadConfig, moveRoutines } from '@bugpatrol/core';
 import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
@@ -39,6 +39,8 @@ try {
     process.stdout.write(commandHelp(command) ?? USAGE);
     process.exit(ExitCode.Clean);
   }
+  const moved = moveRoutines(root);
+  if (moved) process.stderr.write(`${moved}\n`);
   switch (command) {
     case '--version':
     case '-v':

@@ -73,6 +73,8 @@ The command lists each URL:
 Opened 1 PR(s) and 1 issue(s); skipped 0.
 ```
 
+Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue.
+
 `patrol` runs the same step at the end of each cycle.
 
 ### What Bugpatrol publishes

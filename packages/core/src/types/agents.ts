@@ -162,6 +162,8 @@ export type IssueEvidence = {
   /** How to get there, as routine ids and then steps. */
   routineId?: string;
   steps?: RoutineStep[];
+  /** The committed routine that replays `routineId` and then `steps`. Set when the issue is filed. */
+  reproRoutineId?: string;
   console?: string[];
 };
 

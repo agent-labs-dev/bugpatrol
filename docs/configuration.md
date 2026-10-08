@@ -10,6 +10,8 @@ Bugpatrol keeps all of its files in one folder at the root of your project:
 | --- | --- | --- |
 | `.bugpatrol/bugpatrol.yml` | The config | Commit it |
 | `.bugpatrol/instructions.md` | The app guide for the explorer | Commit it |
+| `.bugpatrol/appmap.json` | The screens that the explorer found | Commit it |
+| `.bugpatrol/routines/` | The routines, and the repro routine of each issue. CI and a fresh clone replay them | Commit it |
 | `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots | `init` adds it to `.gitignore` |
 
 The project root is the folder that holds `.bugpatrol/`. All paths in the config (`source`, `cwd`, `instructions`) are relative to the project root. You can run a command from any folder in the project: Bugpatrol finds `.bugpatrol/` in the current folder or in a folder above it.

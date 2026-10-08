@@ -25,7 +25,7 @@ Platforms: `web` (Playwright), `electron` (CDP), `ios` and `android` (Maestro).
 
 The explorer, the judge, and the fixer are LLM agents. Each one runs on a local agent CLI (`claude`, `codex`, `kimi`, or `pi`) or on an API key (OpenRouter, Vercel AI Gateway, OpenAI, Anthropic).
 
-Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model.
+Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model. The routines (`.bugpatrol/routines/`) and the app map (`.bugpatrol/appmap.json`) are committed, so CI and a fresh clone can replay them. Bugpatrol writes them and never commits them: the user does.
 
 ## 2. Configure it for the repo
 
@@ -500,7 +500,8 @@ To summarize the results for the user, read these files:
 | `.bugpatrol/runs/fixes/<id>.json` | One fix: `status`, `branch`, `diff`, `retests`, and `pr` |
 | `.bugpatrol/runs/reviews/pr-<number>.json` | The last review of one pull request: `findings` with a `verdict` each, and `posted.url` |
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session and its screenshots |
-| `.bugpatrol/runs/appmap.json` | The screens that the explorer found |
+| `.bugpatrol/appmap.json` | The screens that the explorer found. Commit it |
+| `.bugpatrol/routines/<id>.json` | The routines, and the repro routine of each issue (`repro-<hash>`). Commit them |
 | `.bugpatrol/runs/memory.json` | The lessons |
 
 Severity, worst first: `critical`, `major`, `minor`, `cosmetic`.
