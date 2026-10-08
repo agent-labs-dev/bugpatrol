@@ -1,0 +1,25 @@
+# The smoke test of the GitHub Action (.github/workflows/review-smoke.yml).
+# It reviews each pull request of this repo against the fixture app.
+version: 1
+
+app:
+  platform: web
+  # The repo root: the review makes its worktrees from it.
+  source: ../..
+  setup:
+    - run: node examples/fixture-app/server.js
+      cwd: ../..
+      background: true
+      readyWhen: fixture-app on http
+      timeoutMs: 30000
+  connect:
+    url: http://localhost:3300/
+
+agents:
+  explorer:
+    maxSteps: 15
+    budgetUsd: 0.5
+  judge:
+    budgetUsd: 0.5
+  github:
+    enabled: true
