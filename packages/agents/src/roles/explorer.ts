@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import { instructionsPath } from '@bugpatrol/core';
+import { noGuide, readGuide } from '../guide.js';
 import { explorerPrompt, explorerSystem } from '../prompts.js';
 import type { AgentSession } from '../session.js';
 import { explorerTools } from '../tools/explorer.js';
@@ -46,14 +45,14 @@ export async function runExplorer(
   const config = session.config.agents.explorer;
   const map = await session.workspace.readAppMap();
   const routines = await session.workspace.listRoutines();
-  const guide = instructionsPath(session.root, session.config.app.instructions);
-  const instructions = guide ? await readFile(guide, 'utf8') : '';
+  const guide = await readGuide(session.root, session.config);
+  if (guide.text === undefined) session.emit({ kind: 'setup', summary: noGuide(session.root, guide) });
   const task = {
     role: 'explorer' as const,
     sessionId: session.sessionId,
     system: explorerSystem(
       session.config.app.platform,
-      instructions,
+      guide.text ?? '',
       lessonsFor(await session.workspace.readMemory(), 'explorer'),
       session.config.agents.checks,
     ),

@@ -308,6 +308,53 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('says in the log and in the review when the app has no guide', async () => {
+    const f = await fixture();
+    try {
+      const { gh, posted } = fakeGh();
+      const logs: string[] = [];
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('introduced').createRuntime,
+        createDriver: screens,
+        onLog: (message) => logs.push(message),
+      });
+      expect(logs).toContain(
+        'Config: .bugpatrol/bugpatrol.yml. No app guide at .bugpatrol/instructions.md, so the explorer runs without one.',
+      );
+      expect(review.files).toEqual({ config: '.bugpatrol/bugpatrol.yml' });
+      expect(posted()[0]!.body).toContain('Bugpatrol found no app guide');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the explorer the app guide, and records which config and guide the review used', async () => {
+    const f = await fixture();
+    try {
+      await mkdir(join(f.root, '.bugpatrol'), { recursive: true });
+      await writeFile(join(f.root, '.bugpatrol', 'instructions.md'), 'You start signed in on the Home screen.\n');
+      const { gh, posted } = fakeGh();
+      const logs: string[] = [];
+      const agents = scripted('introduced');
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: screens,
+        onLog: (message) => logs.push(message),
+        configFile: 'custom.yml',
+      });
+      expect(logs).toContain('Config: custom.yml. App guide: .bugpatrol/instructions.md.');
+      expect(review.files).toEqual({ config: 'custom.yml', guide: '.bugpatrol/instructions.md' });
+      const [explorer, base] = agents.tasks;
+      expect(explorer!.system).toContain('You start signed in on the Home screen.');
+      expect(base!.system).toContain('You start signed in on the Home screen.');
+      expect(posted()[0]!.body).not.toContain('Bugpatrol found no app guide');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps an introduced problem in the review body when the judge names no line', async () => {
     const f = await fixture();
     try {

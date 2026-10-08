@@ -158,6 +158,7 @@ export async function runAgentCommand(
   root: string,
   config: BugpatrolConfig,
   log: (message: string) => void,
+  configFile?: string,
 ): Promise<void> {
   const flags = parseAgentFlags(command, args);
   preflight(command, config);
@@ -254,6 +255,7 @@ export async function runAgentCommand(
         maxSteps: flags.steps as number | undefined,
         // Without the flag, agents.review.claims decides.
         claims: flags.claims ? true : undefined,
+        configFile,
       });
       const count = (verdict: string) => review.findings.filter((finding) => finding.verdict === verdict).length;
       const claims = review.claims ? `${review.claims.length} claim(s), ` : '';

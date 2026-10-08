@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { appendFile, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   type BugpatrolConfig,
@@ -10,7 +10,6 @@ import {
   type ClaimFinding,
   ConfigError,
   InfrastructureError,
-  instructionsPath,
   type Platform,
   type PrReview,
   paths,
@@ -21,6 +20,7 @@ import {
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
+import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
 import { activePatrolPid } from '../patrol.js';
@@ -122,6 +122,8 @@ export type ReviewOptions = {
   replayWindowMs?: number;
   /** Finds which platforms the machine can run. Tests stub it. */
   capabilities?: (platforms: Platform[]) => Promise<Capabilities>;
+  /** The `--config` file that `config` came from, relative to the root. */
+  configFile?: string;
 };
 
 type PullRequest = {
@@ -321,6 +323,7 @@ async function withBuild<T>(
 async function exploreHead(
   ctx: ReviewContext,
   review: PrReview,
+  guide: AppGuide,
   claims: Claim[],
   flows: Map<string, ClaimFlow>,
 ): Promise<Candidate[]> {
@@ -333,7 +336,6 @@ async function exploreHead(
     const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.explorer.use);
     const claimWork = claims.length ? claimTools(session, ctx, claims, flows) : undefined;
     const maxSteps = opts.maxSteps ?? config.agents.explorer.maxSteps;
-    const guide = instructionsPath(root, config.app.instructions);
     await session.activity(`Reviewing PR #${pr.number}`, 0, runtime.label);
     session.emit({ kind: 'session-start', summary: `Reviewing PR #${pr.number}: ${pr.title}` });
     try {
@@ -346,7 +348,7 @@ async function exploreHead(
               sessionId: record.id,
               system: explorerReviewSystem(
                 config.app.platform,
-                guide ? await readFile(guide, 'utf8') : '',
+                guide.text ?? '',
                 lessonsFor(await workspace.readMemory(), 'explorer'),
               ),
               prompt: [
@@ -406,7 +408,12 @@ async function exploreHead(
  * does not start is not the end of the review: the judge then decides from
  * the pull request build and the diff, and says what it could not compare.
  */
-async function captureBase(ctx: ReviewContext, review: PrReview, candidates: Candidate[]): Promise<CaptureTarget[]> {
+async function captureBase(
+  ctx: ReviewContext,
+  review: PrReview,
+  guide: AppGuide,
+  candidates: Candidate[],
+): Promise<CaptureTarget[]> {
   const { root, config, workspace, pr, opts } = ctx;
   const targets: CaptureTarget[] = candidates.map((candidate) => ({
     shot: {
@@ -423,7 +430,6 @@ async function captureBase(ctx: ReviewContext, review: PrReview, candidates: Can
       const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, ctx.log);
       opts.onSession?.(session);
       const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.explorer.use);
-      const guide = instructionsPath(root, config.app.instructions);
       const summary = `Repeating ${targets.length} flow(s) on the base of PR #${pr.number}`;
       await session.activity(summary, 0, runtime.label);
       session.emit({ kind: 'session-start', summary });
@@ -434,7 +440,7 @@ async function captureBase(ctx: ReviewContext, review: PrReview, candidates: Can
           replay: { save: false },
           system: explorerBaseSystem(
             config.app.platform,
-            guide ? await readFile(guide, 'utf8') : '',
+            guide.text ?? '',
             lessonsFor(await workspace.readMemory(), 'explorer'),
           ),
           prompt: `Pull request #${pr.number}: ${pr.title}\nFindings:\n${candidates
@@ -834,7 +840,12 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
 }
 
 async function runReview(ctx: ReviewContext): Promise<PrReview> {
-  const { workspace, pr } = ctx;
+  const { root, workspace, pr } = ctx;
+  // The guide for both builds comes from the checkout, never from a commit of the pull request.
+  const guide = await readGuide(root, ctx.config);
+  const configFile = relative(root, paths.config(root, ctx.opts.configFile));
+  const guideFile = guide.text === undefined ? undefined : relative(root, guide.path);
+  ctx.log(`Config: ${configFile}. ${guideFile ? `App guide: ${guideFile}.` : noGuide(root, guide)}`);
   const review: PrReview = {
     version: 1,
     pr: { number: pr.number, url: pr.url, title: pr.title },
@@ -844,6 +855,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
     status: 'running',
     startedAt: new Date().toISOString(),
     sessions: {},
+    files: { config: configFile, ...(guideFile && { guide: guideFile }) },
     findings: [],
     costUsd: 0,
   };
@@ -890,7 +902,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
           : new Map<string, string>();
       // A benchmark measures its claims; the explorer tests the others.
       const toExplore = toTest.filter((claim) => explorable(claim) && !picks.has(claim.id));
-      const candidates = await exploreHead(ctx, review, toExplore, flows);
+      const candidates = await exploreHead(ctx, review, guide, toExplore, flows);
       if (claims) {
         const measured = await ctx.budget.timed(() =>
           runBenches(ctx, picks, (run) =>
@@ -917,7 +929,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       }
       // With no report there is nothing to compare, so the base build does not start.
       if (candidates.length) {
-        const targets = await captureBase(ctx, review, candidates);
+        const targets = await captureBase(ctx, review, guide, candidates);
         review.findings = await judgeFindings(ctx, review, candidates, targets);
         await settleCandidates(ctx, review.sessions.explorer!, review.findings);
       }

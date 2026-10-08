@@ -120,12 +120,11 @@ export function findProjectRoot(start: string): string {
 
 /**
  * The app guide for the explorer: `app.instructions` when it is set, else
- * `.bugpatrol/instructions.md` when that file exists.
+ * `.bugpatrol/instructions.md`. Only a configured guide is `required`.
  */
-export function instructionsPath(root: string, configured?: string): string | undefined {
-  if (configured) return resolve(root, configured);
-  const fallback = join(dir(root), 'instructions.md');
-  return existsSync(fallback) ? fallback : undefined;
+export function instructionsPath(root: string, configured?: string): { path: string; required: boolean } {
+  if (configured) return { path: resolve(root, configured), required: true };
+  return { path: join(dir(root), 'instructions.md'), required: false };
 }
 
 /**

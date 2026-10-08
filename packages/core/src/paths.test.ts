@@ -51,12 +51,10 @@ describe('findProjectRoot', () => {
 });
 
 describe('instructionsPath', () => {
-  it('uses app.instructions, else .bugpatrol/instructions.md when it exists', () => {
+  it('uses app.instructions, which is required, else .bugpatrol/instructions.md', () => {
     const root = project();
-    expect(instructionsPath(root)).toBeUndefined();
-    writeFileSync(join(root, '.bugpatrol', 'instructions.md'), '# App\n');
-    expect(instructionsPath(root)).toBe(join(root, '.bugpatrol', 'instructions.md'));
-    expect(instructionsPath(root, 'docs/guide.md')).toBe(join(root, 'docs', 'guide.md'));
+    expect(instructionsPath(root)).toEqual({ path: join(root, '.bugpatrol', 'instructions.md'), required: false });
+    expect(instructionsPath(root, 'docs/guide.md')).toEqual({ path: join(root, 'docs', 'guide.md'), required: true });
   });
 });
 

@@ -545,6 +545,29 @@ describe('multi-screen retest', () => {
     }
   });
 
+  it('gives the retest explorer the default app guide when app.instructions is unset', async () => {
+    const f = await screensFixture();
+    try {
+      await mkdir(join(f.root, '.bugpatrol'), { recursive: true });
+      await writeFile(join(f.root, '.bugpatrol', 'instructions.md'), 'You start signed in on the Home screen.\n');
+      const systems: string[] = [];
+      await retestFix(f.root, f.config, f.issue, f.fix, 1, {
+        createDriver: () => f.driver,
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'explorer') systems.push(task.system);
+            return { stop: 'done', steps: 1, costUsd: 0 };
+          },
+        }),
+      });
+      expect(systems).toHaveLength(1);
+      expect(systems[0]).toContain('You start signed in on the Home screen.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses the first finish with a missing target and accepts the second', async () => {
     const f = await screensFixture();
     try {

@@ -100,7 +100,14 @@ try {
     case 'patrol':
     case 'replay': {
       const config = readConfig();
-      await runAgentCommand(command, args, root, config, (message) => process.stdout.write(`${message}\n`));
+      await runAgentCommand(
+        command,
+        args,
+        root,
+        config,
+        (message) => process.stdout.write(`${message}\n`),
+        selected.configFile,
+      );
       break;
     }
 
