@@ -26,4 +26,4 @@ Do not run `explore`, `judge`, `fix`, `retest`, `review`, `publish`, `ci`, `gith
 
 The dashboard (`packages/dashboard/`), GitHub review comments, the agents' sessions (explore, judge, fix, review), `docs/`, `.github/`, and `examples/`. Other jobs review the dashboard (`review-smoke-dashboard`) and the fixture app (`review-smoke`). Do not start the dashboard or any server, and do not read the source to stand in for a test.
 
-When the pull request changes nothing that this app is made of, run `--help` and `issue list`, then finish. In untested, write "The rest of the change: outside the CLI".
+When the pull request changes nothing that this app is made of, run `--help` and `issue list`, then finish, and add one untested line: what "The rest of the change", why "outside the CLI".

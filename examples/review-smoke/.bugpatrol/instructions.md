@@ -10,4 +10,4 @@ Only the files in `examples/fixture-app/`. Nothing else in this repo runs in it.
 
 This repo is Bugpatrol. Everything outside `examples/fixture-app/` is Bugpatrol's own code: `packages/`, `docs/`, `.github/`, and the other `examples/` folders. This app never runs it, and other jobs review it (`review-smoke-dashboard` and `review-smoke-cli`). Only localhost:3300 is up here. Do not look for the dashboard, the CLI, or any other server or port.
 
-When the pull request changes nothing in `examples/fixture-app/`, check that Home and Settings load, then finish. Put the two pages in tested, and in untested write "The rest of the change: outside the fixture app".
+When the pull request changes nothing in `examples/fixture-app/`, check that Home and Settings load, then finish. Put the two pages in tested, and add one untested line: what "The rest of the change", why "outside the fixture app".

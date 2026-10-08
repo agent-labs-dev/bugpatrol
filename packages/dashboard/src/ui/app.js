@@ -44,7 +44,8 @@ try {
 }
 const graphCamera = { box: null, key: '' };
 let showBackLinks = false;
-let renderedReviews = '';
+let renderedState = '';
+let renderedPage = '';
 
 // ---------------------------------------------------------------- data
 
@@ -140,13 +141,13 @@ async function refresh({ keepSelection = true } = {}) {
       state.selectedReview = reviews[0]?.pr.number ?? null;
     }
     const detail = state.selectedReview ? await getJson(`/api/reviews/${state.selectedReview}`) : null;
-    // A rebuilt page restarts a playing video, so skip the render when the review did not change.
-    const key = JSON.stringify([reviews, detail]);
-    if (key === renderedReviews && view.querySelector('.review-page')) return;
-    renderedReviews = key;
     state.reviews = reviews;
     state.reviewDetail = detail;
   }
+  // A rebuilt page closes what the reader opened and restarts a playing video: skip it when nothing changed.
+  const key = JSON.stringify(state);
+  if (key === renderedState && view.childElementCount) return;
+  renderedState = key;
   render();
 }
 
@@ -168,6 +169,18 @@ function render() {
     button.classList.toggle('active', button.dataset.view === state.view);
     if (button.dataset.view === 'checks') button.hidden = !hasChecks;
   }
+  // The same page, drawn again with new data, keeps what the reader opened and where they were.
+  const page = JSON.stringify([
+    state.view,
+    state.selectedIssueId,
+    state.selectedSessionId,
+    state.selectedReview,
+    state.selectedRunId,
+    state.selectedScreenId,
+  ]);
+  const opened = page === renderedPage ? detailsOpen() : undefined;
+  const scroll = window.scrollY;
+  renderedPage = page;
   view.innerHTML = '';
   if (state.view === 'checks') {
     const banner = renderLiveBanner();
@@ -184,6 +197,25 @@ function render() {
     checks: renderRuns,
   };
   view.append(renderers[state.view]());
+  if (opened) {
+    for (const [key, details] of detailsByKey()) if (opened.has(key)) details.open = opened.get(key);
+    window.scrollTo(0, scroll);
+  }
+}
+
+/** Each <details> on the page by its summary and its place among the ones with the same summary. */
+function detailsByKey() {
+  const seen = new Map();
+  return [...view.querySelectorAll('details')].map((details) => {
+    const summary = details.querySelector('summary')?.textContent ?? '';
+    const nth = (seen.get(summary) ?? 0) + 1;
+    seen.set(summary, nth);
+    return [`${summary}#${nth}`, details];
+  });
+}
+
+function detailsOpen() {
+  return new Map(detailsByKey().map(([key, details]) => [key, details.open]));
 }
 
 function el(tag, props = {}, children = []) {
