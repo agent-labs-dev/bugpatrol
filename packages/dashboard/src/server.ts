@@ -38,10 +38,11 @@ const MIME: Record<string, string> = {
   '.cast': 'application/x-asciicast',
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
+  '.diff': 'text/x-diff; charset=utf-8',
 };
 
-/** The artifact types the UI renders: screenshots, records, and the recordings of a review. */
-const ARTIFACTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.cast', '.json'];
+/** The artifact types the UI renders: screenshots, records, the recordings of a review, and fix attempt diffs. */
+const ARTIFACTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.cast', '.json', '.diff'];
 
 export async function startDashboard(options: DashboardOptions): Promise<Dashboard> {
   const root = resolve(options.root);
