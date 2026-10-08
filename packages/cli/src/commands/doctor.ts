@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { onPath, runtimeProblem } from '@bugpatrol/agents';
+import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
 import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, paths } from '@bugpatrol/core';
 
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fatal: boolean };
@@ -39,15 +39,7 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
       detail: 'Private Cua desktops require Linux/Xvfb',
       fatal: true,
     });
-    const cua = config.app.connect.cua;
-    for (const command of [
-      'setsid',
-      'Xvfb',
-      'xauth',
-      'dbus-run-session',
-      cua?.command ?? 'cua-driver',
-      cua?.windowManager ?? 'openbox',
-    ]) {
+    for (const command of desktopCommands(config)) {
       const unresolved = command.includes('${');
       checks.push({
         name: `desktop:${command}`,
