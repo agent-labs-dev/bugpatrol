@@ -208,7 +208,8 @@ function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
   return { tasks, createRuntime: () => runtime };
 }
 
-describe('pull request review', () => {
+// Each test runs real git and one or more whole reviews.
+describe('pull request review', { timeout: 30_000 }, () => {
   it('tests the pull request build, repeats the flow on the base, and comments on the line that causes the problem', async () => {
     const f = await fixture();
     try {
