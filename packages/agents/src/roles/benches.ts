@@ -2,11 +2,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { BenchBuild, Claim, ClaimBench, PrReview } from '@bugpatrol/core';
 import { judgeBenchesSystem } from '../prompts.js';
-import { createRuntime as makeRuntime } from '../runtime/index.js';
-import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor } from '../workspace.js';
+import { claimJudge } from './claim-judge.js';
 import type { ReviewContext } from './review.js';
 
 const exec = promisify(execFile);
@@ -30,15 +29,9 @@ export const overlaps = ({ head, base }: ClaimBench) => head.min <= base.max && 
  * name a declared benchmark only, so it never invents a measurement.
  */
 export async function pickBenches(ctx: ReviewContext, review: PrReview, claims: Claim[]): Promise<Map<string, string>> {
-  const { root, config, workspace, pr, opts } = ctx;
+  const { config, workspace, pr } = ctx;
   const benches = config.agents.review.benches;
   const names = benches.map((bench) => bench.name);
-  const vars = new Vars(config.app.secrets);
-  const record = await workspace.startSession('judge');
-  review.sessions.benches = record.id;
-  const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, ctx.log);
-  opts.onSession?.(session);
-  const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
   const picks = new Map<string, string>();
   const tools: Tool[] = [
     {
@@ -63,45 +56,20 @@ export async function pickBenches(ctx: ReviewContext, review: PrReview, claims: 
       },
     },
   ];
-  const limits = config.agents.review;
-  let cost = 0;
-  let steps = 0;
-  let status: 'finished' | 'failed' = 'finished';
-  const start = `Picking the benchmarks for PR #${pr.number}`;
-  await session.activity(start, 0, runtime.label);
-  session.emit({ kind: 'session-start', summary: start });
-  try {
-    const outcome = await runtime.run(
-      {
-        role: 'judge',
-        sessionId: record.id,
-        system: judgeBenchesSystem(lessonsFor(await workspace.readMemory(), 'judge')),
-        prompt: [
-          `PULL REQUEST #${pr.number}: ${pr.title}`,
-          `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
-          `BENCHMARKS\n${benches.map((bench) => `- ${bench.name}: ${bench.metric}, ${bench.better} is better. Runs: ${bench.command}`).join('\n')}`,
-          `CLAIMS\n${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}`,
-        ].join('\n\n'),
-        tools,
-        maxSteps: Math.max(limits.maxSteps, claims.length + 4),
-        budgetUsd: limits.budgetUsd,
-        timeoutMs: limits.timeoutMs,
-      },
-      session.emit,
-    );
-    cost = outcome.costUsd;
-    steps = outcome.steps;
-  } catch (error) {
-    status = 'failed';
-    throw error;
-  } finally {
-    review.costUsd += cost;
-    const summary = `PR #${pr.number}: ${picks.size} claim(s) to measure`;
-    await workspace.endSession(record.id, { status, summary, steps, costUsd: cost });
-    session.emit({ kind: 'session-end', summary });
-    await session.idle(cost);
-    opts.onSession?.();
-  }
+  await claimJudge(ctx, review, {
+    session: 'benches',
+    start: `Picking the benchmarks for PR #${pr.number}`,
+    system: judgeBenchesSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+    prompt: [
+      `PULL REQUEST #${pr.number}: ${pr.title}`,
+      `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
+      `BENCHMARKS\n${benches.map((bench) => `- ${bench.name}: ${bench.metric}, ${bench.better} is better. Runs: ${bench.command}`).join('\n')}`,
+      `CLAIMS\n${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}`,
+    ].join('\n\n'),
+    tools,
+    minSteps: claims.length + 4,
+    summary: () => `PR #${pr.number}: ${picks.size} claim(s) to measure`,
+  });
   return picks;
 }
 

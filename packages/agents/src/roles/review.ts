@@ -49,6 +49,7 @@ import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
 import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
 import { linkEnvFiles, stepWords } from './fixer.js';
@@ -679,13 +680,8 @@ async function readClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[]
 
 /** Without a claims section, the judge writes the claims from what the pull request says. */
 async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[]> {
-  const { root, config, workspace, pr, opts } = ctx;
+  const { config, workspace, pr } = ctx;
   const vars = new Vars(config.app.secrets);
-  const record = await workspace.startSession('judge');
-  review.sessions.claims = record.id;
-  const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, ctx.log);
-  opts.onSession?.(session);
-  const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
   const claims: Claim[] = [];
   const sourceOf = (input: Record<string, unknown>): Claim['source'] | string => {
     if (input.source === 'title' || input.source === 'body') return { kind: input.source };
@@ -754,50 +750,23 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
       },
     },
   ];
-  const limits = config.agents.review;
-  let cost = 0;
-  let steps = 0;
-  let status: 'finished' | 'failed' = 'finished';
-  const start = `Reading the claims of PR #${pr.number}`;
-  await session.activity(start, 0, runtime.label);
-  session.emit({ kind: 'session-start', summary: start });
-  try {
-    const outcome = await runtime.run(
-      {
-        role: 'judge',
-        sessionId: record.id,
-        system: judgeClaimsSystem(lessonsFor(await workspace.readMemory(), 'judge')),
-        prompt: [
-          `PULL REQUEST #${pr.number}: ${pr.title}`,
-          pr.body.trim() || '(no description)',
-          `PLATFORM OF THE APP: ${config.app.platform}`,
-          `COMMITS\n${pr.commits.map((item) => `commit ${item.commit}\n${item.message}`).join('\n\n') || '(none)'}`,
-          `ISSUES THAT IT CLOSES\n${
-            pr.issues.map((item) => `ISSUE #${item.number}: ${item.title}\n${item.body.trim()}`).join('\n\n') ||
-            '(none)'
-          }`,
-          `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
-        ].join('\n\n'),
-        tools,
-        maxSteps: limits.maxSteps,
-        budgetUsd: limits.budgetUsd,
-        timeoutMs: limits.timeoutMs,
-      },
-      session.emit,
-    );
-    cost = outcome.costUsd;
-    steps = outcome.steps;
-  } catch (error) {
-    status = 'failed';
-    throw error;
-  } finally {
-    review.costUsd += cost;
-    const summary = `PR #${pr.number}: ${claims.length} claim(s)`;
-    await workspace.endSession(record.id, { status, summary, steps, costUsd: cost });
-    session.emit({ kind: 'session-end', summary });
-    await session.idle(cost);
-    opts.onSession?.();
-  }
+  await claimJudge(ctx, review, {
+    session: 'claims',
+    start: `Reading the claims of PR #${pr.number}`,
+    system: judgeClaimsSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+    prompt: [
+      `PULL REQUEST #${pr.number}: ${pr.title}`,
+      pr.body.trim() || '(no description)',
+      `PLATFORM OF THE APP: ${config.app.platform}`,
+      `COMMITS\n${pr.commits.map((item) => `commit ${item.commit}\n${item.message}`).join('\n\n') || '(none)'}`,
+      `ISSUES THAT IT CLOSES\n${
+        pr.issues.map((item) => `ISSUE #${item.number}: ${item.title}\n${item.body.trim()}`).join('\n\n') || '(none)'
+      }`,
+      `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
+    ].join('\n\n'),
+    tools,
+    summary: () => `PR #${pr.number}: ${claims.length} claim(s)`,
+  });
   return claims;
 }
 

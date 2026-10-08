@@ -23,13 +23,13 @@ import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
 import { short } from '../review-comment.js';
-import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, type Workspace } from '../workspace.js';
 import { benchWords, type Measured, overlaps } from './benches.js';
 import { image } from './capture.js';
+import { claimJudge } from './claim-judge.js';
 import { stepWords } from './fixer.js';
 import type { ReviewContext } from './review.js';
 
@@ -505,13 +505,8 @@ async function judgeClaims(
   review: PrReview,
   tested: Tested[],
 ): Promise<Map<string, { verdict: ClaimVerdict; reason: string; saw?: string }>> {
-  const { root, config, workspace, pr, opts } = ctx;
+  const { root, config, workspace, pr } = ctx;
   const vars = new Vars(config.app.secrets);
-  const record = await workspace.startSession('judge');
-  review.sessions.claimJudge = record.id;
-  const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, ctx.log);
-  opts.onSession?.(session);
-  const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
   const verdicts = new Map<string, { verdict: ClaimVerdict; reason: string; saw?: string }>();
   const find = (input: Record<string, unknown>) => tested.find((item) => item.claim.id === input.claim);
   const unknown = { ...response('Unknown claim id'), isError: true };
@@ -585,45 +580,20 @@ async function judgeClaims(
       },
     },
   ];
-  const limits = config.agents.review;
-  let cost = 0;
-  let steps = 0;
-  let status: 'finished' | 'failed' = 'finished';
-  const start = `Judging ${tested.length} claim(s) of PR #${pr.number}`;
-  await session.activity(start, 0, runtime.label);
-  session.emit({ kind: 'session-start', summary: start });
-  try {
-    const outcome = await runtime.run(
-      {
-        role: 'judge',
-        sessionId: record.id,
-        system: judgeClaimVerdictsSystem(lessonsFor(await workspace.readMemory(), 'judge')),
-        prompt: [
-          `PULL REQUEST #${pr.number}: ${pr.title}`,
-          pr.body.trim() || '(no description)',
-          `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
-          `CLAIMS\n${tested.map((item) => `- ${item.claim.id}: ${item.claim.text}`).join('\n')}`,
-        ].join('\n\n'),
-        tools,
-        maxSteps: Math.max(limits.maxSteps, tested.length * 2 + 4),
-        budgetUsd: limits.budgetUsd,
-        timeoutMs: limits.timeoutMs,
-      },
-      session.emit,
-    );
-    cost = outcome.costUsd;
-    steps = outcome.steps;
-  } catch (error) {
-    status = 'failed';
-    throw error;
-  } finally {
-    review.costUsd += cost;
-    const summary = `PR #${pr.number}: ${verdicts.size} of ${tested.length} claim(s) judged`;
-    await workspace.endSession(record.id, { status, summary, steps, costUsd: cost });
-    session.emit({ kind: 'session-end', summary });
-    await session.idle(cost);
-    opts.onSession?.();
-  }
+  await claimJudge(ctx, review, {
+    session: 'claimJudge',
+    start: `Judging ${tested.length} claim(s) of PR #${pr.number}`,
+    system: judgeClaimVerdictsSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+    prompt: [
+      `PULL REQUEST #${pr.number}: ${pr.title}`,
+      pr.body.trim() || '(no description)',
+      `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
+      `CLAIMS\n${tested.map((item) => `- ${item.claim.id}: ${item.claim.text}`).join('\n')}`,
+    ].join('\n\n'),
+    tools,
+    minSteps: tested.length * 2 + 4,
+    summary: () => `PR #${pr.number}: ${verdicts.size} of ${tested.length} claim(s) judged`,
+  });
   return verdicts;
 }
 
