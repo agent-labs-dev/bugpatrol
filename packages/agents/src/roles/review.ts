@@ -122,11 +122,18 @@ function coverageFinish(keep: (coverage: NonNullable<PrReview['coverage']>) => v
       ['tested', 'untested'],
     ),
     async run(input) {
-      const tested = Array.isArray(input.tested) ? input.tested.map(String) : [];
-      const untested = (Array.isArray(input.untested) ? input.untested : []).map((item) => ({
-        what: String((item as { what?: unknown }).what ?? ''),
-        why: String((item as { why?: unknown }).why ?? ''),
-      }));
+      const tested = (Array.isArray(input.tested) ? input.tested : []).map((line) => String(line).trim());
+      // Some models send "what: why" as one string instead of an object.
+      const untested = (Array.isArray(input.untested) ? input.untested : []).map((item) => {
+        if (typeof item === 'string') {
+          const [what = '', ...why] = item.split(': ');
+          return { what: what.trim(), why: why.join(': ').trim() };
+        }
+        const { what, why } = (item ?? {}) as { what?: unknown; why?: unknown };
+        return { what: String(what ?? '').trim(), why: String(why ?? '').trim() };
+      });
+      if (tested.some((line) => !line) || untested.some((item) => !item.what))
+        return refuse('Each line needs text: a screen or flow in tested, and what (with why) in untested.');
       if (!tested.length && !untested.length)
         return refuse('Name what you tested in tested, and what you did not reach in untested.');
       const long = [...tested, ...untested.flatMap((item) => [item.what, item.why])].find(
@@ -136,7 +143,9 @@ function coverageFinish(keep: (coverage: NonNullable<PrReview['coverage']>) => v
       keep({ tested, untested });
       const text = [
         tested.length ? `Tested: ${tested.join('; ')}.` : '',
-        untested.length ? `Not reached: ${untested.map((item) => `${item.what} (${item.why})`).join('; ')}.` : '',
+        untested.length
+          ? `Not reached: ${untested.map((item) => (item.why ? `${item.what} (${item.why})` : item.what)).join('; ')}.`
+          : '',
       ];
       return { ...response(text.filter(Boolean).join(' ')), done: true };
     },

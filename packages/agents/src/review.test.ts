@@ -548,6 +548,41 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('takes untested lines as plain text too, and refuses one with nothing in it', async () => {
+    const f = await fixture();
+    try {
+      let refused = '';
+      const agents = scripted('introduced', 0, undefined, {
+        finish: {
+          tested: ['The settings screen'],
+          untested: ['Settings on a narrow window: ran out of steps', 'Dark mode'],
+        },
+      });
+      const runtime = agents.createRuntime();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh: fakeGh().gh,
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task, emit) {
+            if (task.role === 'explorer') {
+              const empty = await tool(task, 'finish').run({ tested: [], untested: [{ why: 'no what' }, 'Dark mode'] });
+              refused = empty.content.map((item) => ('text' in item ? item.text : '')).join('');
+            }
+            return runtime.run(task, emit);
+          },
+        }),
+        createDriver: screens,
+      });
+      expect(refused).toContain('what');
+      expect(review.coverage!.untested).toEqual([
+        { what: 'Settings on a narrow window', why: 'ran out of steps' },
+        { what: 'Dark mode', why: '' },
+      ]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('does not start the base build when the explorer reports nothing', async () => {
     const f = await fixture();
     try {
@@ -2555,6 +2590,13 @@ describe('review rendering', () => {
     );
     expect(body).toContain('#### Tested\n\n- Save on the settings screen');
     expect(body).toContain('#### Not tested\n\n- Settings on a narrow window: ran out of steps');
+    const bare = renderReview(
+      { ...review, coverage: { tested: [], untested: [{ what: 'Dark mode', why: '' }] } },
+      (path) => path,
+      () => true,
+    ).body;
+    expect(bare).toContain('#### Not tested\n\n- Dark mode');
+    expect(bare).not.toContain('- Dark mode:');
     expect(body).not.toContain('Tested the settings screen.');
     // A review from before the explorer gave lines keeps its text.
     expect(render().body).toContain('#### Tested\n\nTested the settings screen.');

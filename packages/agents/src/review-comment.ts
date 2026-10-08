@@ -383,7 +383,10 @@ export function renderReview(
       ? [
           ...(coverage.tested.length ? ['#### Tested', coverage.tested.map((line) => `- ${line}`).join('\n')] : []),
           ...(coverage.untested.length
-            ? ['#### Not tested', coverage.untested.map((item) => `- ${item.what}: ${item.why}`).join('\n')]
+            ? [
+                '#### Not tested',
+                coverage.untested.map((item) => `- ${item.what}${item.why ? `: ${item.why}` : ''}`).join('\n'),
+              ]
             : []),
         ]
       : review.tested
