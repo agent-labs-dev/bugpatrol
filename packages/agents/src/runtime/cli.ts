@@ -94,6 +94,7 @@ export class CliRuntime implements Runtime {
   async run(task: RoleTask, emit: EventSink): Promise<RoleOutcome> {
     const temp = await mkdtemp(join(tmpdir(), 'bugpatrol-agent-'));
     let summary = '';
+    let finished = false;
     let steps = 0;
     let stderr = '';
     let stdout = '';
@@ -143,6 +144,7 @@ export class CliRuntime implements Runtime {
         });
         if (result.done) {
           summary = output;
+          finished = true;
         }
       },
     });
@@ -225,6 +227,7 @@ export class CliRuntime implements Runtime {
           steps,
           costUsd: 0,
           summary: summary || text,
+          finished,
         };
       }
       if (code !== 0 || inputError) {
@@ -240,6 +243,7 @@ export class CliRuntime implements Runtime {
         steps,
         costUsd: 0,
         summary: summary || text,
+        finished,
       };
     } finally {
       await mcp.close();

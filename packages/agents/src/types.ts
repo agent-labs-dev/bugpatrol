@@ -51,6 +51,8 @@ export type RoleOutcome = {
   costUsd: number;
   /** The last text the agent wrote, or the finish tool's summary. */
   summary?: string;
+  /** A finish tool ran, also after the steps were used: `summary` is its text. */
+  finished?: boolean;
   error?: string;
 };
 

@@ -109,6 +109,18 @@ export function firstLine(text: string): string {
   return line.length > 160 ? `${line.slice(0, 157)}...` : line;
 }
 
+/** A note to the model. Anthropic wants it in the user turn that holds the tool results. */
+function tell(messages: Message[], text: string): void {
+  const last = messages.at(-1);
+  if (last?.role === 'user' && typeof last.content === 'string') {
+    last.content = `${last.content}\n\n${text}`;
+  } else if (last?.role === 'user' && Array.isArray(last.content)) {
+    last.content.push({ type: 'text', text });
+  } else {
+    messages.push({ role: 'user', content: text });
+  }
+}
+
 function textOf(result: ToolResult): string {
   return result.content
     .filter((part) => part.type === 'text')
@@ -186,6 +198,9 @@ export class ModelRuntime implements Runtime {
     let costUsd = 0;
     let lastText = '';
     let textOnly = 0;
+    // The steps are used: one more call with the finish tools only, so the agent hands back a
+    // summary, as the CLI runtime lets it.
+    let handBack: RoleTask | undefined;
     const outcome = (stop: RoleOutcome['stop'], summary?: string, error?: string): RoleOutcome => ({
       stop,
       steps,
@@ -193,12 +208,21 @@ export class ModelRuntime implements Runtime {
       summary,
       error,
     });
-    while (steps < task.maxSteps) {
+    for (;;) {
+      if (steps >= task.maxSteps) {
+        const finish = task.tools.filter((tool) => tool.name.startsWith('finish'));
+        if (handBack || !finish.length) {
+          return outcome('max-steps', lastText);
+        }
+        handBack = { ...task, tools: finish };
+        tell(messages, 'Your steps are used. Call finish now with what you did and what you did not reach.');
+      }
+      const current = handBack ?? task;
       if (Date.now() - started >= task.timeoutMs) {
         return outcome('timeout', lastText);
       }
       prune(messages);
-      const body = requestBody(this.use, task, messages, anthropic);
+      const body = requestBody(this.use, current, messages, anthropic);
       let payload: ResponsePayload;
       try {
         payload = await this.call(endpoint, apiKey, anthropic, body, deadline);
@@ -233,22 +257,21 @@ export class ModelRuntime implements Runtime {
         if (textOnly >= 3) {
           return outcome('done', lastText);
         }
-        messages.push({ role: 'user', content: 'Call one of the tools. Call finish when you are done.' });
+        tell(messages, 'Call one of the tools. Call finish when you are done.');
       } else {
         textOnly = 0;
-        const calls = await this.runCalls(task, parsed.calls, emit, messages, anthropic, deadline, stepCost, step);
+        const calls = await this.runCalls(current, parsed.calls, emit, messages, anthropic, deadline, stepCost, step);
         if (calls.timeout) {
           return outcome('timeout', lastText);
         }
         if (calls.done) {
-          return outcome('done', calls.output);
+          return { ...outcome(handBack ? 'max-steps' : 'done', calls.output), finished: true };
         }
       }
       if (task.budgetUsd !== undefined && costUsd >= task.budgetUsd) {
         return outcome('budget', lastText);
       }
     }
-    return outcome('max-steps', lastText);
   }
 
   private async runCalls(

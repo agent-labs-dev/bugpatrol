@@ -148,6 +148,42 @@ describe('ModelRuntime', () => {
     expect((await runtime.run(task([finish], 1, 1), () => {})).stop).toBe('max-steps');
   });
 
+  it('offers only finish once the steps are used, and keeps its summary', async () => {
+    const bodies: { tools: { name: string }[]; messages: { role: string; content: unknown }[] }[] = [];
+    const fake = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as (typeof bodies)[number];
+      bodies.push(body);
+      const name = body.tools.length === 1 ? 'finish' : 'look';
+      return response({
+        content: [{ type: 'tool_use', id: `c${bodies.length}`, name, input: {} }],
+      });
+    };
+    const look: Tool = {
+      name: 'look',
+      description: 'Look',
+      inputSchema: { type: 'object' },
+      async run() {
+        return { content: [{ type: 'text', text: 'a screen' }] };
+      },
+    };
+    const runtime = new ModelRuntime(
+      { runtime: 'model', via: 'anthropic', model: 'test' },
+      { fetch: fake as typeof fetch },
+    );
+    expect(await runtime.run(task([look, finish], 2), () => {})).toMatchObject({
+      stop: 'max-steps',
+      steps: 3,
+      summary: 'finished',
+      finished: true,
+    });
+    expect(bodies[2]?.tools.map((tool) => tool.name)).toEqual(['finish']);
+    // The note shares the user turn of the tool results: Anthropic wants one user turn there.
+    expect(bodies[2]?.messages.at(-1)).toMatchObject({
+      role: 'user',
+      content: [{ type: 'tool_result' }, { type: 'text', text: expect.stringContaining('Call finish now') }],
+    });
+  });
+
   it('nudges text-only answers and finishes after three', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fake = async (_url: string | URL | Request, init?: RequestInit) => {
