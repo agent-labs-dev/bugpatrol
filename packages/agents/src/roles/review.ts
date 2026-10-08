@@ -18,6 +18,7 @@ import {
   type Severity,
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { type Capabilities, detectCapabilities } from '../capabilities.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
@@ -111,6 +112,8 @@ export type ReviewOptions = {
   claims?: boolean;
   /** How long a replayed step waits for its target. */
   replayWindowMs?: number;
+  /** Finds which platforms the machine can run. Tests stub it. */
+  capabilities?: (platforms: Platform[]) => Promise<Capabilities>;
 };
 
 type PullRequest = {
@@ -812,11 +815,24 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
       review.claims = claims.map((claim) => notYet(claim, 'The review stopped before it tested this claim.'));
       await rm(paths.reviewDir(ctx.root, pr.number), { recursive: true, force: true });
     }
-    // Capability detection (#62) widens this to the platforms that the machine can run.
-    const toTest = (claims ?? []).filter((claim) => claim.testable && claim.platform === ctx.config.app.platform);
+    const platform = ctx.config.app.platform;
+    const testable = (claims ?? []).filter((claim) => claim.testable);
+    // Detection runs before any exploring, and only for the claim check.
+    const missing: Capabilities = testable.length
+      ? await (ctx.opts.capabilities ?? ((platforms) => detectCapabilities(ctx.config, platforms)))([
+          ...new Set(testable.map((claim) => claim.platform)),
+        ])
+      : {};
+    const toTest = testable.filter((claim) => claim.platform === platform && !missing[platform]);
+    const untestedHere = (claim: Claim) =>
+      notYet(claim, missing[claim.platform] ?? `The app runs on ${platform}, and this claim needs ${claim.platform}.`);
     if (!pr.files.length) {
       review.tested = `The pull request changes no file against \`${pr.baseRef}\`.`;
       if (claims) review.claims = claims.map((claim) => notYet(claim, 'The pull request changes no file.'));
+    } else if (missing[platform]) {
+      // The app cannot start here, so nothing else runs, and the review still posts.
+      review.tested = `Bugpatrol could not run the app on this machine. ${missing[platform]}`;
+      review.claims = claims!.map(untestedHere);
     } else {
       const flows = new Map<string, ClaimFlow>();
       const testable = (claims ?? []).filter((claim) => claim.testable);
@@ -838,9 +854,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
           withBuild(ctx, name, commit, run),
         );
         review.claims = claims.map(
-          (claim) =>
-            tested.find((finding) => finding.claim.id === claim.id) ??
-            notYet(claim, `The app runs on ${ctx.config.app.platform}, and this claim needs ${claim.platform}.`),
+          (claim) => tested.find((finding) => finding.claim.id === claim.id) ?? untestedHere(claim),
         );
       }
       // With no report there is nothing to compare, so the base build does not start.

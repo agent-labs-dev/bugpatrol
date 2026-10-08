@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
+import { type Platform, type PrReview, parseConfig, paths, type ReviewVerdict, type Routine } from '@bugpatrol/core';
 import type { UiElement } from '@bugpatrol/drivers';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from './github.js';
@@ -902,6 +902,94 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(untested).toContain('The export needs a paid account.');
       expect(untested).toContain('The explorer did not reach this claim.');
       expect(untested).not.toContain('The dark mode switch makes the header dark.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('finds what the machine can run before it explores, and posts the review when the app platform is missing', async () => {
+    const f = await fixture();
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { platform: 'android', source: 'source', connect: { url: 'fake://home' } },
+        agents: { github: { enabled: true, repo: 'o/r' }, review: { claims: true } },
+      });
+      const github = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.', 'Export works.') });
+      const agents = claimAgents({ explore: {}, verdicts: {} });
+      const asked: Platform[][] = [];
+      const drivers: FakeDriver[] = [];
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: agents.createRuntime,
+        createDriver: () => {
+          const driver = screens();
+          drivers.push(driver);
+          return driver;
+        },
+        capabilities: async (platforms) => {
+          asked.push(platforms);
+          expect(agents.tasks).toHaveLength(0);
+          return { android: 'No Android emulator runs on this machine.' };
+        },
+      });
+      expect(asked).toEqual([['android']]);
+      // Bugpatrol never starts the app, an emulator or a model for a platform the machine cannot run.
+      expect(agents.tasks).toHaveLength(0);
+      expect(drivers).toHaveLength(0);
+      expect(review.status).toBe('finished');
+      expect(review.claims).toMatchObject([
+        { claim: { id: 'claim-1' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
+        { claim: { id: 'claim-2' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
+      ]);
+      const [sent] = github.posted();
+      expect(sent!.body).toContain('Claims that Bugpatrol could not test (2)');
+      expect(sent!.body).toContain('No Android emulator runs on this machine.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives a claim for a platform the machine cannot run the reason, and tests the rest', async () => {
+    const f = await fixture({ enabled: false }, { claims: true });
+    try {
+      const tasks: RoleTask[] = [];
+      const runtime: Runtime = {
+        label: 'scripted',
+        async run(task) {
+          tasks.push(task);
+          if (tool(task, 'add_claim')) {
+            for (const platform of ['web', 'ios'])
+              await tool(task, 'add_claim').run({
+                text: `The save button saves on ${platform}.`,
+                platform,
+                source: 'body',
+                testable: true,
+              });
+            await tool(task, 'finish').run({ summary: 'Two claims.' });
+          } else await tool(task, 'finish').run({ summary: 'Reached nothing.' });
+          return { stop: 'done', steps: 1, costUsd: 0 };
+        },
+      };
+      const { gh } = fakeGh();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: () => runtime,
+        createDriver: screens,
+        dryRun: true,
+        capabilities: async () => ({ ios: 'iOS needs macOS and a booted simulator, and this machine runs Linux.' }),
+      });
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
+      expect(tasks[1]!.prompt).toContain('The save button saves on web.');
+      expect(tasks[1]!.prompt).not.toContain('The save button saves on ios.');
+      expect(review.claims).toMatchObject([
+        { claim: { platform: 'web' }, verdict: 'untested', reason: 'The explorer did not reach this claim.' },
+        {
+          claim: { platform: 'ios' },
+          verdict: 'untested',
+          reason: 'iOS needs macOS and a booted simulator, and this machine runs Linux.',
+        },
+      ]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
