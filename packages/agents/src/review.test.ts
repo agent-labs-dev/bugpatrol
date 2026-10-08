@@ -614,7 +614,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
  * A dark mode switch. On the pull request build it makes the page dark; on
  * the base build it does nothing. `extra` adds elements to the home screen.
  */
-function darkApp(build: 'head' | 'base', extra: UiElement[] = []) {
+function darkApp(build: 'head' | 'base', extra: UiElement[] = [], record?: 'video' | 'broken') {
   const toggle: UiElement = {
     ref: 'e1',
     role: 'switch',
@@ -630,6 +630,8 @@ function darkApp(build: 'head' | 'base', extra: UiElement[] = []) {
       dark: { elements: [toggle], color: 5 },
     },
     'home',
+    'web',
+    { record },
   );
 }
 
@@ -756,7 +758,8 @@ describe('claim check', { timeout: 30_000 }, () => {
         },
       ]);
       const [finding] = review.claims!;
-      // A screenshot before the first step, and one after each step.
+      // A driver that cannot record keeps a screenshot before the first step, and one after each step.
+      expect(finding!.head!.recording).toBeUndefined();
       expect(finding!.head!.shots).toHaveLength(3);
       expect(finding!.base!.shots).toHaveLength(3);
       for (const shot of [...finding!.head!.shots, ...finding!.base!.shots])
@@ -889,6 +892,89 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(untested).toContain('The export needs a paid account.');
       expect(untested).toContain('The explorer did not reach this claim.');
       expect(untested).not.toContain('The dark mode switch makes the header dark.');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('records the replay on both builds, and shows both recordings side by side with the full videos', async () => {
+    const f = await fixture();
+    try {
+      const app = builds(f.root, (build) => darkApp(build, [], 'video'));
+      const config = claimConfig(app.prepare, { enabled: true, repo: 'o/r' });
+      const github = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.') });
+      const agents = claimAgents({
+        explore: { 'claim-1': 'flow' },
+        verdicts: { 'claim-1': { verdict: 'proven', reason: 'Dark on this build, light on the base.' } },
+      });
+      const review = await reviewPullRequest(f.root, config, 7, {
+        gh: github.gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+      });
+      const [finding] = review.claims!;
+      expect(finding!.head!.recording).toEqual({
+        file: '.bugpatrol/runs/reviews/pr-7/claim-1/head.mp4',
+        gif: '.bugpatrol/runs/reviews/pr-7/claim-1/head.gif',
+      });
+      expect(finding!.base!.recording).toEqual({
+        file: '.bugpatrol/runs/reviews/pr-7/claim-1/base.mp4',
+        gif: '.bugpatrol/runs/reviews/pr-7/claim-1/base.gif',
+      });
+      for (const file of [finding!.head!.recording!, finding!.base!.recording!].flatMap((item) => [
+        item.file,
+        item.gif!,
+      ]))
+        expect(existsSync(join(f.root, file))).toBe(true);
+      // The judge still sees the last screen of each build.
+      const view = await tool(agents.tasks[1]!, 'view_claim').run({ claim: 'claim-1' });
+      expect(view.content.filter((item) => item.type === 'image')).toHaveLength(2);
+
+      // The GIFs and the full videos go to the assets branch, in place of the step screenshots.
+      const uploads = github.sent('PUT', '/contents/').map((call) => call.path);
+      expect(uploads.filter((path) => path.endsWith('.gif'))).toHaveLength(2);
+      expect(uploads.filter((path) => path.endsWith('.mp4'))).toHaveLength(2);
+      expect(uploads.filter((path) => path.endsWith('.png'))).toHaveLength(0);
+      const [sent] = github.posted();
+      const url = 'https://github.com/o/r/blob/bugpatrol-assets/pr-7/';
+      expect(sent!.body).toMatch(
+        new RegExp(
+          `\\| <img src="${url}\\w+-base\\.gif\\?raw=true" width="360"><br><a href="${url}\\w+-base\\.mp4\\?raw=true">Full video</a> ` +
+            `\\| <img src="${url}\\w+-head\\.gif\\?raw=true" width="360"><br><a href="${url}\\w+-head\\.mp4\\?raw=true">Full video</a> \\|`,
+        ),
+      );
+      expect(sent!.body).not.toContain('Each step');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('shows the step screenshots and a link to the full video when the GIF cannot be made', async () => {
+    const f = await fixture({ enabled: false });
+    try {
+      const app = builds(f.root, (build) => darkApp(build, [], 'broken'));
+      const { gh } = fakeGh({ body: claimsBody('The dark mode switch makes the page dark.') });
+      const agents = claimAgents({
+        explore: { 'claim-1': 'flow' },
+        verdicts: { 'claim-1': { verdict: 'proven', reason: 'Dark on this build, light on the base.' } },
+      });
+      const logs: string[] = [];
+      const review = await reviewPullRequest(f.root, claimConfig(app.prepare), 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: app.createDriver,
+        dryRun: true,
+        onLog: (line) => logs.push(line),
+      });
+      const [finding] = review.claims!;
+      expect(finding!.head!.recording).toEqual({ file: '.bugpatrol/runs/reviews/pr-7/claim-1/head.mp4' });
+      expect(logs.some((line) => line.startsWith('Could not make a GIF of claim-1 on the pull request build'))).toBe(
+        true,
+      );
+      const file = await readFile(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'), 'utf8');
+      expect(file).toContain(`<a href="${join(f.root, finding!.head!.recording!.file)}">Full video</a>`);
+      expect(file).toContain('<details><summary>Each step</summary>');
+      expect(file).toContain(`<img src="${join(f.root, finding!.head!.shots.at(-1)!)}"`);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

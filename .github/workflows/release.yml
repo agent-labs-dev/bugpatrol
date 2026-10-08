@@ -41,6 +41,8 @@ jobs:
       - run: pnpm build
       # Capture tests need Chromium's real font and layout engine.
       - run: pnpm --filter @bugpatrol/capture exec playwright install --with-deps chromium
+      # The recording tests encode real video.
+      - run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pnpm test
       - name: Bump package version
         id: version

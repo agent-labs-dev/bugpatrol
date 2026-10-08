@@ -71,11 +71,20 @@ const evidenceWords: Record<ClaimEvidence, string> = {
   bench: 'a benchmark on both builds',
 };
 
-/** The screenshots that the claims of a review show: the last screen of each build, and each step. */
-export function claimShots(review: PrReview): string[] {
+/** A claim whose builds both have a GIF shows the GIFs only. Otherwise it shows the screenshots of each step. */
+const recorded = (finding: ClaimFinding) => Boolean(finding.base?.recording?.gif && finding.head?.recording?.gif);
+
+/** The files that the claims of a review show: the recordings and the full videos, or the screenshots. */
+export function claimMedia(review: PrReview): string[] {
   return (review.claims ?? [])
     .filter((finding) => finding.verdict !== 'untested')
-    .flatMap((finding) => [...(finding.base?.shots ?? []), ...(finding.head?.shots ?? [])]);
+    .flatMap((finding) =>
+      [finding.base, finding.head].flatMap((replay) => [
+        ...(recorded(finding) ? [] : (replay?.shots ?? [])),
+        ...(replay?.recording ? [replay.recording.gif, replay.recording.file] : []),
+      ]),
+    )
+    .filter((path): path is string => Boolean(path));
 }
 
 /**
@@ -84,7 +93,11 @@ export function claimShots(review: PrReview): string[] {
  * claims that Bugpatrol could not test are a list with the reason, so the
  * reviewer knows what is left to check by hand.
  */
-function claimLines(review: PrReview, image: (path?: string) => string | undefined): string[] {
+function claimLines(
+  review: PrReview,
+  image: (path?: string) => string | undefined,
+  url: (path: string) => string | undefined,
+): string[] {
   const claims = review.claims;
   if (!claims) return [];
   const head = `\`${short(review.head)}\``;
@@ -95,6 +108,15 @@ function claimLines(review: PrReview, image: (path?: string) => string | undefin
   const stopped = (finding: ClaimFinding, build: 'head' | 'base') => {
     const replay = finding[build];
     return replay && !replay.ok ? `Stopped at step ${(replay.failedStep ?? 0) + 1}.` : 'No screenshot.';
+  };
+  /** The GIF of a build or its last screen, then a link to the full video. */
+  const last = (finding: ClaimFinding, build: 'head' | 'base') => {
+    const replay = finding[build];
+    const video = replay?.recording && url(replay.recording.file);
+    return (
+      cell(replay?.recording?.gif ?? replay?.shots.at(-1), stopped(finding, build)) +
+      (video ? `<br><a href="${video}">Full video</a>` : '')
+    );
   };
   const section = (finding: ClaimFinding) => {
     const replayed = Boolean(finding.head);
@@ -114,14 +136,19 @@ function claimLines(review: PrReview, image: (path?: string) => string | undefin
       ...(replayed
         ? [
             `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
-              `| ${cell(finding.base?.shots.at(-1), stopped(finding, 'base'))} | ${cell(finding.head?.shots.at(-1), stopped(finding, 'head'))} |`,
-            ...details('Each step', [
-              `| Step | Base ${base} | This pull request ${head} |\n| --- | --- | --- |`,
-              ...['Start', ...steps].map(
-                (step, index) =>
-                  `| ${index ? `${index}. ${step}` : step} | ${cell(finding.base?.shots[index], '-')} | ${cell(finding.head?.shots[index], '-')} |`,
-              ),
-            ]),
+              `| ${last(finding, 'base')} | ${last(finding, 'head')} |`,
+            ...details(
+              'Each step',
+              recorded(finding)
+                ? []
+                : [
+                    `| Step | Base ${base} | This pull request ${head} |\n| --- | --- | --- |`,
+                    ...['Start', ...steps].map(
+                      (step, index) =>
+                        `| ${index ? `${index}. ${step}` : step} | ${cell(finding.base?.shots[index], '-')} | ${cell(finding.head?.shots[index], '-')} |`,
+                    ),
+                  ],
+            ),
           ]
         : []),
     ].join('\n\n');
@@ -152,8 +179,8 @@ export type RenderedReview = {
  * comment on the changed line that causes it, with both screenshots. When the
  * judge named no line, or a line that the diff does not show, the problem is
  * a section of the review body instead. The rest is folded, so the author
- * reads first what is theirs to fix. The caller owns image upload: `imageUrl`
- * maps a workspace path to where a reader can load it.
+ * reads first what is theirs to fix. The caller owns upload: `imageUrl` maps
+ * a workspace path, of a picture or a video, to where a reader can load it.
  */
 export function renderReview(
   review: PrReview,
@@ -198,7 +225,7 @@ export function renderReview(
   const body = [
     REVIEW_MARKER,
     '### Bugpatrol review',
-    ...claimLines(review, image),
+    ...claimLines(review, image, imageUrl),
     introduced.length
       ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
       : '**No problem found that this pull request introduces.**',

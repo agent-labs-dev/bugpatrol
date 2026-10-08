@@ -11,7 +11,7 @@ import {
   type Routine,
   type RoutineStep,
 } from '@bugpatrol/core';
-import type { Driver } from '@bugpatrol/drivers';
+import { type Driver, inlineGif } from '@bugpatrol/drivers';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { replaySteps } from '../replay.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
@@ -172,9 +172,39 @@ export function claimTools(
 }
 
 /**
+ * Stops the recording of a replay and makes its GIF for the review. A
+ * recording that fails costs only the recording: the screenshots stay.
+ */
+async function saveRecording(
+  ctx: ReviewContext,
+  driver: Driver,
+  name: string,
+  what: string,
+): Promise<ClaimReplay['recording']> {
+  let file: string;
+  try {
+    file = await driver.stopRecording!(name);
+  } catch (error) {
+    ctx.log(`Could not record ${what}: ${String(error).split('\n')[0]}`);
+    return undefined;
+  }
+  const recording = { file: relative(ctx.root, file) };
+  // Other recordings, such as terminal casts, are not videos.
+  if (!/\.(mp4|mov|webm)$/.test(file)) return recording;
+  try {
+    if (await inlineGif(file, `${name}.gif`)) return { ...recording, gif: relative(ctx.root, `${name}.gif`) };
+    ctx.log(`The GIF of ${what} is over the size budget. The review shows its screenshots.`);
+  } catch (error) {
+    ctx.log(`Could not make a GIF of ${what}: ${String(error).split('\n')[0]}`);
+  }
+  return recording;
+}
+
+/**
  * Replays each claim routine on one build, with no model, each from a new
  * driver, and keeps a screenshot before the first step and after each step.
- * A step that fails ends that replay. A driver that fails is an error.
+ * A driver that can record also records each replay. A step that fails ends
+ * that replay. A driver that fails is an error.
  */
 async function replayClaims(
   ctx: ReviewContext,
@@ -191,6 +221,7 @@ async function replayClaims(
   const where = build === 'head' ? 'the pull request build' : 'the base build';
   const replays = new Map<string, ClaimReplay>();
   let first = true;
+  let canRecord = true;
   let status: 'finished' | 'failed' = 'finished';
   try {
     for (const [claim, routine] of routines) {
@@ -207,12 +238,31 @@ async function replayClaims(
         await writeFile(file, (await current.observe()).screenshot);
         shots.push(relative(root, file));
       };
+      const what = `${claim} on ${where}`;
+      let recording = false;
+      if (canRecord && current.startRecording) {
+        try {
+          await current.startRecording();
+          recording = true;
+        } catch (error) {
+          // The host cannot record, for example with no ffmpeg. The next replays would fail the same way.
+          canRecord = false;
+          ctx.log(`Could not record ${what}, so the review shows screenshots: ${String(error).split('\n')[0]}`);
+        }
+      }
       await shot();
       const result = await replaySteps(session, routine.steps, { windowMs: opts.replayWindowMs, onStep: shot });
-      replays.set(claim, { ok: result.ok, shots, failedStep: result.failedStep, error: result.error });
+      const recorded = recording ? await saveRecording(ctx, current, join(dir, build), what) : undefined;
+      replays.set(claim, {
+        ok: result.ok,
+        shots,
+        failedStep: result.failedStep,
+        error: result.error,
+        ...(recorded ? { recording: recorded } : {}),
+      });
       session.emit({
         kind: 'session-end',
-        summary: `${claim} on ${where}: ${result.ok ? 'replayed' : `stopped at step ${(result.failedStep ?? 0) + 1}`}`,
+        summary: `${what}: ${result.ok ? 'replayed' : `stopped at step ${(result.failedStep ?? 0) + 1}`}`,
       });
     }
   } catch (error) {

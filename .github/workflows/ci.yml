@@ -34,4 +34,6 @@ jobs:
       # The capture tests drive a real browser, because font loading and layout
       # only mean anything against a real rendering engine.
       - run: pnpm --filter @bugpatrol/capture exec playwright install --with-deps chromium
+      # The recording tests encode real video.
+      - run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pnpm test

@@ -1,5 +1,14 @@
+import { writeFile } from 'node:fs/promises';
 import type { Locator, Platform } from '@bugpatrol/core';
-import type { ActResult, Driver, DriverAction, Observation, UiElement } from '@bugpatrol/drivers';
+import {
+  type ActResult,
+  type Driver,
+  type DriverAction,
+  encodeFrames,
+  type Frame,
+  type Observation,
+  type UiElement,
+} from '@bugpatrol/drivers';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { PNG } from 'pngjs';
 
@@ -19,14 +28,34 @@ export class FakeDriver implements Driver {
   closed = false;
   current: string;
   failAt?: number;
+  startRecording?: () => Promise<void>;
+  stopRecording?: (name: string) => Promise<string>;
+  private frames?: Frame[];
 
+  /**
+   * `record: 'video'` records the screens it shows into a real MP4, which
+   * needs ffmpeg. `record: 'broken'` writes a file that is no video.
+   */
   constructor(
     readonly screens: Record<string, FakeScreen>,
     start = 'home',
     platform: Platform = 'web',
+    options: { record?: 'video' | 'broken' } = {},
   ) {
     this.current = start;
     this.platform = platform;
+    const record = options.record;
+    if (!record) return;
+    this.startRecording = async () => {
+      this.frames = [{ data: (await this.observe()).screenshot, at: Date.now() }];
+    };
+    this.stopRecording = async (name) => {
+      const file = `${name}.mp4`;
+      if (record === 'broken') await writeFile(file, 'not a video');
+      else await encodeFrames(this.frames ?? [], file, Date.now());
+      this.frames = undefined;
+      return file;
+    };
   }
 
   async connect(): Promise<void> {
@@ -59,6 +88,12 @@ export class FakeDriver implements Driver {
   }
 
   async act(action: DriverAction): Promise<ActResult> {
+    const result = await this.step(action);
+    this.frames?.push({ data: (await this.observe()).screenshot, at: Date.now() });
+    return result;
+  }
+
+  private async step(action: DriverAction): Promise<ActResult> {
     this.actions.push(action);
     if (this.failAt === this.actions.length) return { ok: false, error: 'fake action failed' };
     if (action.kind === 'tap') {
