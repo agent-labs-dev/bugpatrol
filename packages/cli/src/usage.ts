@@ -23,6 +23,7 @@ Agents
   bugpatrol fix [--issue <id>...]
   bugpatrol retest --issue <id>
   bugpatrol review <pr> [--dry-run] [--force] [--claims] [--steps N]
+  bugpatrol promote <pr> <claim>...       keep proven claim routines of a merged PR as routines
   bugpatrol publish [--issue <id>] [--dry-run]
   bugpatrol ci [--issue <id>] [--wait]
   bugpatrol github sync
@@ -111,6 +112,14 @@ export const COMMAND_HELP: Record<string, string> = {
   --allow-fork    review a pull request from a fork: its code runs on this machine, with the secrets of the app
   --claims        test what the pull request says it does, also when agents.review.claims is off
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
+`,
+  promote: `bugpatrol promote <pr> <claim>...
+  Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
+  Commit the routines, and the patrol replays them from then on. A review never does this by itself.
+  It refuses a pull request that is not merged, and a claim that is not proven or has no claim routine.
+  Needs a logged-in gh CLI, and the review of the pull request in .bugpatrol/runs/reviews/.
+  <pr>            the number or the URL of the pull request
+  <claim>         a claim id from the review, for example claim-1
 `,
   publish: `bugpatrol publish [--issue <id>]... [--dry-run]
   Open a draft PR for each fix, and a GitHub issue for each bug at agents.github.issueMinSeverity or worse with no fix.

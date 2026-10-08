@@ -10,6 +10,7 @@ export * from './roles/ci.js';
 export * from './roles/explorer.js';
 export * from './roles/fixer.js';
 export * from './roles/judge.js';
+export * from './roles/promote.js';
 export * from './roles/publish.js';
 export * from './roles/reflect.js';
 export * from './roles/retest.js';
