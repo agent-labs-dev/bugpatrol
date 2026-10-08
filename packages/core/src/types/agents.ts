@@ -537,6 +537,11 @@ export type PrReview = {
     /** The second replay of the disproved same-behavior claims on the base build. */
     againBaseReplay?: string;
   };
+  /**
+   * The config and the app guide that the review used, relative to the root.
+   * No `guide`: the app had none. Absent on a review from before this field.
+   */
+  files?: { config: string; guide?: string };
   /** The explorer's own account of what it tested. */
   tested?: string;
   /** The claim check. Absent when the claim check was off. */

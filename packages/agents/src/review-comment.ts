@@ -310,6 +310,9 @@ export function renderReview(
     review.sessions.base
       ? `Bugpatrol ran the app from this pull request (${head}) and from its base (${base} on \`${review.baseRef}\`), and repeated the same flows on both.`
       : `Bugpatrol ran the app from this pull request (${head}) and tested what the diff can affect.`,
+    ...(review.files && !review.files.guide
+      ? ['Bugpatrol found no app guide for this repo, so the explorer used the app without one.']
+      : []),
     ...introduced
       .filter((finding) => !onLine(finding))
       .map((finding, index) => section(finding, `#### ${index + 1}. ${finding.title}`)),

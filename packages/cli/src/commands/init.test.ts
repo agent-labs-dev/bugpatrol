@@ -238,7 +238,10 @@ describe('writeInitialConfig', () => {
     expect(readFileSync(join(root, '.bugpatrol', 'instructions.md'), 'utf8')).toContain('Never do these things');
     expect(existsSync(join(root, 'bugpatrol.yml'))).toBe(false);
     const config = loadConfig(root);
-    expect(instructionsPath(root, config.app.instructions)).toBe(join(root, '.bugpatrol', 'instructions.md'));
+    expect(instructionsPath(root, config.app.instructions)).toEqual({
+      path: join(root, '.bugpatrol', 'instructions.md'),
+      required: true,
+    });
   });
 
   it('ignores the run directory and keeps routines and the app map committable', () => {

@@ -1,13 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { stripVTControlCharacters } from 'node:util';
-import {
-  type AgentEvent,
-  type BugpatrolConfig,
-  instructionsPath,
-  LESSON_MAX_LENGTH,
-  type Lesson,
-  lessonTooLong,
-} from '@bugpatrol/core';
+import { type AgentEvent, type BugpatrolConfig, LESSON_MAX_LENGTH, type Lesson, lessonTooLong } from '@bugpatrol/core';
+import { readGuide } from '../guide.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
@@ -83,8 +76,7 @@ export async function reflectOnSession(
   const existing = lessonsFor(memory, 'explorer');
   const ids = new Set(existing.map((item) => item.id));
   const vars = deps.vars ?? new Vars(config.app.secrets);
-  const file = instructionsPath(root, config.app.instructions);
-  const guide = file ? await readFile(file, 'utf8') : '';
+  const guide = (await readGuide(root, config)).text ?? '';
   const record = await workspace.startSession('explorer');
   const emit = workspace.recordEvent(record.id, 'explorer', vars);
   let added = 0;

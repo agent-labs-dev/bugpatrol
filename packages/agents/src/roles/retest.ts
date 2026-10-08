@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -15,6 +14,7 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { closeOnGitHub } from '../github.js';
+import { readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { explorerRetestSystem, judgeRetestSystem } from '../prompts.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
@@ -163,8 +163,7 @@ export async function retestFix(
     session.emit({ kind: 'session-start', summary: `Retesting the fix for: ${issue.title}` });
     let outcome: RoleOutcome | undefined;
     try {
-      const guide = config.app.instructions;
-      const instructions = guide ? await readFile(resolve(root, guide), 'utf8') : '';
+      const instructions = (await readGuide(root, config)).text ?? '';
       outcome = await captureTargets(session, explorerRuntime, targets, {
         replay: { save: false, onFixBuild: !options.build },
         system: explorerRetestSystem(
