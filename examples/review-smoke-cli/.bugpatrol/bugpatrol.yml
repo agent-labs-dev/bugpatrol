@@ -9,7 +9,11 @@ app:
   # command below runs in the worktree of each build.
   source: ../..
   setup:
-    - run: node packages/dashboard/scripts/fixture.mjs .review-smoke
+    # The worktree sits below this folder, so without a config of its own the
+    # fixture would resolve to this project and its empty runs/.
+    - run: |
+        node packages/dashboard/scripts/fixture.mjs .review-smoke
+        printf 'version: 1\napp:\n  connect: { url: "http://127.0.0.1:4311/" }\n' > .review-smoke/.bugpatrol/bugpatrol.yml
       cwd: ../..
       timeoutMs: 120000
   connect:
