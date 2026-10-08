@@ -1,4 +1,15 @@
-import type { PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
+import type {
+  AssertionResult,
+  BenchBuild,
+  ClaimBench,
+  ClaimEvidence,
+  ClaimFinding,
+  ClaimSource,
+  PrReview,
+  ReviewFinding,
+  ReviewVerdict,
+} from '@bugpatrol/core';
+import { assertionWords } from './replay.js';
 
 /** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
 export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
@@ -6,7 +17,10 @@ export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
 export const SUPERSEDED_MARKER = '<!-- bugpatrol:superseded -->';
 
 const rank = { cosmetic: 0, minor: 1, major: 2, critical: 3 };
-const short = (commit: string) => commit.slice(0, 7);
+/** The short hash of a commit, as GitHub shows it. */
+export const short = (commit: string) => commit.slice(0, 7);
+/** Where a replay that failed stopped, counting the steps from 1. */
+export const stoppedAt = (replay?: { failedStep?: number }) => `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
 
 function details(summary: string, lines: string[]): string[] {
   return lines.length ? [`<details><summary>${summary}</summary>\n\n${lines.join('\n')}\n\n</details>`] : [];
@@ -49,6 +63,188 @@ export function numberDiff(diff: string): { text: string; lines: Map<string, Set
   return { text: text.join('\n'), lines };
 }
 
+function sourceWords(source: ClaimSource): string {
+  switch (source.kind) {
+    case 'section':
+      return 'the claims section';
+    case 'title':
+      return 'the title';
+    case 'body':
+      return 'the description';
+    case 'commit':
+      return `commit \`${short(source.commit)}\``;
+    case 'issue':
+      return `issue #${source.number}`;
+  }
+}
+
+const evidenceWords: Record<ClaimEvidence, string> = {
+  replay: 'a replay of the same steps on both builds, with no model',
+  assertion: 'an exact check on both builds',
+  explored: 'the explorer and the judge, with no replay',
+  bench: 'a benchmark on both builds',
+};
+/** A flow that both builds replayed, and whose verdict the judge read from the screens. */
+const judgedReplay = 'the judge, from the screens of a replay of the same steps on both builds';
+
+/** The median and the spread of a benchmark on each build, and the command that measured them. */
+function benchLines(bench: ClaimBench, base: string, head: string): string[] {
+  const spread = (numbers: BenchBuild) => `${numbers.min} to ${numbers.max}`;
+  return [
+    `Bugpatrol ran the benchmark \`${bench.name}\` ${bench.runs} times on each build, in turn. ${bench.metric}, ${bench.better} is better.`,
+    `| | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
+      `| Median | ${bench.base.median} | ${bench.head.median} |\n` +
+      `| Spread | ${spread(bench.base)} | ${spread(bench.head)} |`,
+    ...details('Each run', [
+      `\`${bench.command}\``,
+      `Base: ${bench.base.values.join(', ')}`,
+      `This pull request: ${bench.head.values.join(', ')}`,
+    ]),
+  ];
+}
+
+/** A claim whose builds both have a GIF shows the GIFs only. Otherwise it shows the screenshots of each step. */
+const recorded = (finding: ClaimFinding) => Boolean(finding.base?.recording?.gif && finding.head?.recording?.gif);
+
+/** The files that the claims of a review show: the recordings and the full videos, or the screenshots. */
+export function claimMedia(review: PrReview): string[] {
+  return (review.claims ?? [])
+    .filter((finding) => finding.verdict !== 'untested')
+    .flatMap((finding) =>
+      [finding.base, finding.head].flatMap((replay) => [
+        ...(recorded(finding) ? [] : (replay?.shots ?? [])),
+        ...(replay?.recording ? [replay.recording.gif, replay.recording.file] : []),
+      ]),
+    )
+    .filter((path): path is string => Boolean(path));
+}
+
+/**
+ * The claims come first: they are what the author says the pull request
+ * does. A tested claim is a section with both builds side by side. The
+ * claims that Bugpatrol could not test are a list with the reason, so the
+ * reviewer knows what is left to check by hand.
+ */
+function claimLines(
+  review: PrReview,
+  image: (path?: string) => string | undefined,
+  url: (path: string) => string | undefined,
+): string[] {
+  const claims = review.claims;
+  if (!claims) return [];
+  const head = `\`${short(review.head)}\``;
+  const base = `\`${short(review.base)}\``;
+  const tested = claims.filter((finding) => finding.verdict !== 'untested');
+  const untested = claims.filter((finding) => finding.verdict === 'untested');
+  const cell = (path: string | undefined, fallback: string) => image(path) ?? `_${fallback}_`;
+  const stopped = (finding: ClaimFinding, build: 'head' | 'base') => {
+    const replay = finding[build];
+    return replay && !replay.ok ? `The replay ${stoppedAt(replay)}.` : 'No screenshot.';
+  };
+  /**
+   * The GIF of a build or its last screen, then the full recording: a video, or a terminal cast. A recording
+   * with no URL, such as one over the upload limit, stays in the run directory.
+   */
+  const last = (finding: ClaimFinding, build: 'head' | 'base') => {
+    const recording = finding[build]?.recording;
+    const video = recording && url(recording.file);
+    const label = recording?.file.endsWith('.cast') ? 'Terminal recording' : 'Full video';
+    return (
+      cell(recording?.gif ?? finding[build]?.shots.at(-1), stopped(finding, build)) +
+      (video
+        ? `<br><a href="${video}">${label}</a>`
+        : recording
+          ? `<br>${label}: \`${recording.file}\` in the run, and in the dashboard`
+          : '')
+    );
+  };
+  /** Each exact check of a claim on both builds. */
+  const checks = (finding: ClaimFinding) => {
+    const results = finding.head?.assertions;
+    if (!results?.length) return [];
+    const cellText = (text: string) => text.replaceAll('|', '\\|');
+    const result = (item?: AssertionResult) =>
+      !item ? '-' : item.ok ? 'Passed' : item.actual !== undefined ? `Failed, ${assertionWords(item, true)}` : 'Failed';
+    return [
+      `| Check | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
+        results
+          .map(
+            (item, index) =>
+              `| ${cellText(assertionWords(item))} | ${cellText(result(finding.base?.assertions?.[index]))} | ${cellText(result(item))} |`,
+          )
+          .join('\n'),
+    ];
+  };
+  /** Each output of a same-behavior claim that differs between the builds, then the rules that normalised them. */
+  const compared = (finding: ClaimFinding) => {
+    if (!finding.compared) return [];
+    const html = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    return [
+      ...finding.compared.parts.map((part) => {
+        const fence = part.diff.includes('```') ? '~~~~' : '```';
+        return `\`${part.step}\` on the base ${base} (\`-\`) and on this pull request ${head} (\`+\`):\n\n${fence}diff\n${part.diff}\n${fence}`;
+      }),
+      ...details(
+        'Normalised before the diff',
+        finding.compared.rules.map((rule) => `- ${html(rule)}`),
+      ),
+    ];
+  };
+  const section = (finding: ClaimFinding) => {
+    const replayed = Boolean(finding.head);
+    const steps = finding.steps ?? [];
+    return [
+      `#### ${finding.claim.text}`,
+      `\`${finding.verdict}\` · From ${sourceWords(finding.claim.source)}.` +
+        (finding.evidence
+          ? ` Evidence: ${finding.evidence === 'explored' && replayed ? judgedReplay : evidenceWords[finding.evidence]}.`
+          : ''),
+      finding.reason,
+      // With a replay, the screenshots show the rest.
+      ...(finding.saw && (finding.verdict === 'not-proven' || !replayed) ? [`Bugpatrol saw: ${finding.saw}`] : []),
+      ...(finding.bench ? benchLines(finding.bench, base, head) : []),
+      ...(finding.did
+        ? [
+            `${replayed ? 'What Bugpatrol did on both builds' : 'What Bugpatrol did on this pull request'}: ${finding.did}`,
+          ]
+        : []),
+      ...checks(finding),
+      ...compared(finding),
+      ...(replayed
+        ? [
+            `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
+              `| ${last(finding, 'base')} | ${last(finding, 'head')} |`,
+            ...details(
+              'Each step',
+              recorded(finding)
+                ? []
+                : [
+                    `| Step | Base ${base} | This pull request ${head} |\n| --- | --- | --- |`,
+                    ...['Start', ...steps].map(
+                      (step, index) =>
+                        `| ${index ? `${index}. ${step}` : step} | ${cell(finding.base?.shots[index], '-')} | ${cell(finding.head?.shots[index], '-')} |`,
+                    ),
+                  ],
+            ),
+          ]
+        : []),
+    ].join('\n\n');
+  };
+  const item = (finding: ClaimFinding) =>
+    `- **${finding.claim.text}**<br><sub>From ${sourceWords(finding.claim.source)}. ${finding.reason}</sub>`;
+  return [
+    `#### What this pull request says it does (${claims.length})`,
+    claims.length
+      ? `Bugpatrol compared this pull request (${head}) with its base (${base} on \`${review.baseRef}\`).`
+      : 'Bugpatrol found no claim in the pull request.',
+    ...tested.map(section),
+    ...(untested.length
+      ? [`#### Claims that Bugpatrol could not test (${untested.length})`, untested.map(item).join('\n')]
+      : []),
+    '#### Problems that this pull request introduces',
+  ];
+}
+
 export type RenderedReview = {
   body: string;
   /** One for each introduced problem that the judge put on a line of the diff. */
@@ -60,8 +256,8 @@ export type RenderedReview = {
  * comment on the changed line that causes it, with both screenshots. When the
  * judge named no line, or a line that the diff does not show, the problem is
  * a section of the review body instead. The rest is folded, so the author
- * reads first what is theirs to fix. The caller owns image upload: `imageUrl`
- * maps a workspace path to where a reader can load it.
+ * reads first what is theirs to fix. The caller owns upload: `imageUrl` maps
+ * a workspace path, of a picture or a video, to where a reader can load it.
  */
 export function renderReview(
   review: PrReview,
@@ -106,6 +302,7 @@ export function renderReview(
   const body = [
     REVIEW_MARKER,
     '### Bugpatrol review',
+    ...claimLines(review, image, imageUrl),
     introduced.length
       ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
       : '**No problem found that this pull request introduces.**',

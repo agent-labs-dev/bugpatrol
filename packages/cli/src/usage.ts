@@ -22,7 +22,8 @@ Agents
   bugpatrol judge [--session <id>...]
   bugpatrol fix [--issue <id>...]
   bugpatrol retest --issue <id>
-  bugpatrol review <pr> [--dry-run] [--force] [--steps N]
+  bugpatrol review <pr> [--dry-run] [--force] [--claims] [--steps N]
+  bugpatrol promote <pr> <claim>...       keep proven claim routines of a merged PR as routines
   bugpatrol publish [--issue <id>] [--dry-run]
   bugpatrol ci [--issue <id>] [--wait]
   bugpatrol github sync
@@ -98,17 +99,28 @@ export const COMMAND_HELP: Record<string, string> = {
   retest: `bugpatrol retest --issue <id>
   Start the app from the fix worktree, repeat the flow, and let the judge compare before and after.
 `,
-  review: `bugpatrol review <pr> [--dry-run] [--force] [--allow-fork] [--steps N]
+  review: `bugpatrol review <pr> [--dry-run] [--force] [--allow-fork] [--claims] [--steps N]
   Review one pull request in the running app. The explorer tests what the diff can affect on the pull request
   build. Bugpatrol repeats each reported flow on the base build, and the judge keeps what the pull request introduces.
   The result is a GitHub review: each introduced problem is a comment on the changed line that causes it.
-  A new review replaces the review of an older commit. It never blocks the merge.
+  A new review replaces the review of an older commit. It never blocks the merge, unless agents.review.block
+  is on: then a claim that a replay disproves twice fails the claim check run, and review exits 1.
   Needs a logged-in gh CLI. To post the review, it also needs agents.github.enabled: true.
   <pr>            the number or the URL of the pull request
   --dry-run       write the review to .bugpatrol/runs/reviews/, and send nothing to GitHub
   --force         test the pull request again, also when the last review tested the same commit
   --allow-fork    review a pull request from a fork: its code runs on this machine, with the secrets of the app
+  --claims        test what the pull request says it does, also when agents.review.claims is off
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
+`,
+  promote: `bugpatrol promote <pr> <claim>...
+  Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
+  Commit the routines, and the patrol replays them from then on. A review never does this by itself.
+  It refuses a pull request that is not merged, a review of another commit than the one that merged,
+  and a claim that is not proven or has no claim routine.
+  Needs a logged-in gh CLI, and the review of the pull request in .bugpatrol/runs/reviews/.
+  <pr>            the number or the URL of the pull request
+  <claim>         a claim id from the review, for example claim-1
 `,
   publish: `bugpatrol publish [--issue <id>]... [--dry-run]
   Open a draft PR for each fix, and a GitHub issue for each bug at agents.github.issueMinSeverity or worse with no fix.

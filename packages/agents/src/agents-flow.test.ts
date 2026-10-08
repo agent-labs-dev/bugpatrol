@@ -252,6 +252,79 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it("saves a new issue's repro as a committed routine", async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      await run(tools, 'record_screen', { id: 'home', name: 'Home', description: 'Launcher' });
+      await run(tools, 'tap', { ref: 'e1' });
+      await run(tools, 'report_bug', {
+        screen_id: 'settings',
+        title: 'Save does nothing',
+        what_is_wrong: 'No confirmation',
+        expected: 'A confirmation',
+        severity: 'major',
+      });
+      const candidate = (await pendingCandidates(f.session, [f.session.sessionId]))[0]!;
+      await run(judgeTools(f.session, [f.session.sessionId], 'fake-judge'), 'file_issue', {
+        candidate_ids: [candidate.id],
+        title: 'Save in settings does nothing',
+        body: 'What happened: nothing',
+        severity: 'major',
+        reason: 'The save control has no effect.',
+      });
+      const issue = (await f.workspace.listIssues())[0]!;
+      expect(issue.evidence.reproRoutineId).toMatch(/^repro-/);
+      const saved = JSON.parse(await readFile(paths.routine(f.root, issue.evidence.reproRoutineId!), 'utf8'));
+      expect(saved).toMatchObject({
+        id: issue.evidence.reproRoutineId,
+        description: 'Reproduces: Save in settings does nothing',
+        requires: [candidate.evidence.routineId],
+        steps: [{ kind: 'tap', target: { name: 'Settings' } }],
+      });
+      expect(paths.routine(f.root, saved.id).startsWith(join(f.root, '.bugpatrol', 'routines'))).toBe(true);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps how a replay tells that the bug shows, checked against the screen, in the repro routine', async () => {
+    const f = await fixture();
+    try {
+      f.screens.settings!.consoleErrors = ['TypeError: save is not a function'];
+      const tools = explorerTools(f.session);
+      await run(tools, 'tap', { ref: 'e1' });
+      const report = (bug: Record<string, unknown>) =>
+        run(tools, 'report_bug', {
+          screen_id: 'settings',
+          title: 'Save does nothing',
+          what_is_wrong: 'No confirmation',
+          expected: 'A confirmation',
+          severity: 'major',
+          ...bug,
+        });
+      // Each part of the check must hold on the screen that the explorer looked at last.
+      expect((await report({ shows: 'Saved' })).isError).toBe(true);
+      expect((await report({ lacks: 'Save' })).isError).toBe(true);
+      expect((await report({ error: 'ReferenceError' })).isError).toBe(true);
+      expect((await pendingCandidates(f.session, [f.session.sessionId])).length).toBe(0);
+      await report({ shows: 'Save', lacks: 'Saved', error: 'save is not a function' });
+      const candidate = (await pendingCandidates(f.session, [f.session.sessionId]))[0]!;
+      await run(judgeTools(f.session, [f.session.sessionId], 'fake-judge'), 'file_issue', {
+        candidate_ids: [candidate.id],
+        title: 'Save in settings does nothing',
+        body: 'What happened: nothing',
+        severity: 'major',
+        reason: 'The save control has no effect.',
+      });
+      const issue = (await f.workspace.listIssues())[0]!;
+      const saved = await f.workspace.readRoutine(issue.evidence.reproRoutineId!);
+      expect(saved!.bug).toEqual({ shows: 'Save', lacks: 'Saved', error: 'save is not a function' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('compacts routines and keeps only steps after the current anchor as evidence', async () => {
     const f = await fixture();
     try {

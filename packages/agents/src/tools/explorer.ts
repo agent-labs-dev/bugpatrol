@@ -10,6 +10,7 @@ const apiRequestSchema = z.object({
 });
 
 import {
+  type BugCheck,
   type Candidate,
   fingerprint,
   type Locator,
@@ -20,7 +21,7 @@ import {
 } from '@bugpatrol/core';
 import type { DriverAction, Observation, UiElement } from '@bugpatrol/drivers';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
-import { replayRoutine } from '../replay.js';
+import { bugMisses, replayRoutine } from '../replay.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -86,6 +87,16 @@ function observationText(observation: Observation): string {
       ? [
           `HTTP ${observation.http.status} (${observation.http.contentType ?? 'no content type'})`,
           observation.http.body,
+        ]
+      : []),
+    ...(observation.terminal
+      ? [
+          `$ ${observation.terminal.command}`,
+          observation.terminal.exitCode === undefined
+            ? 'The command did not exit.'
+            : `Exit code: ${observation.terminal.exitCode}`,
+          'Output:',
+          observation.terminal.output.slice(-8000) || '(none)',
         ]
       : []),
     'Elements:',
@@ -219,6 +230,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `Switched to the "${action.match}" window`;
     case 'request':
       return `${action.method} ${session.vars.redact(action.url)}`;
+    case 'run':
+      return `Ran ${session.vars.redact(action.command)}`;
   }
 }
 
@@ -339,7 +352,7 @@ function compactSteps(steps: RoutineStep[]): RoutineStep[] {
   const compacted: RoutineStep[] = [];
   for (const step of steps) {
     if (step.kind === 'wait') continue;
-    if (step.kind === 'request') {
+    if (step.kind === 'request' || step.kind === 'run') {
       compacted.push(step);
       continue;
     }
@@ -382,7 +395,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'press') return `press:${step.key}`;
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
-  if (step.kind === 'request') return JSON.stringify(step);
+  if (step.kind === 'request' || step.kind === 'run') return JSON.stringify(step);
   return step.kind;
 }
 
@@ -448,6 +461,34 @@ export function explorerTools(
                 body: parsed.body === undefined ? undefined : session.vars.resolve(parsed.body),
               };
               return act(session, action, { kind: 'request', ...resolved });
+            },
+          },
+        ]
+      : []),
+    ...(session.driver?.platform === 'cli'
+      ? [
+          {
+            name: 'run_command',
+            description:
+              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output.',
+            inputSchema: schema({ command: string, input: string }, ['command']),
+            async run(input: Record<string, unknown>) {
+              const command = arg(input, 'command');
+              const typed = input.input === undefined ? undefined : arg(input, 'input');
+              if (!command.trim()) return { ...text('Give the command to run.'), isError: true };
+              const recorded = session.vars.redact({ command, ...(typed ? { input: typed } : {}) }) as {
+                command: string;
+                input?: string;
+              };
+              return act(
+                session,
+                {
+                  kind: 'run',
+                  command: session.vars.resolve(command),
+                  ...(typed ? { input: session.vars.resolve(typed) } : {}),
+                },
+                { kind: 'run', ...recorded },
+              );
             },
           },
         ]
@@ -665,7 +706,11 @@ export function explorerTools(
     {
       name: 'report_bug',
       description:
-        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'.",
+        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+        'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+        'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+        'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+        'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
           screen_id: string,
@@ -673,14 +718,29 @@ export function explorerTools(
           what_is_wrong: string,
           expected: string,
           severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
+          shows: string,
+          lacks: string,
+          error: string,
         },
         ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
-        if (!session.lastScreenshot) {
+        if (!session.lastScreenshot || !session.lastObservation) {
           await session.capture(await session.driver!.observe(), 'reported-bug');
         }
+        const bug: BugCheck = {};
+        for (const key of ['shows', 'lacks', 'error'] as const) {
+          const value = session.vars.redact(arg(input, key).trim()) as string;
+          if (value) bug[key] = value;
+        }
+        const observation = session.lastObservation!;
+        const misses = bugMisses(bug, observation, [
+          ...observation.consoleErrors,
+          ...(observation.networkErrors ?? []),
+        ]);
+        if (misses.length)
+          return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };
         const requested = arg(input, 'screen_id');
         const known = (await session.workspace.readAppMap())?.screens.some((screen) => screen.id === requested);
         const screenId = known ? requested : currentScreenId(session);
@@ -702,6 +762,7 @@ export function explorerTools(
             screenshot: session.lastScreenshot,
             routineId: session.anchor.routineId,
             steps: session.trail.slice(session.anchor.index).map(({ at: _at, ...step }) => step as RoutineStep),
+            ...(Object.keys(bug).length ? { bug } : {}),
           },
           route: { to: 'judge', reason: 'Explorer reported a visible bug' },
           createdAt: new Date().toISOString(),
@@ -754,7 +815,7 @@ export function explorerTools(
   }
   tools.push(...lessonTools(session, 'explorer'));
   if (session.driver?.platform === 'desktop') return tools.filter((tool) => tool.name !== 'open');
-  return session.driver?.platform === 'api'
+  return session.driver?.platform === 'api' || session.driver?.platform === 'cli'
     ? tools.filter((tool) => !['tap', 'type', 'press', 'scroll', 'back', 'open'].includes(tool.name))
     : tools;
 }

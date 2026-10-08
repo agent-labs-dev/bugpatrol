@@ -32,7 +32,7 @@ describe('Workspace', () => {
       });
       expect(repeated.transitions).toMatchObject([{ to: 'settings', count: 2, steps: 1 }]);
       expect(repeated.transitions?.[0]?.lastSeenAt).not.toBe('old');
-      expect((await readdir(paths.data(root))).some((name) => name.includes('.tmp-'))).toBe(false);
+      expect((await readdir(paths.dir(root))).some((name) => name.includes('.tmp-'))).toBe(false);
       const session = await workspace.startSession('explorer');
       const vars = new Vars();
       vars.set('TOKEN', 'secret-value');

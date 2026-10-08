@@ -1,0 +1,119 @@
+name: Bugpatrol review
+description: Run `bugpatrol review` on a pull request. It tests the change in the running app and posts a GitHub review.
+author: agent-labs-dev
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  pr:
+    description: The pull request number. Default is the pull request of the event.
+    default: ${{ github.event.pull_request.number }}
+  github-token:
+    description: "The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on."
+    default: ${{ github.token }}
+  package:
+    description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball.
+    default: bugpatrol@latest
+  node-version:
+    description: The Node.js version that runs Bugpatrol.
+    default: '22'
+  working-directory:
+    description: The folder that holds `.bugpatrol/`, or a folder below it.
+    default: .
+  allow-fork:
+    description: Review a pull request from a fork. Its code runs on this machine, with the secrets of the app.
+    default: 'false'
+  force:
+    description: Test the pull request again, also when the last review tested the same commit.
+    default: 'false'
+  claims:
+    description: Run the claim check, also when `agents.review.claims` is off.
+    default: 'false'
+  steps:
+    description: The step limit of the explorer. Default is `agents.explorer.maxSteps`.
+    default: ''
+  args:
+    description: More flags for `bugpatrol review`, split on spaces.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install Bugpatrol
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+      run: |
+        prefix="$RUNNER_TEMP/bugpatrol"
+        npm install --prefix "$prefix" --no-audit --no-fund --loglevel=error "$PACKAGE"
+        echo "BUGPATROL_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+    # Only a web app needs a browser. Electron, mobile, API and desktop apps
+    # run on what the machine already has.
+    - name: Install the browser for a web app
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        platform=$(node --input-type=module -e '
+          import { createRequire } from "node:module";
+          import { existsSync, readFileSync } from "node:fs";
+          import { dirname, join, resolve } from "node:path";
+          const { parse } = createRequire(join(process.env.BUGPATROL_PREFIX, "package.json"))("yaml");
+          let file = "";
+          for (let dir = resolve("."); !file; dir = dirname(dir)) {
+            if (existsSync(join(dir, ".bugpatrol/bugpatrol.yml"))) file = join(dir, ".bugpatrol/bugpatrol.yml");
+            else if (dirname(dir) === dir) break;
+          }
+          const config = file ? parse(readFileSync(file, "utf8")) : {};
+          console.log(config?.app?.platform ?? "web");
+        ')
+        if [ "$platform" != web ]; then
+          echo "The app platform is $platform: no browser to install."
+          exit 0
+        fi
+        playwright="$BUGPATROL_PREFIX/node_modules/.bin/playwright"
+        # The system libraries need root. A self-hosted machine without
+        # passwordless sudo must have them already.
+        if [ "$RUNNER_OS" = Linux ] && { [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; }; then
+          "$playwright" install --with-deps chromium
+        else
+          "$playwright" install chromium
+        fi
+
+    - name: Review the pull request
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr }}
+        ALLOW_FORK: ${{ inputs.allow-fork }}
+        FORCE: ${{ inputs.force }}
+        CLAIMS: ${{ inputs.claims }}
+        STEPS: ${{ inputs.steps }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        if [ -z "$PR" ]; then
+          echo "::error::No pull request number. Run on a pull_request event, or set the pr input."
+          exit 2
+        fi
+        # The review compares the pull request with its merge base, so it
+        # needs the history that a shallow checkout leaves out.
+        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+          git fetch --quiet --unshallow origin
+        fi
+        set -- review "$PR"
+        [ "$ALLOW_FORK" = true ] && set -- "$@" --allow-fork
+        [ "$FORCE" = true ] && set -- "$@" --force
+        [ "$CLAIMS" = true ] && set -- "$@" --claims
+        [ -n "$STEPS" ] && set -- "$@" --steps "$STEPS"
+        # shellcheck disable=SC2086 # the extra flags split on spaces on purpose
+        set -- "$@" $ARGS
+        # The exit code of Bugpatrol is the exit code of this step: 0 when the
+        # review only comments, 1 when the claim check fails (agents.review.block),
+        # 4 when Bugpatrol could not test.
+        exec "$BUGPATROL_PREFIX/node_modules/.bin/bugpatrol" "$@"

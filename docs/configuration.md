@@ -10,6 +10,8 @@ Bugpatrol keeps all of its files in one folder at the root of your project:
 | --- | --- | --- |
 | `.bugpatrol/bugpatrol.yml` | The config | Commit it |
 | `.bugpatrol/instructions.md` | The app guide for the explorer | Commit it |
+| `.bugpatrol/appmap.json` | The screens that the explorer found | Commit it |
+| `.bugpatrol/routines/` | The routines, and the repro routine of each issue. CI and a fresh clone replay them | Commit it |
 | `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots | `init` adds it to `.gitignore` |
 
 The project root is the folder that holds `.bugpatrol/`. All paths in the config (`source`, `cwd`, `instructions`) are relative to the project root. You can run a command from any folder in the project: Bugpatrol finds `.bugpatrol/` in the current folder or in a folder above it.
@@ -22,11 +24,11 @@ Older versions kept `bugpatrol.yml` and `instructions.md` at the project root. I
 version: 1
 
 app:
-  platform: web                 # web | electron | ios | android | api | desktop
+  platform: web                 # web | electron | ios | android | api | desktop | cli
   source: .                     # the repo that the fixer edits, relative to the project root
   setup: []                     # commands: { run, cwd, capture, background, readyWhen, timeoutMs }
   teardown: []
-  connect: { url: http://localhost:3000 }   # or cdp, or appId + device
+  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { timeoutMs: 60000 }
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
 
@@ -56,6 +58,19 @@ agents:
     labels: [bugpatrol]
     assetsBranch: bugpatrol-assets # the orphan branch that holds report images
     prScope: app                # optional: the scope in PR titles
+  review:
+    claims: false               # the claim check of `bugpatrol review`: test what the pull request says it does
+    block: false                # set a check run that fails on a disproof from a replay (needs `checks: write`)
+    maxSteps: 150               # the model steps of one claim check, across all its sessions
+    budgetUsd: 2                # optional: its cost limit in USD, across all its sessions; no limit by default
+    timeoutMs: 1200000          # its time limit: its judges, its claim work in the explorer, its replays and benchmarks
+    benches:                    # optional: benchmarks that can measure a speed claim
+      - name: settings-load
+        command: hyperfine --runs 10 'node scripts/load-settings.js' # runs in each build's worktree
+        metric: mean time in ms
+        parse: 'Time \(mean ± σ\):\s+([\d.]+) ms' # the first group is the number
+        better: lower           # lower | higher
+        runs: 5                 # runs on each build, alternating between the builds
   memory:
     enabled: true
   checks: []                    # optional automatic checks, for example [usability/contrast, usability/tap-target]

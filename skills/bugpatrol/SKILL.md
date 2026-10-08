@@ -25,7 +25,7 @@ Platforms: `web` (Playwright), `electron` (CDP), `ios` and `android` (Maestro).
 
 The explorer, the judge, and the fixer are LLM agents. Each one runs on a local agent CLI (`claude`, `codex`, `kimi`, or `pi`) or on an API key (OpenRouter, Vercel AI Gateway, OpenAI, Anthropic).
 
-Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model.
+Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model. The routines (`.bugpatrol/routines/`) and the app map (`.bugpatrol/appmap.json`) are committed, so CI and a fresh clone can replay them. Bugpatrol writes them and never commits them: the user does.
 
 ## 2. Configure it for the repo
 
@@ -42,7 +42,7 @@ Do not guess them. Do not continue to step 2.3 until you have both. If you canno
 
 First, read the repo. Look at `package.json` scripts, `README`, `CONTRIBUTING`, `.env.example`, `docker-compose.yml`, E2E tests (Playwright, Cypress, Detox, Maestro), `app.json`, `Info.plist`, and `AndroidManifest.xml`. Find:
 
-- The platform: web, Electron, iOS, or Android.
+- The platform: web, Electron, iOS, Android, or a command line app (`cli`).
 - The command that starts the app for local use, for example `npm run dev`.
 - The URL and port (web), the CDP port (Electron), or the bundle ID or package name (mobile).
 - The actions that the explorer must never do, for example: delete data, send email to real people, or make payments.
@@ -434,7 +434,7 @@ To read the state of the PRs and issues back from GitHub, run `npx bugpatrol@lat
 
 ### Optional: review a pull request
 
-`review` tests one pull request of the team in the running app. It starts the app from the pull request commit and from its merge base, repeats the same flows on both, and posts a GitHub review. Each problem that the pull request introduces is a comment on the changed line that causes it. The review never blocks the merge.
+`review` tests one pull request of the team in the running app. It starts the app from the pull request commit and from its merge base, repeats the same flows on both, and posts a GitHub review. Each problem that the pull request introduces is a comment on the changed line that causes it. The review never blocks the merge, unless `agents.review.block` is on and a replay disproves a claim twice.
 
 ```bash
 npx bugpatrol@latest review <pr> --dry-run   # write the review to .bugpatrol/runs/reviews/pr-<pr>.md
@@ -445,6 +445,8 @@ npx bugpatrol@latest review <pr>             # post the review; it replaces the 
 - It runs the code of the pull request on this machine, with the secrets of the app. It refuses a pull request from a fork. Add `--allow-fork` only after the user read the diff and said yes.
 - It does not start while a patrol runs on the same machine.
 - Run `--dry-run` first, show the user the file, and post only after a yes.
+- `--claims` (or `agents.review.claims: true`) also lists what the pull request says it does, from a `## Claims` list in its description or else from its title, description, commits and closed issues. Bugpatrol replays the flow of each claim on both builds and gives each claim a verdict (`proven`, `not-proven`, `partly-proven`, `untested`) with its evidence (`explored` when the judge decided, also from the screens of a replay). Claim routines stay in `.bugpatrol/runs/reviews/pr-<n>/`. On web, Electron, iOS and Android, with `ffmpeg` on the `PATH`, Bugpatrol records each replay and the review shows a GIF of both builds with a link to the full MP4. Without `ffmpeg` it shows screenshots. A closed Bugpatrol issue gets its own claim, decided with no model and evidence `replay`: its committed repro routine replays on both builds, and its bug check must hold on the base build and fail on the pull request build. A repro whose bug does not show on the base build is `untested`. On a `cli` app each step runs a command in a terminal (it needs `python3`), the explorer can add exact checks on the exit code and the output, and those checks decide the verdict with evidence `assertion`. The review shows a GIF of each terminal session, drawn without `ffmpeg`, and links the `.cast` file. On an `api` app the checks are on the last response (status code, texts in the body), and the review shows the HTTP transcript of each build the same way, with credentials redacted. A claim that a behavior stays the same (a refactor, a new pagination) on a `cli` or `api` app replays the same commands or requests on both builds and diffs their outputs, after it normalises times, UUIDs, hex ids, Unix times, durations and JSON key order. Equal outputs give `proven`, a diff gives `not-proven` with the changed lines, and the evidence is `assertion`. With blocking on, the diff must repeat on a second replay of both builds.
+- `agents.review.block: true` sets a `Bugpatrol claim check` check run (the token needs `checks: write`). It fails, and `review` exits 1, only on a `not-proven` claim with `replay` or `assertion` evidence, decided by code with no model, that a second replay repeated. A repro and a same-behavior claim replay a second time on both builds. A second replay with another code-decided result makes the claim `untested` ("Flaky replay"). A judge's verdict never fails the check.
 
 Full reference: https://github.com/agent-labs-dev/bugpatrol/blob/main/docs/github.md#7-review-a-pull-request
 
@@ -499,7 +501,8 @@ To summarize the results for the user, read these files:
 | `.bugpatrol/runs/fixes/<id>.json` | One fix: `status`, `branch`, `diff`, `retests`, and `pr` |
 | `.bugpatrol/runs/reviews/pr-<number>.json` | The last review of one pull request: `findings` with a `verdict` each, and `posted.url` |
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session and its screenshots |
-| `.bugpatrol/runs/appmap.json` | The screens that the explorer found |
+| `.bugpatrol/appmap.json` | The screens that the explorer found. Commit it |
+| `.bugpatrol/routines/<id>.json` | The routines, and the repro routine of each issue (`repro-<hash>`). Commit them |
 | `.bugpatrol/runs/memory.json` | The lessons |
 
 Severity, worst first: `critical`, `major`, `minor`, `cosmetic`.

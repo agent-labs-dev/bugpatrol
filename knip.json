@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
+    "packages/drivers": {
+      "ignoreBinaries": ["adb"]
+    },
     "packages/bugpatrol": {
       "entry": ["build.mjs"],
       "ignoreDependencies": [
@@ -15,7 +18,8 @@
       ]
     },
     "packages/dashboard": {
-      "entry": ["src/ui/app.js", "scripts/*.mjs"]
+      "entry": ["src/ui/app.js", "scripts/*.mjs"],
+      "ignoreBinaries": ["ffmpeg"]
     }
   }
 }

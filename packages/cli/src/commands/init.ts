@@ -21,7 +21,7 @@ import {
 import { detectBringUp, detectStack } from '@bugpatrol/recon';
 
 export type { Platform } from '@bugpatrol/core';
-export const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop'];
+export const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli'];
 
 /** Model routes that need only an API key. */
 export const KEY_PROVIDERS = {
@@ -260,6 +260,8 @@ const READY: Record<Platform, string> = {
   electron: 'DevTools listening',
   ios: 'Waiting on http|Metro waiting|Dev server ready',
   android: 'Waiting on http|Metro waiting|Dev server ready',
+  // A CLI app has no server: its setup is a build that runs to its end.
+  cli: '',
 };
 
 function quoteYaml(value: string): string {
@@ -292,7 +294,9 @@ export function renderConfig(answers: InitAnswers): string {
     '# Paths are relative to the project root: the folder that holds .bugpatrol/.',
     '  source: .                          # the repo that the fixer edits',
   ];
-  if (answers.start) {
+  if (answers.start && platform === 'cli') {
+    lines.push('  setup:', `    - run: ${quoteYaml(answers.start)}   # builds the app before each session`);
+  } else if (answers.start) {
     lines.push(
       '  setup:',
       `    - run: ${quoteYaml(answers.start)}`,
@@ -313,6 +317,8 @@ export function renderConfig(answers: InitAnswers): string {
       '      viewer:',
       '        allowTakeover: false',
     );
+  if (platform === 'cli')
+    lines.push('    cli:', '      timeoutMs: 60000                # a command that runs longer is stopped');
   if (platform === 'electron')
     lines.push(`    cdp: http://127.0.0.1:${answers.cdpPort ?? 9222}   # the app must open this CDP port`);
   if (platform === 'ios' || platform === 'android') {
@@ -362,10 +368,10 @@ Example: Sign in with the email {{TEST_EMAIL}} and the password {{TEST_PASSWORD}
 `;
 
 /**
- * Git-ignores the local data, and only the local data: the config and the app
- * guide in .bugpatrol/ are committed. A line from an older version that
- * ignores all of .bugpatrol/ is changed to the data folder. True when the
- * file changed.
+ * Git-ignores the local data, and only the local data: the config, the app
+ * guide, the app map and the routines in .bugpatrol/ are committed. A line
+ * from an older version that ignores all of .bugpatrol/ is changed to the
+ * data folder. True when the file changed.
  */
 function ignoreData(root: string): boolean {
   const gitignore = join(root, '.gitignore');

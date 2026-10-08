@@ -330,6 +330,8 @@ export class CuaDriver implements Driver {
             throw new Error('Desktop open is unsupported; use app UI or trusted launch arguments');
           case 'request':
             throw new Error('HTTP requests require the API driver');
+          case 'run':
+            throw new Error('Commands require the CLI driver');
         }
         return {
           ok: true,

@@ -73,6 +73,8 @@ The command lists each URL:
 Opened 1 PR(s) and 1 issue(s); skipped 0.
 ```
 
+Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue ([Issues that Bugpatrol filed](#issues-that-bugpatrol-filed)). The routine also holds a bug check: text that the last screen shows or lacks, or an error that the flow logs, while the bug is there.
+
 `patrol` runs the same step at the end of each cycle.
 
 ### What Bugpatrol publishes
@@ -156,7 +158,7 @@ npx bugpatrol review 123 --dry-run      # write the review to a local file, and 
    | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A folded list |
    | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A folded list |
 
-5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check.
+5. Bugpatrol posts a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check, unless you turn on [blocking](#block-a-merge-on-a-disproved-claim).
 6. A new test of the pull request posts a new review. Bugpatrol then replaces the body of each older review with one line, and it deletes the line comments of that review. A comment that a person answered stays.
 
 `.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it updates the body of the review that the commit has, or it posts the review when the commit has none. Use `--force` to test the same commit again.
@@ -166,10 +168,128 @@ What you must know before you run it:
 - **The code of the pull request runs on your machine, with the secrets of the app.** Bugpatrol refuses a pull request from a fork. Read the diff first. If you trust it, add `--allow-fork`.
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
-- **The pull request build changes nothing that the patrol knows.** The explorer of a review records no screen, no routine, and no lesson.
-- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch.
+- **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol. After the merge, `bugpatrol promote <number> <claim>` keeps a proven claim's routine in `.bugpatrol/routines/` for the patrol to replay.
+- **Bugpatrol finds its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the older review is still replaced. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch. With `agents.review.block` on, the token also needs `checks: write`.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
+
+To review each pull request in CI, use the Bugpatrol Action (`action.yml` at the root of this repo). [Review pull requests in CI](../README.md#review-pull-requests-in-ci) shows the workflow and the inputs.
+
+### The claim check
+
+```bash
+npx bugpatrol review 123 --claims       # test the claims for this run only
+```
+
+The claim check asks a second question: does the pull request do what it says? Turn it on with `agents.review.claims: true`, or with `--claims` for one run. It is off by default, and with it off `review` works as described above.
+
+Bugpatrol lists the claims at the top of the review, before the problems that the pull request introduces. Each claim names its source: the claims section, the title, the description, a commit, or an issue that the pull request closes.
+
+Bugpatrol tests each claim in three steps:
+
+1. On the pull request build, the explorer finds the flow of each claim and saves it as a claim routine in `.bugpatrol/runs/reviews/pr-<number>/routines/`. The routine holds every step from the start of the app, so it runs on a build that lacks the routines of the patrol.
+2. Bugpatrol replays each claim routine on the pull request build and then on the merge base, with no model. Each replay starts from a new driver, and Bugpatrol keeps a screenshot before the first step and after each step. On web, Electron, iOS and Android it also records each replay. Both builds run the same steps.
+3. The judge looks at the last screen of each build and gives each claim a verdict: `proven`, `not-proven`, `partly-proven` or `untested`. A `not-proven` verdict says what Bugpatrol saw.
+
+Each verdict names its evidence, and Bugpatrol sets it from how it tested the claim, never the judge. `explored` means the judge decided. That covers a flow that both builds replayed, where the judge read the two last screens, and a claim that the explorer checked on the pull request build only, because a replay cannot repeat its flow (it hangs on timing, for example). `replay` means code decided from the replay alone: the bug check of an issue repro. `assertion` means an exact check or an output diff decided, and `bench` a benchmark.
+
+In the review, each tested claim gets a heading, its verdict and evidence, one sentence on what Bugpatrol did, and the two builds side by side. The review names the commits of both builds. The claims that Bugpatrol could not test come after, each with the reason: the explorer skipped it or did not reach it, the replay stopped partway on the pull request build, the claim needs another platform than the app's, or the machine cannot run its platform.
+
+Before it explores, Bugpatrol checks what this machine can run. Desktop needs Linux and Xvfb, Electron on Linux needs a display or Xvfb, Android needs a running emulator or device in `adb devices`, and iOS needs macOS and a booted simulator. Bugpatrol never starts an emulator or a simulator. A claim for a platform the machine cannot run is `untested`, and the reason names what is missing, for example "No Android emulator runs on this machine." When the app itself cannot run there, Bugpatrol starts nothing, posts the review with every claim `untested`, and exits with success.
+
+When both replays have a recording, the review shows a GIF of each build, with a link to the full MP4 under it. An MP4 or a cast over 10 MB stays off GitHub, because GitHub serves a file that large as a download. The review then names its path in the run directory, and the dashboard plays it. A GIF is at most 15 seconds, 8 to 10 frames a second, 640 px wide and 2 MB. Bugpatrol cuts the frame rate first, then the length, and keeps the end of the replay, where the result is. A recording that still does not fit, or a driver that cannot record, gives the last screen of that build instead, and the review folds the screenshot of each step below. The GIFs and the MP4s go to the assets branch next to the screenshots. The MP4s also stay in `.bugpatrol/runs/reviews/pr-<number>/<claim>/`.
+
+Recording needs `ffmpeg` on the `PATH`. Without it, Bugpatrol logs why and the review shows screenshots, so `ffmpeg` is optional. Install it with your package manager, for example `brew install ffmpeg` or `apt-get install ffmpeg`. On iOS and Android the simulator or emulator records the replay itself, through `xcrun simctl io recordVideo` or `adb shell screenrecord`, so the MP4 needs no `ffmpeg` but the GIF does. Android stops a recording after 3 minutes, so the video of a longer replay misses its end. A recording holds the same pixels as the screenshots, so it hides a secret exactly where a screenshot does: in a password field, and nowhere else. Keep secrets out of the screens that a claim flow passes through.
+
+### Claims of a command line app
+
+With `app.platform: cli`, the app is a command line tool, and each step of a claim routine runs one command. Bugpatrol runs the command in a terminal of 80 by 24 from the worktree of the build, and stops it after `app.connect.cli.timeoutMs` (60 seconds by default). A command that waits for input gets the text that the explorer gave it, typed at the start. The terminal comes from the `pty` module of `python3`, the same way on macOS and Linux, so `python3` must be on the `PATH`.
+
+When the explorer saves the flow of a claim, it can add exact checks on the last command: its exit code, texts that the output must have, and texts that it must not have. Each check gives the same result on each run, so a claim with checks gets its verdict from them, with no judge. The checks must pass on the pull request build for `proven`, and one that fails gives `not-proven`. The evidence is `assertion`. The review shows a table of each check on both builds. With `agents.review.block` on, Bugpatrol runs the commands of a disproof a second time, and only the same results fail the check run. Different results make the claim `untested`, as a flaky replay.
+
+Each replay records the terminal as an asciicast v2 file, `<build>.cast` next to the screenshots. Bugpatrol draws the cast into the GIF of the review itself, with the Terminus bitmap font, so it needs no `ffmpeg` and no browser. The GIF is 640 px wide and at most 15 seconds and 2 MB. Bugpatrol cuts each pause to 2 seconds at most, and a cast that is still too long plays faster. Unlike a video, the GIF keeps the start of the cast, since the start shows the command. A link under each GIF opens the cast, and the dashboard plays it.
+
+Bugpatrol redacts the secrets of `app.secrets` from the output line by line, before the screen, the cast, the GIF, or the explorer sees it. A secret that a command prints in two pieces is still redacted, unless a line break splits it.
+
+### Claims of an API
+
+With `app.platform: api`, each step of a claim routine is one HTTP request, sent for real to the API of each build. When the explorer saves the flow of a claim, it can add exact checks on the last response: its status code, texts that the body must have, and texts that it must not have. They work like the checks of a command line app. They decide the verdict with no judge, the evidence is `assertion`, and the review shows a table of each check on both builds. A failed status check names the status that the build gave, for example `Failed, the status is 200`.
+
+Each replay records its requests and responses as an asciicast v2 file, `<build>.cast`, and the review shows its GIF for each build, drawn the same way as for a command line app, so it needs no `ffmpeg`. The terminal is 100 by 30, wide enough for indented JSON, so the GIF is 800 px wide. The recording shows the method, path, and body of each request, then the status, content type, and body of the response. A request that got no response shows why, for example a timeout. Request headers stay out of the recording, since they carry the credentials. Bugpatrol writes `[redacted]` for each JSON value whose key ends in `token`, `password`, `secret`, `authorization` or `cookie`, and replaces the value of each secret of `app.secrets` with its `{{NAME}}`, before the recording sees the text.
+
+### Claims that a behavior stays the same
+
+Some claims say that two builds behave the same, such as a refactor, or a new pagination that returns the same data. For those, on a command line app or an API, the explorer saves the claim flow with `same` set instead of exact checks. Bugpatrol replays the same commands or requests on both builds and diffs what each one gave: the exit code and the output of a command, or the status, the content type and the body of a response.
+
+Before the diff, Bugpatrol normalises each output, so a value that changes on every run does not count as a change:
+
+- JSON bodies get their keys sorted.
+- ISO 8601 times and HTTP dates become `<time>`.
+- UUIDs become `<uuid>`, and hex ids of 24 or more digits become `<hex>`.
+- Unix times in seconds or milliseconds (10 or 13 digits) become `<epoch>`.
+- Durations such as `12ms` or `1.5s` become `<duration>`.
+- Spaces at the end of a line are dropped.
+
+Equal outputs give `proven`. Any difference gives `not-proven`, and the review shows the changed lines of each output that differs, base lines after `-` and pull request lines after `+`. The review lists the rules under each claim. The evidence is `assertion`, so with blocking on a diff can fail the check, but only after Bugpatrol replays the flow a second time on both builds and each build gives the same outputs as on its first replay.
+
+A replay that stops partway on the pull request build makes the claim `untested`, never `not-proven`. A base build that stops partway is evidence: the judge sees where it stopped, and a new control is often missing there. An app that does not start on either build stops the review with an error, as above.
+
+To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:
+
+```markdown
+## Claims
+
+- The page goes dark when the dark mode switch changes.
+- `GET /projects/:id` returns 404 for a missing project.
+```
+
+Bugpatrol keeps each list item as written. The judge only marks where a test of each item runs, and whether a test can show it at all. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
+
+### Issues that Bugpatrol filed
+
+A pull request that closes a Bugpatrol issue gets one more claim, "Fixes #12: <issue title>". Bugpatrol reads the routine id from the hidden line in the issue body and loads the routine from `.bugpatrol/routines/` of the checkout, so a fresh clone in CI finds it. The explorer and the judge play no part in this claim. Bugpatrol replays the repro routine on both builds and decides from the routine's bug check alone.
+
+The explorer writes the bug check when it reports the bug, and Bugpatrol checks it against the screen right then. It has up to three parts, and each part that is set must hold at the end of a full replay:
+
+| Part | The bug shows when |
+| --- | --- |
+| `shows` | The last screen has this text, in an element's name, text, value or test id, or in the body of an API response |
+| `lacks` | The last screen does not have this text |
+| `error` | A console or network error during the replay has this text |
+
+| Base build | Pull request build | Verdict |
+| --- | --- | --- |
+| The bug shows | The bug does not show | `proven`, evidence `replay` |
+| The bug shows | The bug shows | `not-proven`, evidence `replay` |
+| The bug does not show, or the replay stops | any | `untested`: the repro no longer reproduces on the base build |
+
+A stale repro never counts as proof. An issue filed before the bug check existed has a routine with no check, and its claim is `untested` with the reason. So is an issue whose routine is missing from the checkout. With [blocking](#block-a-merge-on-a-disproved-claim) on, a `not-proven` repro gets the second replay like any other replayed claim, and both replays must show the bug before the check fails.
+
+### Speed claims and benchmarks
+
+A claim such as "p99 drops from 2.4s to 21ms" needs a measurement, and Bugpatrol measures only with benchmarks that you declare in `agents.review.benches` (see [Configuration](configuration.md)). Each benchmark has a command (a k6 script, a hyperfine command, a page load trace), the metric it prints, a `parse` regular expression whose first group is the number, and whether lower or higher is better.
+
+Before the explorer starts, the judge picks which declared benchmarks measure which claims. It can name a declared benchmark only, and the explorer does not test a claim that a benchmark measures. Bugpatrol then checks out both builds and runs each picked command in the worktree of each build, in turn: base, pull request, base, pull request, `runs` times on each (5 by default). Taking turns means a runner that slows down partway slows both builds alike. The command starts whatever it measures, because Bugpatrol does not start the app for a benchmark.
+
+The review shows the median and the spread (lowest to highest) of each build, and folds the command and each number below. The judge compares the numbers with the claim and gives the verdict. When the two spreads overlap, the difference may be noise, so the verdict is at most `partly-proven`: a `proven` or a `not-proven` from the judge becomes `partly-proven`. The evidence is `bench`. A benchmark never fails a check, because runner noise must never block a merge. A command that fails, or prints no number that `parse` matches, leaves its claims `untested` with the reason.
+
+`agents.review.maxSteps`, `agents.review.budgetUsd` and `agents.review.timeoutMs` limit the whole claim check of one review, across its sessions: the judge that writes or marks the claims, the judge that picks the benchmarks, the judge that gives the verdicts, the replays and the benchmarks. The explorer finds the claim flows in the same session that tests the diff. Its tool calls from `start_claim` until the claim is saved count against the claim check, with the same share of its cost, and the rest of that session stays under `agents.explorer`. The replays and the benchmarks use no model, so only the time limit stops them. When a limit runs out, each claim left over is `untested`, and the reason names the limit. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file, with the screenshots at their local paths. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
+
+### Block a merge on a disproved claim
+
+The claim check only comments by default. To let it fail a check, set `agents.review.block: true`. Then `review` sets one check run, `Bugpatrol claim check`, on the pull request commit.
+
+Only a deterministic disproof fails that check: a `not-proven` verdict whose evidence is `replay` or `assertion`, so code decided it with no model. A verdict that the judge gave is `explored`, even when it read the screens of a replay, and it never fails the check. Neither does a `bench` verdict.
+
+Before a disproof counts, Bugpatrol replays it a second time on the pull request build. An issue repro and a claim that a behavior stays the same rest on both builds, so their second replay also runs on the base build. The second replay must give the same results that code decides as the first: it stops at the same step, the bug check gives the same answer, and the exact checks and the normalised outputs match. Bugpatrol does not compare screenshots, so a clock on the screen does not matter. If a result differs, the verdict becomes `untested` with the reason "Flaky replay" ([ADR 0007](adr/0007-only-a-repeated-replay-blocks.md)).
+
+| Result | Check run | Exit code of `review` |
+| --- | --- | --- |
+| No deterministic disproof | `neutral` | 0 |
+| A disproof that the second replay repeated | `failure`, with each claim, what Bugpatrol saw, and the evidence | 1 |
+| The app did not start | none | 4 |
+
+With `block` off, `review` sets no check and exits 0 when it only comments. The token needs `checks: write` to set the check. Without it, Bugpatrol logs that it could not set the check, and the exit code still carries the result.
 
 ## Troubleshooting
 

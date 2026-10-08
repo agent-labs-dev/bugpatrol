@@ -493,5 +493,8 @@ export function stepWords(step: RoutineStep): string {
   if (step.kind === 'open') return `Open ${step.url}`;
   if (step.kind === 'window') return `Switch to window ${step.match}`;
   if (step.kind === 'wait') return `Wait ${step.ms} ms`;
+  if (step.kind === 'request') return `${step.method} ${step.url}`;
+  if (step.kind === 'run')
+    return `Run \`${step.command}\`${step.input ? ` with the input ${JSON.stringify(step.input)}` : ''}`;
   return 'Go back';
 }

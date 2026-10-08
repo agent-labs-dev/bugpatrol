@@ -47,6 +47,7 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 | Folder | What it shows |
 | --- | --- |
 | `examples/fixture-app` | A small web app for the deterministic gate, with defects you can switch on (`BREAK=...`) |
+| `examples/review-smoke` | The config that the `Review smoke` workflow uses to run the Bugpatrol Action on each pull request against `examples/fixture-app`. It needs the `OPENROUTER_API_KEY` secret |
 | `examples/electron-app` | An Electron app: a test user from the app's E2E harness, CDP, onboarding, the fixer, and GitHub |
 | `examples/expo-app` | An Expo app on the iOS simulator: Metro, a deep-link sign-in, and Maestro |
 
@@ -72,6 +73,8 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 ## Design documents
 
 - [ADR 0005: agents, drivers, and the patrol](adr/0005-agents-drivers-and-the-patrol.md): the agent design
+- [ADR 0006: commit the routines and the app map](adr/0006-commit-the-routines.md): what Bugpatrol commits, and why
+- [ADR 0007: only a repeated replay can block a pull request](adr/0007-only-a-repeated-replay-blocks.md): the evidence sources and the blocking rule of the claim check
 - [Architecture decisions](adr/): all ADRs
 - [Technical specification](spec/bugpatrol-technical-spec.md): the deterministic gate
 - [Competitive landscape](research/oss-visual-testing-landscape-2026.md): the research behind the design

@@ -1,6 +1,6 @@
 import type { FixProposal, Issue } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { buildReport } from './report.js';
+import { buildReport, reproRoutineId } from './report.js';
 
 const issue: Issue = {
   version: 1,
@@ -78,5 +78,16 @@ describe('buildReport', () => {
     const body = buildReport({ ...base, kind: 'issue', issue: { ...issue, body: 'x'.repeat(70_000) } });
     expect(body.length).toBeLessThan(65_536);
     expect(body).toContain('…(cut; the full report is in the Bugpatrol dashboard)');
+  });
+});
+
+describe('repro marker', () => {
+  it("hides the repro routine id in an issue body, where a cut can't drop it", () => {
+    const withRepro = { ...issue, evidence: { ...issue.evidence, reproRoutineId: 'repro-1' } };
+    const body = buildReport({ ...base, kind: 'issue', issue: { ...withRepro, body: 'x'.repeat(70_000) } });
+    expect(body).toContain('<!-- bugpatrol:routine repro-1 -->');
+    expect(reproRoutineId(body)).toBe('repro-1');
+    expect(buildReport({ ...base, kind: 'issue' })).not.toContain('bugpatrol:routine');
+    expect(reproRoutineId('Fixed it. <!-- bugpatrol:routine ../../etc -->')).toBeUndefined();
   });
 });

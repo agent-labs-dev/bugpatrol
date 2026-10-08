@@ -179,7 +179,7 @@ export const appCommandSchema = z.object({
 
 export const appSchema = z
   .object({
-    platform: z.enum(['web', 'electron', 'ios', 'android', 'api', 'desktop']).default('web'),
+    platform: z.enum(['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli']).default('web'),
     /** The source repository the fixer edits. Relative to the config file. */
     source: z.string().default('.'),
     setup: z.array(appCommandSchema).default([]),
@@ -215,6 +215,12 @@ export const appSchema = z
           .optional(),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
+        /** CLI: each command runs in a terminal of 80 by 24 from the app source, and is stopped after this long. */
+        cli: z
+          .object({
+            timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+          })
+          .default({}),
         /** Mobile: the bundle id or package name. */
         appId: z.string().optional(),
         /** Mobile: the simulator UDID or emulator serial. Default: the booted one. */
@@ -425,6 +431,63 @@ export const agentsSchema = z
             waitMinutes: z.number().nonnegative().default(20),
           })
           .default({}),
+      })
+      .default({}),
+    /** `bugpatrol review <pr>`. */
+    review: z
+      .object({
+        /** The claim check: test what the pull request says it does. Off until a team opts in. */
+        claims: z.boolean().default(false),
+        /**
+         * The benchmarks that can measure a speed claim. The judge picks from
+         * these only. Each command runs in the worktree of a build, and starts
+         * what it measures itself.
+         */
+        benches: z
+          .array(
+            z.object({
+              name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lowercase letters, digits and dashes'),
+              command: z.string().min(1),
+              /** What the number means, with its unit: 'p99 latency in ms'. */
+              metric: z.string().min(1),
+              /** A regular expression whose first group is the number in the output of the command. */
+              parse: z.string().refine((value) => {
+                try {
+                  new RegExp(value);
+                  return true;
+                } catch {
+                  return false;
+                }
+              }, 'Use a valid regular expression'),
+              better: z.enum(['lower', 'higher']).default('lower'),
+              /** Runs on each build, alternating between the builds. */
+              runs: z.number().int().positive().default(5),
+              timeoutMs: z
+                .number()
+                .int()
+                .positive()
+                .default(10 * 60 * 1000),
+            }),
+          )
+          .default([])
+          .refine(
+            (benches) => new Set(benches.map((bench) => bench.name)).size === benches.length,
+            'Give each benchmark its own name',
+          ),
+        /**
+         * Set a check run on the pull request that fails on a deterministic
+         * disproof: a replay or an assertion that a second replay repeats.
+         * Off until a team trusts the comments (ADR 0007).
+         */
+        block: z.boolean().default(false),
+        /** Limits for the claim check of one review, across its sessions. */
+        maxSteps: z.number().int().positive().default(150),
+        budgetUsd: z.number().nonnegative().optional(),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .default(20 * 60 * 1000),
       })
       .default({}),
     patrol: z

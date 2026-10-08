@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { DATA_DIR, paths } from '@bugpatrol/core';
 
-async function files(dir: string, skip: string): Promise<string[]> {
+async function files(dir: string, skip: string[]): Promise<string[]> {
   const out: string[] = [];
   let entries: Dirent[];
   try {
@@ -13,7 +13,7 @@ async function files(dir: string, skip: string): Promise<string[]> {
   }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (path === skip) continue;
+    if (skip.includes(path)) continue;
     if (entry.isDirectory()) out.push(...(await files(path, skip)));
     else if (entry.isFile()) out.push(path);
   }
@@ -28,13 +28,18 @@ async function files(dir: string, skip: string): Promise<string[]> {
  * `.bugpatrol/mint-user.sh` comes from the worktree's commit. A change to it
  * that is not committed yet would be missing. The restore puts the worktree
  * back as it was, so the fix commit never carries these files.
+ *
+ * Routines and the app map are not copied. Bugpatrol reads them from the
+ * checkout, never from a worktree, so the worktree keeps its own commit's copy
+ * and a review or a fix commit never sees the checkout's (ADR 0006).
  */
 export async function overlayBugpatrol(root: string, source: string, worktree: string): Promise<() => Promise<void>> {
   const where = relative(source, root);
   if (where.startsWith('..') || where.split(sep)[0] === '..') return async () => {};
   const from = paths.dir(root);
   const saved: Array<{ path: string; content?: Buffer }> = [];
-  for (const file of await files(from, join(from, DATA_DIR))) {
+  const skip = [join(from, DATA_DIR), paths.routines(root), paths.appMap(root)];
+  for (const file of await files(from, skip)) {
     const target = join(worktree, where, relative(root, file));
     const content = await readFile(file);
     let before: Buffer | undefined;

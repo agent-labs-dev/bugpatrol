@@ -22,7 +22,7 @@ export type Lesson = {
 };
 export type MemoryFile = { version: 1; lessons: Lesson[] };
 
-export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop';
+export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop' | 'cli';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -62,6 +62,8 @@ export type RoutineStep = (
       body?: string;
       capture?: Record<string, string>;
     }
+  /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
+  | { kind: 'run'; command: string; input?: string }
 ) & { at?: string };
 
 export type Routine = {
@@ -92,6 +94,46 @@ export type Routine = {
    * that did not appear this time, a detour) only if it still ends here.
    */
   expect?: { elements: string[] };
+  /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
+  bug?: BugCheck;
+  /** Claim routines only: exact checks on the last command or response, after the steps ran. */
+  assert?: Assertion[];
+  /**
+   * Claim routines only: the claim says that the pull request keeps a
+   * behavior, so each command or request must give the same output on both
+   * builds, once normalised.
+   */
+  same?: boolean;
+};
+
+/**
+ * An exact check at the end of a routine: on the last command of a CLI app,
+ * its exit code or a text in its output, or on the last response of an API,
+ * its status or a text in its body.
+ */
+export type Assertion =
+  | { kind: 'exit-code'; value: number }
+  | { kind: 'output-includes'; value: string }
+  | { kind: 'output-excludes'; value: string }
+  | { kind: 'status'; value: number }
+  | { kind: 'body-includes'; value: string }
+  | { kind: 'body-excludes'; value: string };
+
+/** One assertion after one replay. `actual` is what the command or the API gave, when the check is on a value. */
+export type AssertionResult = { assertion: Assertion; ok: boolean; actual?: string };
+
+/**
+ * What the screen shows at the end of a repro while the bug is there. Each
+ * part that is set must hold. The explorer names it when it reports the bug,
+ * and Bugpatrol checks it against the screen right then.
+ */
+export type BugCheck = {
+  /** Text on the last screen: an element's name, text, value or test id, or an API response body. */
+  shows?: string;
+  /** Text that the last screen lacks while the bug is there. */
+  lacks?: string;
+  /** Part of a console or network error that the flow logs. */
+  error?: string;
 };
 
 export type ScreenTransition = {
@@ -162,6 +204,10 @@ export type IssueEvidence = {
   /** How to get there, as routine ids and then steps. */
   routineId?: string;
   steps?: RoutineStep[];
+  /** The committed routine that replays `routineId` and then `steps`. Set when the issue is filed. */
+  reproRoutineId?: string;
+  /** How a replay of the flow tells that the bug shows. */
+  bug?: BugCheck;
   console?: string[];
 };
 
@@ -314,6 +360,133 @@ export type ReviewFinding = {
   baseNote?: string;
 };
 
+/**
+ * Where a claim comes from. `section` is a claims section that the author
+ * wrote in the pull request body; Bugpatrol takes it as written. The others
+ * are the places the judge reads when it writes the claims itself.
+ */
+export type ClaimSource =
+  | { kind: 'section' }
+  | { kind: 'title' }
+  | { kind: 'body' }
+  | { kind: 'commit'; commit: string }
+  | { kind: 'issue'; number: number };
+
+/** One thing that a pull request says it does. */
+export type Claim = {
+  /** `claim-<n>`, in the order of the list. */
+  id: string;
+  text: string;
+  /** The platform that a test of the claim needs. */
+  platform: Platform;
+  source: ClaimSource;
+  testable: boolean;
+  /** Why the claim cannot be tested ("clean up the code"). Set when `testable` is false. */
+  untestable?: string;
+};
+
+export type ClaimVerdict = 'proven' | 'not-proven' | 'partly-proven' | 'untested';
+
+/**
+ * What a verdict rests on. `replay` is a bug check that code decides on a
+ * replay, and `assertion` an exact check or an output diff. Only those two
+ * are deterministic, so only they may ever fail a check (ADR 0001). A
+ * verdict that the judge reads, also from the screens of a replay, is
+ * `explored`.
+ */
+export type ClaimEvidence = 'replay' | 'assertion' | 'explored' | 'bench';
+
+/** One replay of a claim routine on one build, with no model. */
+export type ClaimReplay = {
+  ok: boolean;
+  /** Workspace-relative screenshots: the screen before the first step, then one after each step that ran. */
+  shots: string[];
+  /** Where a replay that failed partway stopped, counted from 0. */
+  failedStep?: number;
+  error?: string;
+  /**
+   * The recording of the replay, workspace-relative, when the driver can
+   * record. `gif` is the short copy that a review shows inline. It is
+   * absent when the recording does not fit the budget or does not convert.
+   */
+  recording?: { file: string; gif?: string };
+  /** Issue repros only: whether the bug check of the repro routine held at the end of a full replay. */
+  bug?: boolean;
+  /** The assertions of the claim routine, checked at the end of a full replay. */
+  assertions?: AssertionResult[];
+  /** Same-behavior claims only: the normalised output of each command or request, in order. */
+  outputs?: ClaimOutput[];
+};
+
+/** The output of one command or one response, normalised. `step` is the command or the request line. */
+export type ClaimOutput = { step: string; text: string };
+
+/** How the outputs of the two builds compared: the normalisation rules, then each output that differs. */
+export type ClaimComparison = {
+  rules: string[];
+  /** `diff` has the lines of the base build after `- `, and the lines of the pull request build after `+ `. */
+  parts: { step: string; diff: string }[];
+};
+
+/** The numbers of one benchmark on one build. The spread is from `min` to `max`. */
+export type BenchBuild = { values: number[]; median: number; min: number; max: number };
+
+/** One declared benchmark, run on both builds in turn. */
+export type ClaimBench = {
+  name: string;
+  command: string;
+  metric: string;
+  better: 'lower' | 'higher';
+  /** Runs on each build. */
+  runs: number;
+  head: BenchBuild;
+  base: BenchBuild;
+};
+
+/** One claim of a pull request, with the verdict of the claim check. */
+export type ClaimFinding = {
+  claim: Claim;
+  verdict: ClaimVerdict;
+  /** Absent when nothing tested the claim. Bugpatrol sets it, never a model. */
+  evidence?: ClaimEvidence;
+  reason: string;
+  /** What Bugpatrol saw on the pull request build. Always set on a `not-proven` verdict. */
+  saw?: string;
+  /** One sentence on what Bugpatrol did on both builds. */
+  did?: string;
+  /** The claim routine, workspace-relative. It lives in the run directory of the review only. */
+  routine?: string;
+  /** The steps of the claim routine, in words. */
+  steps?: string[];
+  head?: ClaimReplay;
+  base?: ClaimReplay;
+  /** The benchmark that measured a speed claim. */
+  bench?: ClaimBench;
+  /** Same-behavior claims only: the diff of the normalised outputs of both builds. */
+  compared?: ClaimComparison;
+  /**
+   * The second replay on the pull request build. Blocking replays each
+   * deterministic disproof again before it counts, and a different result
+   * makes the verdict untested.
+   */
+  again?: ClaimReplay;
+  /** Same-behavior claims only: the second replay on the base build, so the diff itself must repeat. */
+  againBase?: ClaimReplay;
+};
+
+/**
+ * The GitHub check run of the claim check, set only when `agents.review.block`
+ * is on. Only a deterministic disproof that a second replay repeated fails it.
+ */
+export type ClaimCheckRun = {
+  conclusion: 'neutral' | 'failure';
+  title: string;
+  /** Markdown: on a failure, each disproved claim and the evidence that disproved it. */
+  summary: string;
+  /** The check run on GitHub. Absent on a dry run. */
+  url?: string;
+};
+
 /** `reviews/pr-<number>.json`: the last review of one pull request. */
 export type PrReview = {
   version: 1;
@@ -325,9 +498,29 @@ export type PrReview = {
   status: 'running' | 'finished' | 'failed';
   startedAt: string;
   endedAt?: string;
-  sessions: { explorer?: string; base?: string; judge?: string };
+  sessions: {
+    explorer?: string;
+    base?: string;
+    judge?: string;
+    /** The judge that wrote the claims. */
+    claims?: string;
+    /** The replays of the claim routines on each build, and the judge that gave the claim verdicts. */
+    headReplay?: string;
+    baseReplay?: string;
+    claimJudge?: string;
+    /** The judge that picked the benchmarks. */
+    benches?: string;
+    /** The second replay of the disproved claims on the pull request build, when blocking is on. */
+    againReplay?: string;
+    /** The second replay of the disproved same-behavior claims on the base build. */
+    againBaseReplay?: string;
+  };
   /** The explorer's own account of what it tested. */
   tested?: string;
+  /** The claim check. Absent when the claim check was off. */
+  claims?: ClaimFinding[];
+  /** The check run of the claim check. Absent when blocking is off. */
+  check?: ClaimCheckRun;
   findings: ReviewFinding[];
   /** The review on GitHub. */
   posted?: { url: string; at: string };
