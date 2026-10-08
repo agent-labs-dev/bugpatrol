@@ -326,7 +326,7 @@ Run each command in the project. Bugpatrol finds `.bugpatrol/` in the current fo
 
 3. Correct `.bugpatrol/instructions.md` from what the explorer saw. You wrote the first draft from the source code. Now the explorer has used the app, so the draft can be wrong or incomplete.
 
-   1. Read `.bugpatrol/runs/appmap.json` (the screens and how they connect) and the output of `npx bugpatrol@latest memory list` (the lessons). The lessons stay on this machine, because git ignores `.bugpatrol/runs/`. `instructions.md` is committed, so put there what each machine must know.
+   1. Read `.bugpatrol/appmap.json` (the screens and how they connect) and the output of `npx bugpatrol@latest memory list` (the lessons). The lessons stay on this machine, because git ignores `.bugpatrol/runs/`. The explorer reads `instructions.md` at the start of each session, and the file is committed, so put there what each machine must know.
    2. Write the file again:
       - Name the main areas as the app shows them, and say how to get to each one.
       - Correct the sign-in and onboarding steps to the path that worked.
