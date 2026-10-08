@@ -894,8 +894,9 @@ function difference(first: ClaimReplay | undefined, second: ClaimReplay): string
  * pull request build before it can fail the check. A second replay that
  * stops elsewhere, or gives another bug check, exact check or output, makes
  * the verdict untested.
- * A same-behavior diff rests on both builds, so it also runs a second time on
- * the base build, and both must give the same outputs as before.
+ * A same-behavior diff and an issue repro rest on both builds, so they also
+ * run a second time on the base build, and it must give the same result as
+ * before. Exact checks hold on the pull request build alone.
  */
 export async function replayDisproofs(
   ctx: ReviewContext,
@@ -919,7 +920,9 @@ export async function replayDisproofs(
     if (second) differs.set(finding.claim.id, difference(finding.head, second));
   }
   const bases = new Map(
-    [...routines].filter(([claim, routine]) => routine.same && differs.has(claim) && !differs.get(claim)),
+    [...routines].filter(
+      ([claim, routine]) => (routine.same || routine.bug) && differs.has(claim) && !differs.get(claim),
+    ),
   );
   const againBase = bases.size
     ? await build('base', ctx.pr.base, (driver, vars, fresh) =>

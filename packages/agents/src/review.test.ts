@@ -1480,8 +1480,9 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       await commitRepro(f.root);
       const { review, app, agents, github } = await reviewRepro(f, { head: false, base: false }, { block: true });
       expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
-      // The explorer, the first replay, and the second replay on the pull request build.
+      // The explorer, then a first and a second replay on each build: the verdict rests on both.
       expect(app.drivers.head).toHaveLength(3);
+      expect(app.drivers.base).toHaveLength(2);
       expect(review.claims![1]).toMatchObject({
         verdict: 'not-proven',
         evidence: 'replay',
@@ -1489,6 +1490,7 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
         head: { ok: true, bug: true },
         base: { ok: true, bug: true },
         again: { ok: true, bug: true },
+        againBase: { ok: true, bug: true },
       });
       expect(review.check).toMatchObject({ conclusion: 'failure' });
       const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
@@ -1512,6 +1514,24 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
         again: { ok: true, bug: false },
       });
       expect(review.claims![1]!.evidence).toBeUndefined();
+      expect(review.check).toMatchObject({ conclusion: 'neutral' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes a disproof that the second replay of the base build does not repeat untested', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      // The second base build no longer shows the bug, so the repro proves nothing there.
+      const { review } = await reviewRepro(f, (build, index) => build === 'base' && index === 1, { block: true });
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'untested',
+        reason: 'Flaky replay: on the base build, the bug showed on one replay only.',
+        again: { ok: true, bug: true },
+        againBase: { ok: true, bug: false },
+      });
       expect(review.check).toMatchObject({ conclusion: 'neutral' });
     } finally {
       await rm(f.root, { recursive: true, force: true });
