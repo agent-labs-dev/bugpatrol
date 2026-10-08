@@ -81,8 +81,19 @@ export function buildReport(input: ReportInput): string {
   );
   if (kind === 'pr' && input.closes) parts.push(`Closes #${input.closes}`);
   parts.push('---', `<sub>Filed by Bugpatrol · ${issue.id}${fix ? ` · ${fix.id}` : ''}</sub>`);
+  // First, so the cut below never drops it.
+  const repro = kind === 'issue' ? issue.evidence.reproRoutineId : undefined;
+  if (repro) parts.unshift(`<!-- bugpatrol:routine ${repro} -->`);
   const text = input.redact(parts.join('\n\n'));
   return text.length <= 60_000
     ? text
     : `${text.slice(0, 60_000)}\n\n…(cut; the full report is in the Bugpatrol dashboard)`;
+}
+
+/**
+ * The repro routine id hidden in a Bugpatrol issue body, so a fresh clone can
+ * map an issue number to its committed routine.
+ */
+export function reproRoutineId(body: string): string | undefined {
+  return /<!-- bugpatrol:routine ([A-Za-z0-9_][\w.-]*) -->/.exec(body)?.[1];
 }

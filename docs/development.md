@@ -40,13 +40,14 @@ Refer to [CONTRIBUTING.md](../CONTRIBUTING.md) for the rules that the product de
 
 ## Releases
 
-A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`, `minor`, or `major`. The workflow tests the repo, bumps `packages/bugpatrol/package.json`, publishes `bugpatrol` to npm with provenance, and pushes a tag and a GitHub release. The internal `@bugpatrol/*` packages are private. The bundle includes them.
+A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`, `minor`, or `major`. The workflow tests the repo, bumps `packages/bugpatrol/package.json`, publishes `bugpatrol` to npm with provenance, and pushes a tag and a GitHub release. On the release tag, the `package` input of `action.yml` defaults to the new version. The workflow also moves the major tag, for example `v0`, to the release, so workflows that use `agent-labs-dev/bugpatrol@v0` get it with no edit. The internal `@bugpatrol/*` packages are private. The bundle includes them.
 
 ## Examples
 
 | Folder | What it shows |
 | --- | --- |
 | `examples/fixture-app` | A small web app for the deterministic gate, with defects you can switch on (`BREAK=...`) |
+| `examples/review-smoke` | The config that the `Review smoke` workflow uses to run the Bugpatrol Action on each pull request against `examples/fixture-app`. It needs the `OPENROUTER_API_KEY` secret |
 | `examples/electron-app` | An Electron app: a test user from the app's E2E harness, CDP, onboarding, the fixer, and GitHub |
 | `examples/expo-app` | An Expo app on the iOS simulator: Metro, a deep-link sign-in, and Maestro |
 
@@ -72,6 +73,14 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 ## Design documents
 
 - [ADR 0005: agents, drivers, and the patrol](adr/0005-agents-drivers-and-the-patrol.md): the agent design
+- [ADR 0006: commit the routines and the app map](adr/0006-commit-the-routines.md): what Bugpatrol commits, and why
+- [ADR 0007: only a repeated replay can block a pull request](adr/0007-only-a-repeated-replay-blocks.md): the evidence sources and the blocking rule of the claim check
 - [Architecture decisions](adr/): all ADRs
 - [Technical specification](spec/bugpatrol-technical-spec.md): the deterministic gate
 - [Competitive landscape](research/oss-visual-testing-landscape-2026.md): the research behind the design
+
+## The landing page
+
+`site/` is the landing page: a Next.js app with Tailwind, built as a static export. Its copy follows this README, so change both together. `pnpm --filter @bugpatrol/site dev` serves it at http://localhost:3000, and `build` writes `site/out/`. Both first copy the logo, the dashboard screenshot, and the social preview from `assets/` into `site/public/assets/`, so the README and the site share one copy of each image.
+
+The `Pages` workflow builds it with `SITE_BASE_PATH=/bugpatrol` and publishes it to GitHub Pages on each push to `main` that changes `site/` or `assets/`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { cleanWorktrees, syncGitHub } from '@bugpatrol/agents';
-import { BugpatrolError, ExitCode, findProjectRoot, loadConfig } from '@bugpatrol/core';
+import { BugpatrolError, ExitCode, findProjectRoot, loadConfig, moveRoutines } from '@bugpatrol/core';
 import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
@@ -9,6 +9,7 @@ import { doctorExitCode, runChecks } from './commands/doctor.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
+import { runPromoteCommand } from './commands/promote.js';
 import { exitCodeForError, runCommand } from './commands/run.js';
 import { formatRunSummary, parseRunFlags } from './commands/run-cli.js';
 import { commandHelp, USAGE } from './usage.js';
@@ -39,6 +40,8 @@ try {
     process.stdout.write(commandHelp(command) ?? USAGE);
     process.exit(ExitCode.Clean);
   }
+  const moved = moveRoutines(root);
+  if (moved) process.stderr.write(`${moved}\n`);
   switch (command) {
     case '--version':
     case '-v':
@@ -98,6 +101,11 @@ try {
     case 'replay': {
       const config = readConfig();
       await runAgentCommand(command, args, root, config, (message) => process.stdout.write(`${message}\n`));
+      break;
+    }
+
+    case 'promote': {
+      await runPromoteCommand(args, root, readConfig(), (line) => process.stdout.write(`${line}\n`));
       break;
     }
 

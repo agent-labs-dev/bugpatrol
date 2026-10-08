@@ -1,7 +1,9 @@
-import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { type Locator, type Platform, sha256 } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
@@ -24,6 +26,23 @@ type Schema = {
   };
 };
 type Target = { locator?: Locator; element?: UiElement };
+/** A running screen recording. On Android `file` is on the device, so it is pulled at the end. */
+type Recording = { child: ChildProcess; exited: Promise<unknown>; file: string };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Rejects when the promise takes longer than `ms`. */
+async function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} took longer than ${ms / 1000} s`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Accepts the loose key names used by agents while preserving Maestro's platform back key. */
 export function maestroKey(key: string, platform: Platform): string {
@@ -300,6 +319,7 @@ export class MaestroDriver implements Driver {
   private transport?: StdioClientTransport;
   private deviceId?: string;
   private lastObservation?: Observation;
+  private recording?: Recording;
 
   constructor(
     platform: 'ios' | 'android',
@@ -495,6 +515,7 @@ export class MaestroDriver implements Driver {
 
   async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'request') return { ok: false, error: 'HTTP requests require the API driver' };
+    if (action.kind === 'run') return { ok: false, error: 'Commands require the CLI driver' };
     try {
       let target: Target = {};
       switch (action.kind) {
@@ -565,7 +586,115 @@ export class MaestroDriver implements Driver {
     return nativeSnapshot(observation, screenId);
   }
 
+  /**
+   * Records through the device, as the platform tools do: `simctl io
+   * recordVideo` on iOS, `screenrecord` on Android. Android stops a recording
+   * by itself after 3 minutes.
+   */
+  async startRecording(): Promise<void> {
+    if (this.recording) throw new Error('A recording is already running');
+    this.recording = this.platform === 'ios' ? await this.recordSimulator() : await this.recordEmulator();
+  }
+
+  private async recordSimulator(): Promise<Recording> {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-maestro-'));
+    const file = join(dir, 'recording.mp4');
+    const child = spawn('xcrun', ['simctl', 'io', this.deviceId!, 'recordVideo', '--codec=h264', '--force', file]);
+    const exited = once(child, 'exit');
+    let said = '';
+    // simctl writes this to stderr once it has the first frame, so the first step is in the video.
+    const started = new Promise<void>((resolve) => {
+      child.stderr.on('data', (chunk: Buffer) => {
+        said += chunk;
+        if (said.includes('Recording started')) resolve();
+      });
+    });
+    try {
+      if ((await within(Promise.race([started, exited]), 10_000, 'Starting the recording')) !== undefined) {
+        throw new Error(`simctl could not record: ${said.trim() || 'it exited'}`);
+      }
+    } catch (error) {
+      child.kill('SIGKILL');
+      await rm(dir, { recursive: true, force: true });
+      throw error;
+    }
+    return { child, exited, file };
+  }
+
+  private async recordEmulator(): Promise<Recording> {
+    const file = `/sdcard/bugpatrol-${randomUUID()}.mp4`;
+    const child = spawn('adb', ['-s', this.deviceId!, 'shell', 'screenrecord', file]);
+    const exited = once(child, 'exit');
+    let failed: unknown;
+    exited.catch((error) => {
+      failed = error;
+    });
+    let said = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      said += chunk;
+    });
+    // screenrecord creates its file once the encoder runs.
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (failed || child.exitCode !== null) {
+        throw new Error(`screenrecord could not record: ${said.trim() || String(failed ?? 'it exited')}`);
+      }
+      try {
+        await this.adb('shell', 'test', '-e', file);
+        return { child, exited, file };
+      } catch {
+        await sleep(200);
+      }
+    }
+    await this.stopScreenrecord(file);
+    throw new Error('Starting the recording took longer than 10 s');
+  }
+
+  private adb(...args: string[]) {
+    return exec('adb', ['-s', this.deviceId!, ...args]);
+  }
+
+  /** Killing adb leaves screenrecord running on the device, so the signal goes to screenrecord itself. */
+  private async stopScreenrecord(file: string): Promise<void> {
+    await this.adb('shell', 'pkill', '-INT', '-f', file).catch(() => {});
+  }
+
+  async stopRecording(name: string): Promise<string> {
+    const recording = this.recording;
+    if (!recording) throw new Error('No recording is running');
+    this.recording = undefined;
+    const file = `${name}.mp4`;
+    if (this.platform === 'ios') {
+      // `simctl help io`: SIGINT stops the recording, and simctl exits once the file is final.
+      recording.child.kill('SIGINT');
+      try {
+        await within(recording.exited, 30_000, 'Stopping the recording');
+        await copyFile(recording.file, file);
+      } finally {
+        await rm(dirname(recording.file), { recursive: true, force: true });
+      }
+      return file;
+    }
+    await this.stopScreenrecord(recording.file);
+    try {
+      await within(recording.exited, 30_000, 'Stopping the recording');
+      await this.adb('pull', recording.file, file);
+    } finally {
+      await this.adb('shell', 'rm', '-f', recording.file).catch(() => {});
+    }
+    return file;
+  }
+
   async close(): Promise<void> {
+    const recording = this.recording;
+    this.recording = undefined;
+    if (recording && this.platform === 'android') {
+      await this.stopScreenrecord(recording.file);
+      await this.adb('shell', 'rm', '-f', recording.file).catch(() => {});
+    } else if (recording) {
+      recording.child.kill('SIGKILL');
+      await rm(dirname(recording.file), { recursive: true, force: true });
+    }
     await this.client?.close();
     await this.transport?.close();
   }

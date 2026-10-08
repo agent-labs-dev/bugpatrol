@@ -29,6 +29,29 @@ describe('overlayBugpatrol', () => {
     }
   });
 
+  it("leaves the build's own committed routines and app map in the worktree", async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-overlay-'));
+    const worktree = join(root, '.bugpatrol', 'runs', 'worktrees', 'pr-7');
+    try {
+      await mkdir(join(root, '.bugpatrol', 'routines'), { recursive: true });
+      await writeFile(join(root, '.bugpatrol', 'routines', 'enter-app.json'), 'checkout routine');
+      await writeFile(join(root, '.bugpatrol', 'routines', 'only-here.json'), 'checkout routine');
+      await writeFile(join(root, '.bugpatrol', 'appmap.json'), 'checkout map');
+      await mkdir(join(worktree, '.bugpatrol', 'routines'), { recursive: true });
+      await writeFile(join(worktree, '.bugpatrol', 'routines', 'enter-app.json'), 'committed routine');
+
+      const restore = await overlayBugpatrol(root, root, worktree);
+      expect(await readFile(join(worktree, '.bugpatrol', 'routines', 'enter-app.json'), 'utf8')).toBe(
+        'committed routine',
+      );
+      await expect(readFile(join(worktree, '.bugpatrol', 'routines', 'only-here.json'))).rejects.toThrow();
+      await expect(readFile(join(worktree, '.bugpatrol', 'appmap.json'))).rejects.toThrow();
+      await restore();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does nothing when the config is outside the source repo', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-overlay-'));
     try {

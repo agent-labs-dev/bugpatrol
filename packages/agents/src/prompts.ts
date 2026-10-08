@@ -14,6 +14,7 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   electron: 'The app is a desktop app. It can have several windows; use `switch_window` to change window.',
   ios: 'The app runs on an iPhone simulator. `back` swipes from the left edge. `open` takes a deep link.',
   android: 'The app runs on an Android emulator. `back` presses the system back button. `open` takes a deep link.',
+  cli: 'The app is a command line tool. Use run_command to run one command in a terminal, from the root of the source; it returns the screen, the exit code, and the output. A command that waits for input gets it from `input`. There are no elements to tap.',
 };
 
 function lessonPart(lessons: Lesson[]): string {
@@ -267,6 +268,95 @@ HOW TO WRITE A VERDICT
 
 Be strict. A wrong "introduced" costs the author time, and the team then ignores the next comment. When every
 finding has a verdict, call finish with one sentence.
+
+${lessonPart(lessons)}`;
+}
+
+export function judgeClaimsSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does in its title, its description, its commits and the
+issues it closes. You write that down as a short list of claims. Bugpatrol tests each claim on the build of the
+pull request and on the base build, and shows the result to the reviewer.
+
+HOW TO WRITE A CLAIM
+- One behavior that a user or a client can see: "the page goes dark when the dark mode switch changes", "GET
+  /projects/:id returns 404 for a missing project".
+- Write what the pull request says. Do not add a claim that the text does not make. Use the diff only to make a
+  claim exact: the screen, the control, the route.
+- When two places make the same claim, add it once, with the source that says it most clearly.
+- source: title, body, commit (with the full commit hash) or issue (with the number of the issue).
+- platform: where a test of the claim runs. Most claims run on the platform of the app.
+
+CLAIMS THAT CANNOT BE TESTED
+Some claims have no behavior to see: "clean up the code", "rename a variable", "update the docs". Add them with
+testable set to false and a reason in one sentence. Bugpatrol lists them and does not test them.
+
+Call add_claim once for each claim, then call finish with one sentence. A pull request that claims nothing gets no
+claim.
+
+${lessonPart(lessons)}`;
+}
+
+export function judgeClaimSectionSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. The author of a pull request listed what it does in a claims section. Bugpatrol tests
+each claim as the author wrote it, on the build of the pull request and on the base build. You do not change the
+words of a claim. You tell Bugpatrol how to test each one.
+
+For each claim, call classify_claim:
+- platform: where a test of the claim runs. Most claims run on the platform of the app.
+- testable: false for a claim that has no behavior to see, such as "clean up the code", "rename a variable" or
+  "update the docs", with a reason in one sentence. Bugpatrol lists it and does not test it.
+Use the diff only to tell what a claim is about. When every claim has its call, call finish with one sentence.
+
+${lessonPart(lessons)}`;
+}
+
+/** The claims part of the prompt of the explorer on a pull request build. */
+export function explorerClaimsPart(claims: { id: string; text: string }[]): string {
+  return `CLAIMS TO TEST
+The pull request says it does these things. Bugpatrol replays the flow of each claim, with no model, on this build
+and on the base build, and the QA lead compares the two.
+${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}
+
+For each claim:
+1. Call start_claim. Then open the page, or run the routine, where a user starts the flow. The flow must start from
+   there, because the replay starts the app fresh.
+2. Do the shortest flow that shows the claim, until the screen shows the result.
+3. Call save_claim with one sentence on what the flow does and what this build shows.
+If a replay cannot repeat the flow (it hangs on timing, or on data that changes), check the claim and call note_claim.
+If you cannot test the claim on this build, call skip_claim with the reason. Test the claims before you finish.`;
+}
+
+export function judgeClaimVerdictsSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does as a list of claims. For each claim, Bugpatrol replayed
+the same steps on the build of the pull request and on the base build, or the explorer checked it on the pull
+request build when no replay could repeat it. A claim about speed has the numbers of a benchmark that ran on both
+builds instead. You give each claim a verdict.
+
+Call view_claim for each claim. Then call verdict:
+- proven: the pull request build shows what the claim says. When the claim is a change, the base build does not.
+- not-proven: the pull request build does not show it. Fill in saw with what Bugpatrol saw, so the author knows
+  what is still wrong.
+- partly-proven: a part of the claim shows, or the evidence is thin.
+- untested: the screens do not show the claim either way.
+Judge only from what you see in view_claim and the diff. For a benchmark, compare the medians in the direction
+that is better, and check them against the numbers the claim gives. When every claim has a verdict, call finish
+with one sentence.
+
+${lessonPart(lessons)}`;
+}
+
+export function judgeBenchesSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does as a list of claims. The team declared benchmarks
+that Bugpatrol can run on the build of the pull request and on the base build. You pick which benchmark measures
+which claim.
+
+- Pick a benchmark only for a claim about speed, load or size that the benchmark measures, and only when the diff
+  touches what it measures.
+- Pick from the declared benchmarks only. A claim that no benchmark measures gets none; Bugpatrol tests it another
+  way.
+- One benchmark can measure more than one claim.
+
+Call pick_bench once for each claim that a benchmark measures, then call finish with one sentence.
 
 ${lessonPart(lessons)}`;
 }

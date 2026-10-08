@@ -1,0 +1,43 @@
+# Publishes the landing page in site/ to GitHub Pages, as a Next.js static
+# export served under /bugpatrol.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', 'assets/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here: it is read from package.json's packageManager.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @bugpatrol/site
+      - run: pnpm --filter @bugpatrol/site build
+        env:
+          SITE_BASE_PATH: /bugpatrol
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/out
+      - id: deployment
+        uses: actions/deploy-pages@v4

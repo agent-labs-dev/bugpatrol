@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -179,10 +180,18 @@ describe('renderConfig', () => {
     answers({ platform: 'electron', start: 'npx electron . --remote-debugging-port=9222', cdpPort: 9222 }),
     answers({ platform: 'ios', start: 'npx expo start', appId: 'com.acme.app' }),
     answers({ platform: 'android', start: undefined, appId: undefined }),
+    answers({ platform: 'cli', start: 'pnpm build' }),
     answers({ providers: { explorer: 'openrouter', judge: 'vercel', fixer: 'codex' } }),
     answers({ providers: { explorer: 'pi', judge: 'kimi', fixer: 'pi' }, piPermissionModes: true }),
   ])('writes a config that parses: %#', (input) => {
     expect(() => parseConfig(parse(renderConfig(input)))).not.toThrow();
+  });
+
+  it('builds a CLI app to its end, with no server to wait for', () => {
+    const config = parseConfig(parse(renderConfig(answers({ platform: 'cli', start: 'pnpm build' }))));
+    expect(config.app.platform).toBe('cli');
+    expect(config.app.setup).toEqual([expect.objectContaining({ run: 'pnpm build', background: false })]);
+    expect(config.app.connect.cli.timeoutMs).toBe(60_000);
   });
 
   it('expands CLI presets per role, and keeps the fixer off', () => {
@@ -230,6 +239,23 @@ describe('writeInitialConfig', () => {
     expect(existsSync(join(root, 'bugpatrol.yml'))).toBe(false);
     const config = loadConfig(root);
     expect(instructionsPath(root, config.app.instructions)).toBe(join(root, '.bugpatrol', 'instructions.md'));
+  });
+
+  it('ignores the run directory and keeps routines and the app map committable', () => {
+    const root = fixtureRepo();
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    writeInitialConfig(root, answers());
+    const ignored = (path: string) => {
+      try {
+        execFileSync('git', ['check-ignore', '-q', path], { cwd: root });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(ignored('.bugpatrol/runs/sessions/ses_1/001-home.png')).toBe(true);
+    expect(ignored('.bugpatrol/routines/enter-app.json')).toBe(false);
+    expect(ignored('.bugpatrol/appmap.json')).toBe(false);
   });
 
   it('never overwrites a file, and adds the .gitignore line once', () => {

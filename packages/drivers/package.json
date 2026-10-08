@@ -22,7 +22,13 @@
     "@bugpatrol/core": "workspace:*",
     "@bugpatrol/invariants": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.20.0",
+    "bdf-fonts": "^2.2.2",
+    "gifenc": "^1.0.3",
     "playwright": "1.48.2",
+    "pngjs": "^7.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5"
   }
 }

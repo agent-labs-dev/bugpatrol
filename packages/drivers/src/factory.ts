@@ -1,18 +1,26 @@
+import { resolve } from 'node:path';
 import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
 import { ApiDriver } from './api.js';
+import { CliDriver } from './cli.js';
 import { CuaDriver } from './cua/driver.js';
 import { ElectronDriver } from './electron.js';
 import { MaestroDriver } from './maestro.js';
 import type { Driver } from './types.js';
 import { WebDriver } from './web.js';
 
-/** Pick the transport configured for the app while resolving captured endpoints. */
+/**
+ * Pick the transport configured for the app while resolving captured
+ * endpoints. `source` is the checkout of the build under test, where a CLI
+ * app runs its commands; it defaults to `app.source`.
+ */
 export function createDriver(
   config: BugpatrolConfig,
   vars: (value: string) => string,
   redact: (value: string) => string = (value) => value,
+  source: string = resolve(config.app.source),
 ): Driver {
   const { platform, connect } = config.app;
+  if (platform === 'cli') return new CliDriver({ cwd: source, timeoutMs: connect.cli.timeoutMs, redact });
   if (platform === 'desktop') {
     if (!connect.cua) throw new ConfigError('Desktop driver requires app.connect.cua.launch');
     return new CuaDriver({

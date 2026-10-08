@@ -1,0 +1,50 @@
+# Runs the Bugpatrol review Action (action.yml) on each pull request, with the
+# Bugpatrol of the pull request itself, against the fixture app.
+name: Review smoke
+
+on:
+  pull_request:
+    paths:
+      - action.yml
+      - .github/workflows/review-smoke.yml
+      - examples/fixture-app/**
+      - examples/review-smoke/**
+      - packages/**
+      - pnpm-lock.yaml
+
+# The permissions that `bugpatrol review` documents, and no more.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: review-smoke-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # A pull request from a fork gets no secrets, so the review could not run.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here: it is read from package.json's packageManager.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter bugpatrol build
+      - name: Pack the Bugpatrol of this pull request
+        id: pack
+        working-directory: packages/bugpatrol
+        run: echo "tarball=$RUNNER_TEMP/$(npm pack --silent --pack-destination "$RUNNER_TEMP")" >> "$GITHUB_OUTPUT"
+      - uses: ./
+        with:
+          package: ${{ steps.pack.outputs.tarball }}
+          working-directory: examples/review-smoke
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

@@ -1,6 +1,7 @@
 // Bugpatrol dashboard. Vanilla ES modules on purpose: no build step means the UI
 // is served straight from source, so `bugpatrol dashboard` works from a clone with
 // nothing compiled but the CLI itself.
+import { parseCast } from './cast.js';
 import { layoutGraph } from './graph-layout.js';
 
 const view = document.getElementById('view');
@@ -27,6 +28,9 @@ const state = {
   memory: { lessons: [] },
   runs: [],
   selectedRunId: null,
+  reviews: [],
+  selectedReview: null,
+  reviewDetail: null,
   detail: null,
   live: null,
   root: '',
@@ -40,6 +44,7 @@ try {
 }
 const graphCamera = { box: null, key: '' };
 let showBackLinks = false;
+let renderedReviews = '';
 
 // ---------------------------------------------------------------- data
 
@@ -123,6 +128,19 @@ async function refresh({ keepSelection = true } = {}) {
     }
   }
   if (state.view === 'memory') state.memory = await getJson('/api/memory');
+  if (state.view === 'reviews') {
+    const reviews = await getJson('/api/reviews');
+    if (!reviews.some((review) => review.pr.number === state.selectedReview)) {
+      state.selectedReview = reviews[0]?.pr.number ?? null;
+    }
+    const detail = state.selectedReview ? await getJson(`/api/reviews/${state.selectedReview}`) : null;
+    // A rebuilt page restarts a playing video, so skip the render when the review did not change.
+    const key = JSON.stringify([reviews, detail]);
+    if (key === renderedReviews && view.querySelector('.review-page')) return;
+    renderedReviews = key;
+    state.reviews = reviews;
+    state.reviewDetail = detail;
+  }
   render();
 }
 
@@ -155,6 +173,7 @@ function render() {
     activity: renderActivity,
     flow: renderFlow,
     screens: renderScreens,
+    reviews: renderReviews,
     memory: renderMemory,
     checks: renderRuns,
   };
@@ -1607,6 +1626,303 @@ function renderScreenGraph(screens, allEdges) {
     ]),
     el('p', { class: 'graph-legend', text: 'Solid = tap · dashed = deep link · grey = replay route' }),
     canvas,
+  ]);
+}
+
+// ---------------------------------------------------------------- reviews
+
+const VERDICT_BADGE = { proven: 'pass', 'partly-proven': 'warn', 'not-proven': 'fail', untested: 'info' };
+const VERDICT_WORDS = {
+  proven: 'Proven',
+  'partly-proven': 'Partly proven',
+  'not-proven': 'Not proven',
+  untested: 'Untested',
+};
+const EVIDENCE_WORDS = { replay: 'replay', assertion: 'assertion', explored: 'explored', bench: 'benchmark' };
+
+async function openReview(number) {
+  state.selectedReview = number;
+  await refresh();
+}
+
+function renderReviews() {
+  const list = el('div', { class: 'card panel' }, [
+    title('Pull request reviews', `${state.reviews.length}`),
+    state.reviews.length
+      ? null
+      : el('p', { class: 'empty', text: 'No reviews yet. Run bugpatrol review <pr> to review a pull request.' }),
+    ...state.reviews.map((review) =>
+      el(
+        'button',
+        {
+          class: `list-row ${review.pr.number === state.selectedReview ? 'active' : ''}`,
+          onclick: () => openReview(review.pr.number),
+        },
+        [
+          el('span', { class: 'grow' }, [
+            el('strong', { text: `#${review.pr.number} ${review.pr.title ?? ''}` }),
+            el('span', { class: 'row-meta' }, [
+              el('small', {
+                class: 'muted',
+                text: `${reviewStatus(review)} · ${relativeTime(review.endedAt ?? review.startedAt)}`,
+              }),
+              ...Object.entries(review.verdicts ?? {})
+                .filter(([, count]) => count)
+                .map(([verdict, count]) =>
+                  el('span', { class: `badge ${VERDICT_BADGE[verdict]}`, text: `${count} ${verdict}` }),
+                ),
+              review.introduced ? el('span', { class: 'badge fail', text: `${review.introduced} introduced` }) : null,
+            ]),
+          ]),
+        ],
+      ),
+    ),
+  ]);
+  return el('div', { class: 'master-detail review-page' }, [list, renderReviewDetail()]);
+}
+
+function reviewStatus(review) {
+  if (review.status === 'running') return 'Running';
+  if (review.status === 'failed') return 'Failed';
+  return review.posted ? 'Posted' : 'Finished';
+}
+
+function link(href, text) {
+  return el('a', { href, target: '_blank', rel: 'noopener noreferrer', text });
+}
+
+function renderReviewDetail() {
+  const detail = state.reviewDetail;
+  if (!detail) return el('section', { class: 'card panel empty', text: 'Select a review.' });
+  const { review, recordings } = detail;
+  const ids = new Set((review.claims ?? []).map((finding) => finding.claim.id));
+  const loose = recordings.filter((rec) => !rec.claimId || !ids.has(rec.claimId));
+  const introduced = review.findings.filter((finding) => finding.verdict === 'introduced');
+  const others = ['pre-existing', 'unclear', 'not-a-bug']
+    .map((verdict) => [verdict, review.findings.filter((finding) => finding.verdict === verdict)])
+    .filter(([, findings]) => findings.length);
+  return el('article', { class: 'card panel review-detail' }, [
+    el('div', { class: 'detail-heading' }, [
+      el('h1', { text: `#${review.pr.number} ${review.pr.title ?? ''}` }),
+      el('span', {
+        class: `badge ${review.status === 'failed' ? 'fail' : review.status === 'running' ? 'warn' : 'info'}`,
+        text: reviewStatus(review),
+      }),
+    ]),
+    el('div', { class: 'kv' }, [
+      review.pr.url ? link(review.pr.url, 'Pull request') : null,
+      review.posted ? link(review.posted.url, 'Review on GitHub') : null,
+      el('span', { class: 'mono', title: review.head, text: `head ${shortCommit(review.head)}` }),
+      el('span', {
+        class: 'mono',
+        title: review.base,
+        text: `base ${shortCommit(review.base)}${review.baseRef ? ` (${review.baseRef})` : ''}`,
+      }),
+      el('span', { text: `Started ${relativeTime(review.startedAt)}` }),
+      review.costUsd ? el('span', { text: `$${review.costUsd.toFixed(3)}` }) : null,
+    ]),
+    review.error ? el('p', { class: 'review-error', text: review.error }) : null,
+    review.claims
+      ? el('section', {}, [
+          title('Claims', `${review.claims.length}`),
+          review.claims.length
+            ? null
+            : el('p', { class: 'muted', text: 'Bugpatrol found no claim in the pull request.' }),
+          ...review.claims.map((finding) =>
+            claimBlock(
+              finding,
+              recordings.filter((rec) => rec.claimId === finding.claim.id),
+            ),
+          ),
+        ])
+      : null,
+    el('section', {}, [
+      title('Introduced problems', `${introduced.length}`),
+      introduced.length
+        ? null
+        : el('p', { class: 'muted', text: 'Bugpatrol found no problem that this pull request introduced.' }),
+      ...introduced.map(findingBlock),
+    ]),
+    ...others.map(([verdict, findings]) =>
+      el('details', { class: 'review-others' }, [
+        el('summary', { text: `${capital(verdict.replace(/-/g, ' '))} (${findings.length})` }),
+        ...findings.map(findingBlock),
+      ]),
+    ),
+    loose.length
+      ? el('section', {}, [
+          title('Other recordings', `${loose.length}`),
+          el(
+            'div',
+            { class: 'retest-shots' },
+            loose.map((rec) => recordingView(rec)),
+          ),
+        ])
+      : null,
+    review.tested ? el('section', {}, [title('What Bugpatrol tested'), markdown(review.tested)]) : null,
+  ]);
+}
+
+function claimSource(source) {
+  if (source.kind === 'section') return 'the claims section';
+  if (source.kind === 'commit') return `commit ${shortCommit(source.commit)}`;
+  if (source.kind === 'issue') return `issue #${source.number}`;
+  return `the ${source.kind}`;
+}
+
+function claimBlock(finding, recordings) {
+  const { claim } = finding;
+  const tested = finding.head || finding.base || recordings.length;
+  return el('div', { class: 'claim-block' }, [
+    el('div', { class: 'detail-heading' }, [
+      el('h3', { text: claim.text }),
+      el('span', {
+        class: `badge ${VERDICT_BADGE[finding.verdict] ?? 'info'}`,
+        text: VERDICT_WORDS[finding.verdict] ?? finding.verdict,
+      }),
+    ]),
+    el('div', { class: 'kv' }, [
+      el('span', {
+        text: `Evidence: ${finding.evidence ? (EVIDENCE_WORDS[finding.evidence] ?? finding.evidence) : 'none'}`,
+      }),
+      el('span', { text: `From ${claimSource(claim.source)}` }),
+      el('span', { text: claim.platform }),
+    ]),
+    el('p', { text: finding.reason }),
+    finding.saw ? el('p', {}, [el('strong', { text: 'Saw: ' }), finding.saw]) : null,
+    finding.did ? el('p', { class: 'muted', text: finding.did }) : null,
+    claim.untestable ? el('p', { class: 'muted', text: `Not testable: ${claim.untestable}` }) : null,
+    tested
+      ? el('div', { class: 'retest-shots' }, [
+          buildEvidence(
+            'Base',
+            finding.base,
+            recordings.filter((rec) => rec.build === 'base'),
+          ),
+          buildEvidence(
+            'This pull request',
+            finding.head,
+            recordings.filter((rec) => rec.build === 'head'),
+          ),
+        ])
+      : null,
+    finding.steps?.length
+      ? el('details', { class: 'recorded-path' }, [
+          el('summary', { text: `Claim routine: ${finding.steps.length} step(s)` }),
+          el(
+            'ol',
+            {},
+            finding.steps.map((step) => el('li', { text: step })),
+          ),
+          finding.routine ? el('code', { text: finding.routine }) : null,
+        ])
+      : null,
+  ]);
+}
+
+/**
+ * One build's evidence for a claim. A full video plays when there is one, then
+ * an animated recording, then a terminal cast. Without a recording the step
+ * screenshots show instead.
+ */
+function buildEvidence(label, replay, recordings) {
+  const pick =
+    recordings.find((rec) => rec.kind === 'video') ??
+    recordings.find((rec) => rec.kind === 'image') ??
+    recordings.find((rec) => rec.kind === 'cast');
+  const stopped = replay?.failedStep !== undefined ? ` at step ${replay.failedStep + 1}` : '';
+  const note = !replay
+    ? 'Not replayed.'
+    : replay.ok
+      ? null
+      : `Stopped${stopped}${replay.error ? `: ${replay.error}` : '.'}`;
+  const shots = replay?.shots ?? [];
+  const strip = () =>
+    el(
+      'div',
+      { class: 'shot-strip' },
+      shots.map((path, index) => image(path, `${label}: ${index ? `after step ${index}` : 'before the first step'}`)),
+    );
+  return el('figure', { class: 'build-evidence' }, [
+    pick ? recordingView(pick) : shots.length ? strip() : el('div', { class: 'image-empty', text: 'No capture' }),
+    el('figcaption', {}, [label, note ? el('span', { class: 'build-note', text: ` · ${note}` }) : null]),
+    pick && shots.length
+      ? el('details', { class: 'build-shots' }, [el('summary', { text: `Screenshots (${shots.length})` }), strip()])
+      : null,
+  ]);
+}
+
+function recordingView(rec) {
+  const name = rec.path.split('/').pop();
+  if (rec.kind === 'video')
+    return el('div', { class: 'recording' }, [
+      el('video', { src: artifact(rec.path), controls: '', preload: 'metadata', playsinline: '' }),
+      el('small', { class: 'muted', text: name }),
+    ]);
+  if (rec.kind === 'image')
+    return el('div', { class: 'recording' }, [image(rec.path, name), el('small', { class: 'muted', text: name })]);
+  return castPlayer(rec.path);
+}
+
+/** A terminal cast as plain text. It shows the end state; Play replays the output in time. */
+function castPlayer(path) {
+  const screen = el('pre', { class: 'cast-screen', text: 'Loading the cast…' });
+  const play = el('button', { type: 'button', class: 'filter', text: 'Play', disabled: '' });
+  let cast;
+  let timers = [];
+  play.addEventListener('click', () => {
+    for (const timer of timers) clearTimeout(timer);
+    screen.textContent = '';
+    // A pause longer than a second plays as one second, so a slow command does not stall the replay.
+    let at = 0;
+    let last = 0;
+    timers = cast.events.map((event) => {
+      at += Math.min(event.at - last, 1);
+      last = event.at;
+      return setTimeout(() => {
+        screen.textContent += event.text;
+      }, at * 1000);
+    });
+  });
+  fetch(artifact(path))
+    .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+    .then((text) => {
+      cast = parseCast(text);
+      if (!cast) throw new Error('not an asciicast file');
+      screen.textContent = cast.events.map((event) => event.text).join('');
+      play.removeAttribute('disabled');
+    })
+    .catch((error) => {
+      screen.textContent = `Could not read the cast: ${error.message}`;
+    });
+  return el('div', { class: 'recording' }, [
+    screen,
+    el('div', { class: 'kv' }, [play, el('small', { class: 'muted', text: path.split('/').pop() })]),
+  ]);
+}
+
+function findingBlock(finding) {
+  return el('div', { class: 'claim-block' }, [
+    el('div', { class: 'detail-heading' }, [el('h3', { text: finding.title }), severityChip(finding.severity)]),
+    finding.file ? el('code', { text: `${finding.file}${finding.line ? `:${finding.line}` : ''}` }) : null,
+    el('p', { text: finding.reason }),
+    finding.head || finding.base
+      ? el('div', { class: 'retest-shots' }, [
+          el('figure', {}, [image(finding.base, 'Base'), el('figcaption', { text: 'Base' })]),
+          el('figure', {}, [image(finding.head, 'This pull request'), el('figcaption', { text: 'This pull request' })]),
+        ])
+      : null,
+    finding.baseNote ? el('p', { class: 'muted', text: finding.baseNote }) : null,
+    finding.steps?.length
+      ? el('details', { class: 'recorded-path' }, [
+          el('summary', { text: `Steps (${finding.steps.length})` }),
+          el(
+            'ol',
+            {},
+            finding.steps.map((step) => el('li', { text: step })),
+          ),
+        ])
+      : null,
   ]);
 }
 

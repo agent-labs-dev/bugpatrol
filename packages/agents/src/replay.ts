@@ -1,21 +1,90 @@
-import type { RoutineStep } from '@bugpatrol/core';
-import type { Driver, DriverAction } from '@bugpatrol/drivers';
+import type { Assertion, AssertionResult, BugCheck, RoutineStep } from '@bugpatrol/core';
+import type { Driver, DriverAction, Observation } from '@bugpatrol/drivers';
 import type { AgentSession } from './session.js';
 
 /** Carries a replay failure back to the explorer without creating a finding. */
 export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; degraded: boolean };
 
+/**
+ * The parts of a bug check that do not hold on a screen, in words, so an
+ * empty list means the bug shows. `errors` are the console and network
+ * errors of the whole flow: a driver reports each one once only.
+ */
+export function bugMisses(check: BugCheck, screen: Observation, errors: string[]): string[] {
+  const texts = [
+    screen.title,
+    screen.http?.body,
+    screen.terminal?.output,
+    ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
+  ].filter((text): text is string => Boolean(text));
+  const onScreen = (part: string) => texts.some((text) => text.includes(part));
+  const misses: string[] = [];
+  if (check.shows && !onScreen(check.shows)) misses.push(`the screen does not show "${check.shows}"`);
+  if (check.lacks && onScreen(check.lacks)) misses.push(`the screen shows "${check.lacks}"`);
+  if (check.error && !errors.some((error) => error.includes(check.error!)))
+    misses.push(`no console or network error has "${check.error}"`);
+  return misses;
+}
+
+/**
+ * Checks the assertions of a routine against the last command or the last
+ * response on a screen. Each one is exact, so the same output gives the same
+ * result on each run.
+ */
+export function checkAssertions(assertions: Assertion[], screen: Observation): AssertionResult[] {
+  const { terminal, http } = screen;
+  return assertions.map((assertion) => {
+    const code = assertion.kind === 'status' ? http?.status : terminal?.exitCode;
+    if (assertion.kind === 'exit-code' || assertion.kind === 'status')
+      return { assertion, ok: code === assertion.value, actual: code === undefined ? 'none' : String(code) };
+    const text = (assertion.kind.startsWith('body') ? http?.body : terminal?.output) ?? '';
+    const has = text.includes(assertion.value);
+    return { assertion, ok: assertion.kind.endsWith('includes') ? has : !has };
+  });
+}
+
+/** An assertion as a sentence, or with `failed`, what the command or the API did instead. */
+export function assertionWords(result: Pick<AssertionResult, 'assertion' | 'actual'>, failed = false): string {
+  const { assertion } = result;
+  if (assertion.kind === 'exit-code')
+    return failed
+      ? result.actual === 'none'
+        ? 'the command did not exit'
+        : `the exit code is ${result.actual}`
+      : `The exit code is ${assertion.value}`;
+  if (assertion.kind === 'status')
+    return failed
+      ? result.actual === 'none'
+        ? 'no response came'
+        : `the status is ${result.actual}`
+      : `The status is ${assertion.value}`;
+  const what = assertion.kind.startsWith('body') ? 'body' : 'output';
+  const has = assertion.kind.endsWith('includes');
+  if (failed) return `the ${what} ${has ? 'lacks' : 'has'} "${assertion.value}"`;
+  return `The ${what} ${has ? 'has' : 'does not have'} "${assertion.value}"`;
+}
+
 /** Replay issue-local steps from the current screen; the first failure stops the path. */
 export async function replaySteps(
   session: AgentSession,
   steps: RoutineStep[],
-  opts: { windowMs?: number } = {},
+  opts: { windowMs?: number; onStep?: (index: number) => Promise<void> } = {},
 ): Promise<ReplayResult> {
-  const result = await runSteps(session, steps, opts.windowMs ?? 30_000, false);
+  const result = await runSteps(session, steps, opts.windowMs ?? 30_000, false, opts.onStep);
   return { ok: !result.error, failedStep: result.failedStep, error: result.error, degraded: result.degraded };
 }
 
-async function runSteps(session: AgentSession, steps: RoutineStep[], windowMs: number, skippable: boolean) {
+/**
+ * `onStep` runs after each step that worked, once the screen settled. An
+ * error that it throws is not a failed step: it goes to the caller.
+ */
+async function runSteps(
+  session: AgentSession,
+  steps: RoutineStep[],
+  windowMs: number,
+  skippable: boolean,
+  onStep?: (index: number) => Promise<void>,
+) {
   const driver = session.driver as Driver;
   const version = driver.controlVersion;
   let degraded = false;
@@ -52,6 +121,7 @@ async function runSteps(session: AgentSession, steps: RoutineStep[], windowMs: n
       error = String(cause);
       break;
     }
+    await onStep?.(index);
   }
   return { degraded, failedStep, error, skipped };
 }
@@ -187,6 +257,12 @@ function toAction(step: RoutineStep, session: AgentSession): DriverAction {
         ? Object.fromEntries(Object.entries(step.headers).map(([key, value]) => [key, session.vars.resolve(value)]))
         : undefined,
       body: step.body === undefined ? undefined : session.vars.resolve(step.body),
+    };
+  if (step.kind === 'run')
+    return {
+      kind: 'run',
+      command: session.vars.resolve(step.command),
+      ...(step.input === undefined ? {} : { input: session.vars.resolve(step.input) }),
     };
   return step;
 }

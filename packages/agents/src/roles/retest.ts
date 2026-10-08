@@ -147,7 +147,12 @@ export async function retestFix(
       emit: deps.onLog,
       source: options.build === 'main' ? undefined : fix.worktree,
     });
-    driver = (deps.createDriver ?? makeDriver)(config, vars.resolve.bind(vars));
+    driver = (deps.createDriver ?? makeDriver)(
+      config,
+      vars.resolve.bind(vars),
+      (value) => vars.redact(value) as string,
+      options.build === 'main' ? resolve(root, config.app.source) : fix.worktree,
+    );
     await driver.connect();
     const record = await workspace.startSession('explorer');
     retest.explorerSessionId = record.id;

@@ -1,5 +1,5 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   AgentSession,
   applyRetest,
@@ -21,8 +21,17 @@ import {
   watchCi,
   withSessionLogs,
 } from '@bugpatrol/agents';
-import { type AgentRole, type BugpatrolConfig, ConfigError, formatUsage, InfrastructureError } from '@bugpatrol/core';
+import {
+  type AgentRole,
+  type BugpatrolConfig,
+  BugpatrolError,
+  ConfigError,
+  ExitCode,
+  formatUsage,
+  InfrastructureError,
+} from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
+import { exitCodeForReview } from './run.js';
 
 type AgentFlags = Record<string, string | string[] | boolean | number>;
 
@@ -81,8 +90,8 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
       flags.dryRun = true;
       continue;
     }
-    if (command === 'review' && (flag === '--force' || flag === '--allow-fork')) {
-      flags[flag === '--force' ? 'force' : 'allowFork'] = true;
+    if (command === 'review' && (flag === '--force' || flag === '--allow-fork' || flag === '--claims')) {
+      flags[{ '--force': 'force', '--allow-fork': 'allowFork', '--claims': 'claims' }[flag]] = true;
       continue;
     }
     if (!values[command]!.includes(flag)) {
@@ -243,12 +252,19 @@ export async function runAgentCommand(
         force: Boolean(flags.force),
         allowFork: Boolean(flags.allowFork),
         maxSteps: flags.steps as number | undefined,
+        // Without the flag, agents.review.claims decides.
+        claims: flags.claims ? true : undefined,
       });
       const count = (verdict: string) => review.findings.filter((finding) => finding.verdict === verdict).length;
+      const claims = review.claims ? `${review.claims.length} claim(s), ` : '';
       log(
-        `PR #${review.pr.number}: ${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
+        `PR #${review.pr.number}: ${claims}${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
           `${count('unclear')} not compared, ${count('not-a-bug')} not a bug.`,
       );
+      // The Action passes this exit code through, so only a failed claim check turns the workflow red.
+      const code = exitCodeForReview(review);
+      if (code !== ExitCode.Clean)
+        throw new BugpatrolError(`The claim check failed: ${review.check?.title ?? 'a claim was disproved'}.`, code);
     } finally {
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);
@@ -321,7 +337,12 @@ export async function runAgentCommand(
   process.on('SIGTERM', onSignal);
   try {
     app = await startApp(config.app, { root, vars, emit: log });
-    driver = createDriver(config, vars.resolve.bind(vars), (value) => vars.redact(value) as string);
+    driver = createDriver(
+      config,
+      vars.resolve.bind(vars),
+      (value) => vars.redact(value) as string,
+      resolve(root, config.app.source),
+    );
     await driver.connect();
     if (driver.viewerUrl) {
       const directory = join(root, '.bugpatrol', 'runs');

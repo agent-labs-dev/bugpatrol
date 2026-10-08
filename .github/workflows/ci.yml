@@ -28,7 +28,12 @@ jobs:
       # must fail here, not in a release.
       - run: pnpm --filter bugpatrol build
       - run: node packages/bugpatrol/dist/bin.js --version
+      # The landing page in site/, which the Pages workflow deploys from main.
+      - run: pnpm --filter @bugpatrol/site typecheck
+      - run: pnpm --filter @bugpatrol/site build
       # The capture tests drive a real browser, because font loading and layout
       # only mean anything against a real rendering engine.
       - run: pnpm --filter @bugpatrol/capture exec playwright install --with-deps chromium
+      # The recording tests encode real video.
+      - run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pnpm test

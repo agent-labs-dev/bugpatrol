@@ -13,6 +13,17 @@ describe('parseConfig', () => {
     expect(c.surfaces.fixPRs).toBe(false);
     expect(c.determinism.blockThirdPartyRequests).toBe(true);
     expect(c.viewports).toHaveLength(2);
+    expect(c.agents.review).toMatchObject({ claims: false, maxSteps: 150 });
+    expect(c.agents.review.budgetUsd).toBeUndefined();
+  });
+
+  it('reads declared benchmarks, and rejects a parse rule that is no regular expression or a name used twice', () => {
+    const bench = { name: 'p99', command: 'k6 run load.js', metric: 'p99 latency in ms', parse: 'p\\(99\\)=([\\d.]+)' };
+    const review = (benches: unknown[]) => parseConfig({ ...minimal, agents: { review: { benches } } });
+    expect(parseConfig(minimal).agents.review.benches).toEqual([]);
+    expect(review([bench]).agents.review.benches).toMatchObject([{ ...bench, better: 'lower', runs: 5 }]);
+    expect(() => review([{ ...bench, parse: '([' }])).toThrow(ConfigError);
+    expect(() => review([bench, bench])).toThrow(ConfigError);
   });
 
   it('rejects an unknown version rather than guessing', () => {
