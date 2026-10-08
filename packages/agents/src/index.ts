@@ -1,3 +1,4 @@
+export * from './capabilities.js';
 export * from './evaluate.js';
 export * from './github.js';
 export * from './lifecycle.js';
