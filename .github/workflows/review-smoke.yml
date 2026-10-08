@@ -43,7 +43,8 @@ jobs:
     # A pull request from a fork gets no secrets, so the review could not run.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The explorer alone may use its 20 minutes; the base build and the judge come after.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # No `version:` here: it is read from package.json's packageManager.

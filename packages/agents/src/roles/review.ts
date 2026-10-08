@@ -424,8 +424,9 @@ async function exploreHead(
             session.emit,
           ),
       );
-      // "No problem found" from an explorer that did not run would be a false review.
-      if (outcome.stop === 'error' || outcome.stop === 'timeout')
+      // "No problem found" from an explorer that did not run would be a false review. One that ran out of
+      // time after it tested something tested part of the change, as one that ran out of steps.
+      if (outcome.stop === 'error' || (outcome.stop === 'timeout' && !outcome.steps))
         throw new InfrastructureError(
           `The explorer did not finish (${outcome.stop}): ${outcome.error ?? outcome.summary ?? 'no result'}`,
         );
@@ -435,6 +436,7 @@ async function exploreHead(
       const summary = outcome.summary?.trim();
       const cutShort = `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
       if (outcome.stop === 'max-steps') review.cutShort = { by: 'max-steps', limit: maxSteps };
+      if (outcome.stop === 'timeout') review.cutShort = { by: 'timeout', limit: config.agents.explorer.timeoutMs };
       if (outcome.stop === 'budget' && config.agents.explorer.budgetUsd !== undefined)
         review.cutShort = { by: 'budget', limit: config.agents.explorer.budgetUsd };
       review.tested =

@@ -593,7 +593,7 @@ export type PrReview = {
   /** The explorer's account as short lines: what it tested, and what it did not reach and why. */
   coverage?: { tested: string[]; untested: { what: string; why: string }[] };
   /** The limit that stopped the explorer before it finished, with its value. */
-  cutShort?: { by: 'max-steps'; limit: number } | { by: 'budget'; limit: number };
+  cutShort?: { by: 'max-steps' | 'budget' | 'timeout'; limit: number };
   /** The claim check. Absent when the claim check was off. */
   claims?: ClaimFinding[];
   /** The check run of the claim check. Absent when blocking is off. */

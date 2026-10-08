@@ -155,7 +155,7 @@ function scripted(
   verdict: ReviewVerdict,
   reports = 1,
   line?: number,
-  explorer: { finish?: Record<string, unknown>; stop?: RoleOutcome['stop'] } = {},
+  explorer: { finish?: Record<string, unknown>; stop?: RoleOutcome['stop']; steps?: number } = {},
 ) {
   const tasks: RoleTask[] = [];
   const refusals: string[] = [];
@@ -181,7 +181,13 @@ function scripted(
           const done = await tool(task, 'finish').run({ tested: ['The settings screen'], untested: [] });
           expect(done.isError).toBeFalsy();
         }
-        if (explorer.stop) return { stop: explorer.stop, steps: 15, costUsd: 0.5, finished: true };
+        if (explorer.stop)
+          return {
+            stop: explorer.stop,
+            steps: explorer.steps ?? 15,
+            costUsd: 0.5,
+            finished: explorer.stop === 'max-steps',
+          };
       } else if (tool(task, 'add_claim')) {
         // A source that the pull request does not have.
         const wrong = await tool(task, 'add_claim').run({
@@ -543,6 +549,29 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(github.posted()).toEqual([]);
       expect(github.sticky()).toContain('Other findings (1)');
       expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('posts what an explorer tested before it ran out of time, and fails when it did nothing', async () => {
+    const f = await fixture();
+    try {
+      const timedOut = (steps: number) =>
+        reviewPullRequest(f.root, f.config, 7, {
+          gh: fakeGh().gh,
+          createRuntime: scripted('introduced', 1, 1, {
+            finish: { tested: ['The settings screen'], untested: [] },
+            stop: 'timeout',
+            steps,
+          }).createRuntime,
+          createDriver: screens,
+          force: true,
+        });
+      const review = await timedOut(40);
+      expect(review.status).toBe('finished');
+      expect(review.cutShort).toEqual({ by: 'timeout', limit: f.config.agents.explorer.timeoutMs });
+      await expect(timedOut(0)).rejects.toThrow('The explorer did not finish (timeout)');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -2611,6 +2640,9 @@ describe('review rendering', () => {
       ).body.match(/^> \*\*Next run:\*\* .*$/m)?.[0];
     expect(hint({ cutShort: { by: 'max-steps', limit: 15 }, files: { config: 'c' } })).toBe(
       "> **Next run:** The explorer used all 15 steps. Raise `agents.explorer.maxSteps`, or the Action's `steps` input.",
+    );
+    expect(hint({ cutShort: { by: 'timeout', limit: 20 * 60 * 1000 } })).toBe(
+      '> **Next run:** The explorer used its 20 minutes. Raise `agents.explorer.timeoutMs`.',
     );
     expect(hint({ cutShort: { by: 'budget', limit: 0.5 } })).toBe(
       '> **Next run:** The explorer spent its $0.50 budget. Raise `agents.explorer.budgetUsd`.',

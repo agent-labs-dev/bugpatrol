@@ -428,6 +428,8 @@ export function lineReviewBody(count: number, comment: string, name?: string): s
 function nextRunHint(review: PrReview): string | undefined {
   if (review.cutShort?.by === 'max-steps')
     return `The explorer used all ${review.cutShort.limit} steps. Raise \`agents.explorer.maxSteps\`, or the Action's \`steps\` input.`;
+  if (review.cutShort?.by === 'timeout')
+    return `The explorer used its ${Math.round(review.cutShort.limit / 60_000)} minutes. Raise \`agents.explorer.timeoutMs\`.`;
   if (review.cutShort?.by === 'budget')
     return `The explorer spent its $${review.cutShort.limit.toFixed(2)} budget. Raise \`agents.explorer.budgetUsd\`.`;
   if (review.files && !review.files.guide)
