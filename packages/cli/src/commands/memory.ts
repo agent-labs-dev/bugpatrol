@@ -1,5 +1,5 @@
 import { Workspace } from '@bugpatrol/agents';
-import { ConfigError, type LessonRole } from '@bugpatrol/core';
+import { ConfigError, type LessonRole, lessonTooLong } from '@bugpatrol/core';
 
 const roles = new Set<LessonRole>(['explorer', 'judge', 'fixer']);
 const flag = (args: string[], name: string) => {
@@ -31,6 +31,8 @@ export async function runMemoryCommand(args: string[], root: string, log: (line:
       );
     if (!role || !roles.has(role as LessonRole) || !text?.trim())
       throw new ConfigError('Usage: bugpatrol memory add --role explorer|judge|fixer "text" [--scope s]');
+    const tooLong = lessonTooLong(text);
+    if (tooLong) throw new ConfigError(tooLong);
     const [lesson] = await workspace.upsertLessons([
       { role: role as LessonRole, source: 'human', scope: flag(args.slice(1), '--scope'), text },
     ]);

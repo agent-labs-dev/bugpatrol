@@ -1,6 +1,14 @@
 import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { type Candidate, type Issue, paths, type Routine, shortHash, type TriageFile } from '@bugpatrol/core';
+import {
+  type Candidate,
+  fitLesson,
+  type Issue,
+  paths,
+  type Routine,
+  shortHash,
+  type TriageFile,
+} from '@bugpatrol/core';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -311,7 +319,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
                 role: 'explorer',
                 source: 'dismissal',
                 scope: candidate.screenId,
-                text: `Do not report: ${candidate.summary} — ${String(input.reason)}`.slice(0, 200),
+                text: fitLesson(`Do not report: ${candidate.summary} — ${String(input.reason)}`),
               },
             ]);
           }

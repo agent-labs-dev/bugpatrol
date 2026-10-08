@@ -45,6 +45,25 @@ describe('save_lesson', () => {
     }
   });
 
+  it('rejects a lesson over 200 characters without counting it, and saves one at 200 unchanged', async () => {
+    const f = await session({ maxPerSession: 1 });
+    try {
+      const [tool] = lessonTools(f.session, 'judge');
+      expect(tool!.description).toContain('200 characters');
+      const rejected = await tool!.run({ text: `${'Open Settings. '.repeat(12)}Wait a bit.`.padEnd(201, '!') });
+      expect(rejected.isError).toBe(true);
+      expect(JSON.stringify(rejected)).toContain('201 characters');
+      expect(JSON.stringify(rejected)).toContain('200');
+      expect((await f.workspace.readMemory()).lessons).toEqual([]);
+
+      const text = `${'Open Settings. '.repeat(12)}Wait a bit.`.padEnd(200, '!');
+      await tool!.run({ text });
+      expect((await f.workspace.readMemory()).lessons.map((lesson) => lesson.text)).toEqual([text]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('shows a similar lesson instead of a second copy, and confirms it with same', async () => {
     const f = await session();
     try {
