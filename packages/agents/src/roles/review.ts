@@ -29,6 +29,7 @@ import {
   explorerClaimsPart,
   explorerReviewPrompt,
   explorerReviewSystem,
+  judgeClaimSectionSystem,
   judgeClaimsSystem,
   judgeReviewSystem,
 } from '../prompts.js';
@@ -665,17 +666,76 @@ function sectionClaims(body: string): string[] | undefined {
 
 /** The claims of the pull request: the author's claims section as written, or else the judge's. */
 async function readClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[]> {
-  const { config, pr } = ctx;
-  const section = sectionClaims(pr.body);
-  if (section)
-    return section.map((text, index) => ({
-      id: `claim-${index + 1}`,
-      text,
-      platform: config.app.platform,
-      source: { kind: 'section' },
-      testable: true,
-    }));
-  return writeClaims(ctx, review);
+  const section = sectionClaims(ctx.pr.body);
+  return section ? classifyClaims(ctx, review, section) : writeClaims(ctx, review);
+}
+
+/**
+ * The judge tells which claims of the author a test can show, and on what
+ * platform, and keeps the words of the author. A claim that the judge
+ * leaves out stays testable on the platform of the app.
+ */
+async function classifyClaims(ctx: ReviewContext, review: PrReview, texts: string[]): Promise<Claim[]> {
+  const { config, workspace, pr } = ctx;
+  const vars = new Vars(config.app.secrets);
+  const claims: Claim[] = texts.map((text, index) => ({
+    id: `claim-${index + 1}`,
+    text,
+    platform: config.app.platform,
+    source: { kind: 'section' },
+    testable: true,
+  }));
+  const tools: Tool[] = [
+    {
+      name: 'classify_claim',
+      description:
+        'Say where a test of one claim runs, and whether a test can show it. A claim that cannot be tested needs ' +
+        'testable false and a reason.',
+      inputSchema: schema(
+        { claim: string, platform: { type: 'string', enum: PLATFORMS }, testable: { type: 'boolean' }, reason: string },
+        ['claim', 'platform', 'testable'],
+      ),
+      async run(input) {
+        const refuse = (message: string) => ({ ...response(message), isError: true });
+        const claim = claims.find((item) => item.id === input.claim);
+        const reason = String(input.reason ?? '').trim();
+        const testable = input.testable !== false;
+        if (!claim) return refuse(`Unknown claim. The claims: ${claims.map((item) => item.id).join(', ')}.`);
+        if (!PLATFORMS.includes(input.platform as Platform))
+          return refuse(`Use one platform of ${PLATFORMS.join(', ')}.`);
+        if (!testable && !reason) return refuse('Say in reason why this claim cannot be tested.');
+        claim.platform = input.platform as Platform;
+        claim.testable = testable;
+        if (testable) delete claim.untestable;
+        else claim.untestable = vars.redact(reason) as string;
+        return response(`${claim.id}: ${testable ? 'testable' : 'not testable'}.`);
+      },
+    },
+    {
+      name: 'finish',
+      description: 'Finish with one sentence, when every claim is classified.',
+      inputSchema: schema({ summary: string }, ['summary']),
+      async run(input) {
+        return { ...response(String(input.summary ?? '')), done: true };
+      },
+    },
+  ];
+  await claimJudge(ctx, review, {
+    session: 'claims',
+    start: `Classifying the claims of PR #${pr.number}`,
+    system: judgeClaimSectionSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+    prompt: [
+      `PULL REQUEST #${pr.number}: ${pr.title}`,
+      `PLATFORM OF THE APP: ${config.app.platform}`,
+      `CLAIMS\n${claims.map((claim) => `- ${claim.id}: ${claim.text}`).join('\n')}`,
+      `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
+    ].join('\n\n'),
+    tools,
+    minSteps: claims.length + 2,
+    summary: () =>
+      `PR #${pr.number}: ${claims.filter((claim) => claim.testable).length} of ${claims.length} claim(s) testable`,
+  });
+  return claims;
 }
 
 /** Without a claims section, the judge writes the claims from what the pull request says. */

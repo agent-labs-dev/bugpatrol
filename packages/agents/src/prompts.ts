@@ -296,6 +296,20 @@ claim.
 ${lessonPart(lessons)}`;
 }
 
+export function judgeClaimSectionSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. The author of a pull request listed what it does in a claims section. Bugpatrol tests
+each claim as the author wrote it, on the build of the pull request and on the base build. You do not change the
+words of a claim. You tell Bugpatrol how to test each one.
+
+For each claim, call classify_claim:
+- platform: where a test of the claim runs. Most claims run on the platform of the app.
+- testable: false for a claim that has no behavior to see, such as "clean up the code", "rename a variable" or
+  "update the docs", with a reason in one sentence. Bugpatrol lists it and does not test it.
+Use the diff only to tell what a claim is about. When every claim has its call, call finish with one sentence.
+
+${lessonPart(lessons)}`;
+}
+
 /** The claims part of the prompt of the explorer on a pull request build. */
 export function explorerClaimsPart(claims: { id: string; text: string }[]): string {
   return `CLAIMS TO TEST

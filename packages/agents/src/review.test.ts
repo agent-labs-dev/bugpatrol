@@ -122,6 +122,13 @@ function fakeGh(
 }
 
 const tool = (task: RoleTask, name: string) => task.tools.find((item) => item.name === name)!;
+
+/** The judge that classifies an author's claims: it leaves each claim testable on the platform of the app. */
+async function classifyAll(task: RoleTask): Promise<boolean> {
+  if (!tool(task, 'classify_claim')) return false;
+  await tool(task, 'finish').run({ summary: 'All testable.' });
+  return true;
+}
 const screens = () =>
   new FakeDriver({ home: { elements: [] }, settings: { elements: [], color: 40 } }, 'home') as FakeDriver;
 
@@ -187,6 +194,21 @@ function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
           reason: 'No screen or request shows how clean the code is.',
         });
         await tool(task, 'finish').run({ summary: 'Three claims.' });
+      } else if (tool(task, 'classify_claim')) {
+        // An unknown claim, and an untestable claim with no reason.
+        expect(
+          (await tool(task, 'classify_claim').run({ claim: 'claim-9', platform: 'web', testable: true })).isError,
+        ).toBe(true);
+        const bare = await tool(task, 'classify_claim').run({ claim: 'claim-3', platform: 'web', testable: false });
+        expect(bare.isError).toBe(true);
+        for (const [, id, text] of task.prompt.matchAll(/^- (claim-\d+): (.+)$/gm))
+          await tool(task, 'classify_claim').run({
+            claim: id,
+            platform: 'web',
+            testable: !text!.startsWith('Cleans up'),
+            ...(text!.startsWith('Cleans up') ? { reason: 'No screen or request shows how clean the code is.' } : {}),
+          });
+        await tool(task, 'finish').run({ summary: 'Classified.' });
       } else if (tool(task, 'capture_after')) {
         await tool(task, 'replay_issue_steps').run({ target: 1 });
         await tool(task, 'capture_after').run({ target: 1, note: 'Save works on this build.', reached: true });
@@ -421,6 +443,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
         '',
         '- The save button saves the settings.',
         '* A saved setting shows after a reload.',
+        '- Cleans up the settings code.',
         '',
         '## Notes',
         '',
@@ -434,8 +457,15 @@ describe('pull request review', { timeout: 30_000 }, () => {
         createDriver: screens,
         dryRun: true,
       });
-      // The author wrote the claims, so no model writes them.
-      expect(agents.tasks).toHaveLength(1);
+      // The author wrote the claims, so the judge only tells which ones a test can show, and on what platform.
+      const [judge, explorer] = agents.tasks;
+      expect(judge!.role).toBe('judge');
+      expect(judge!.prompt).toContain('- claim-3: Cleans up the settings code.');
+      expect(judge!.tools.map((item) => item.name)).not.toContain('add_claim');
+      // An untestable claim is never explored.
+      expect(explorer!.role).toBe('explorer');
+      expect(explorer!.prompt.slice(explorer!.prompt.indexOf('CLAIMS TO TEST'))).not.toContain('claim-3');
+      expect(agents.tasks).toHaveLength(2);
       expect(review.claims).toEqual([
         {
           claim: {
@@ -458,6 +488,18 @@ describe('pull request review', { timeout: 30_000 }, () => {
           },
           verdict: 'untested',
           reason: 'The explorer did not reach this claim.',
+        },
+        {
+          claim: {
+            id: 'claim-3',
+            text: 'Cleans up the settings code.',
+            platform: 'web',
+            source: { kind: 'section' },
+            testable: false,
+            untestable: 'No screen or request shows how clean the code is.',
+          },
+          verdict: 'untested',
+          reason: 'No screen or request shows how clean the code is.',
         },
       ]);
       expect((await f.workspace.readReview(7))!.claims).toEqual(review.claims);
@@ -577,9 +619,9 @@ describe('pull request review', { timeout: 30_000 }, () => {
         });
       expect((await run()).claims).toBeUndefined();
       expect((await run(true)).claims).toMatchObject([{ claim: { text: 'The save button saves the settings.' } }]);
-      expect(agents.tasks).toHaveLength(2);
+      expect(agents.tasks).toHaveLength(3);
       await run(true);
-      expect(agents.tasks).toHaveLength(2);
+      expect(agents.tasks).toHaveLength(3);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -709,6 +751,8 @@ function claimAgents(plan: ClaimPlan, before?: (task: RoleTask) => Promise<void>
           }
         }
         await tool(task, 'finish').run({ summary: 'Tested the dark mode switch.' });
+      } else if (await classifyAll(task)) {
+        // Each claim stays as the author wrote it.
       } else if (tool(task, 'pick_bench')) {
         // The judge cannot name a benchmark that the config does not declare.
         const invented = await tool(task, 'pick_bench').run({ claim: 'claim-1', bench: 'invented' });
@@ -761,8 +805,8 @@ describe('claim check', { timeout: 30_000 }, () => {
       const review = await run();
 
       // The explorer and the judge are the only models. The replays use none.
-      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer', 'judge']);
-      expect(agents.tasks[0]!.prompt).toContain('claim-1: The dark mode switch makes the page dark.');
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer', 'judge']);
+      expect(agents.tasks[1]!.prompt).toContain('claim-1: The dark mode switch makes the page dark.');
       expect(review.claims).toMatchObject([
         {
           claim: { id: 'claim-1' },
@@ -791,7 +835,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(app.drivers.base[0]!.current).toBe('home');
 
       // The judge sees the last screen of each build.
-      const view = await tool(agents.tasks[1]!, 'view_claim').run({ claim: 'claim-1' });
+      const view = await tool(agents.tasks[2]!, 'view_claim').run({ claim: 'claim-1' });
       expect(view.content.filter((item) => item.type === 'image')).toHaveLength(2);
 
       // The claim routine stays with this review: the patrol knows nothing new.
@@ -816,7 +860,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       // The same commit with no --force tests nothing, and updates the review.
       github.state.reviews = `90 ${f.head}`;
       await run();
-      expect(agents.tasks).toHaveLength(2);
+      expect(agents.tasks).toHaveLength(3);
       expect(app.drivers.head).toHaveLength(2);
       expect(github.posted()).toHaveLength(1);
       expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/90']);
@@ -947,7 +991,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       ]))
         expect(existsSync(join(f.root, file))).toBe(true);
       // The judge still sees the last screen of each build.
-      const view = await tool(agents.tasks[1]!, 'view_claim').run({ claim: 'claim-1' });
+      const view = await tool(agents.tasks[2]!, 'view_claim').run({ claim: 'claim-1' });
       expect(view.content.filter((item) => item.type === 'image')).toHaveLength(2);
 
       // The GIFs and the full videos go to the assets branch, in place of the step screenshots.
@@ -991,13 +1035,13 @@ describe('claim check', { timeout: 30_000 }, () => {
         },
         capabilities: async (platforms) => {
           asked.push(platforms);
-          expect(agents.tasks).toHaveLength(0);
+          expect(agents.tasks.map((task) => task.role)).toEqual(['judge']);
           return { android: 'No Android emulator runs on this machine.' };
         },
       });
       expect(asked).toEqual([['android']]);
-      // Bugpatrol never starts the app, an emulator or a model for a platform the machine cannot run.
-      expect(agents.tasks).toHaveLength(0);
+      // Past the judge that read the claims, no model, app or emulator starts for a platform that cannot run.
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge']);
       expect(drivers).toHaveLength(0);
       expect(review.status).toBe('finished');
       expect(review.claims).toMatchObject([
@@ -1140,7 +1184,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(record).toMatchObject({ status: 'failed' });
       expect(record!.claims?.some((finding) => finding.verdict !== 'untested') ?? false).toBe(false);
       expect(existsSync(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'))).toBe(false);
-      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1191,9 +1235,9 @@ describe('claim check with benchmarks', { timeout: 30_000 }, () => {
       });
 
       // The judge picks the benchmarks before the explorer runs, and the explorer gets only the other claims.
-      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer', 'judge']);
-      expect(agents.tasks[0]!.prompt).toContain('settings-load: load time in ms');
-      const toTest = agents.tasks[1]!.prompt.slice(agents.tasks[1]!.prompt.indexOf('CLAIMS TO TEST'));
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'judge', 'explorer', 'judge']);
+      expect(agents.tasks[1]!.prompt).toContain('settings-load: load time in ms');
+      const toTest = agents.tasks[2]!.prompt.slice(agents.tasks[2]!.prompt.indexOf('CLAIMS TO TEST'));
       expect(toTest).toContain('claim-3: Dark mode works.');
       expect(toTest).not.toContain('claim-1');
 
@@ -1217,7 +1261,7 @@ describe('claim check with benchmarks', { timeout: 30_000 }, () => {
       expect(byId['claim-3']).toMatchObject({ verdict: 'proven', evidence: 'explored' });
 
       // The judge sees the numbers of both builds.
-      const view = await tool(agents.tasks[2]!, 'view_claim').run({ claim: 'claim-1' });
+      const view = await tool(agents.tasks[3]!, 'view_claim').run({ claim: 'claim-1' });
       const text = view.content.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
       expect(text).toContain('median 12');
       expect(text).toContain('median 13');
@@ -1481,8 +1525,8 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       await commitRepro(f.root);
       const { review, app, agents } = await reviewRepro(f, { head: true, base: false });
       // The explorer looks for bugs. No model takes part in the verdict of the issue.
-      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
-      expect(agents.tasks[0]!.prompt).not.toContain('claim-2');
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
+      expect(agents.tasks[1]!.prompt).not.toContain('claim-2');
       expect(review.claims).toMatchObject([
         { claim: { id: 'claim-1' }, verdict: 'untested' },
         {
@@ -1511,7 +1555,7 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
     try {
       await commitRepro(f.root);
       const { review, app, agents, github } = await reviewRepro(f, { head: false, base: false }, { block: true });
-      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(agents.tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
       // The explorer, then a first and a second replay on each build: the verdict rests on both.
       expect(app.drivers.head).toHaveLength(3);
       expect(app.drivers.base).toHaveLength(2);
@@ -1628,6 +1672,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
       label: 'scripted',
       async run(task) {
         tasks.push(task);
+        if (await classifyAll(task)) return { stop: 'done', steps: 1, costUsd: 0 };
         // A CLI app has no screen to tap.
         expect(task.tools.map((item) => item.name)).not.toContain('tap');
         await tool(task, 'start_claim').run({ claim: 'claim-1' });
@@ -1660,7 +1705,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
     try {
       const { review, tasks, github } = await reviewCli(f, { exit_code: 0, output_includes: ['save is broken'] });
       // The explorer only: the exact checks give the verdict.
-      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
       expect(review.claims).toMatchObject([
         {
           claim: { id: 'claim-1' },
@@ -1717,7 +1762,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
         { output_includes: ['save works'], output_excludes: ['broken'] },
         { block: true },
       );
-      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
       expect(review.claims![0]).toMatchObject({
         verdict: 'not-proven',
         evidence: 'assertion',
@@ -1739,7 +1784,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
       const command =
         "python3 -c \"import uuid, datetime; print('created', datetime.datetime.now(datetime.timezone.utc).isoformat(), 'id', uuid.uuid4())\"; echo listed 3 items";
       const { review, tasks, github } = await reviewCli(f, { same: true }, {}, command);
-      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
       const [finding] = review.claims!;
       expect(finding).toMatchObject({
         verdict: 'proven',
@@ -1916,6 +1961,7 @@ describe('API claim', { timeout: 60_000 }, () => {
         label: 'scripted',
         async run(task) {
           tasks.push(task);
+          if (await classifyAll(task)) return { stop: 'done', steps: 1, costUsd: 0 };
           await tool(task, 'start_claim').run({ claim: 'claim-1' });
           await tool(task, 'request').run({ method: 'GET', url: '/projects/missing' });
           expect(
@@ -1950,7 +1996,7 @@ describe('API claim', { timeout: 60_000 }, () => {
             source,
           ),
       });
-      expect(tasks.map((task) => task.role)).toEqual(['explorer']);
+      expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
       expect(review.claims).toMatchObject([
         {
           verdict: 'proven',
@@ -2022,6 +2068,7 @@ describe('API same-behavior claim', { timeout: 60_000 }, () => {
       const runtime: Runtime = {
         label: 'scripted',
         async run(task) {
+          if (await classifyAll(task)) return { stop: 'done', steps: 1, costUsd: 0 };
           await tool(task, 'start_claim').run({ claim: 'claim-1' });
           await tool(task, 'request').run({ method: 'GET', url: '/projects?page=1' });
           await tool(task, 'save_claim').run({

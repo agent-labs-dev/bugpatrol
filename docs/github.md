@@ -243,7 +243,7 @@ To choose the claims yourself, add a `Claims` heading to the pull request descri
 - `GET /projects/:id` returns 404 for a missing project.
 ```
 
-Bugpatrol uses each list item as written. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
+Bugpatrol keeps each list item as written. The judge only marks where a test of each item runs, and whether a test can show it at all. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
 
 ### Issues that Bugpatrol filed
 
