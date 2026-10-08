@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { BugpatrolConfig, FixProposal } from '@bugpatrol/core';
+import { type BugpatrolConfig, ciAttempts, type FixAttempt, type FixProposal } from '@bugpatrol/core';
 import { defaultGh, type Gh, ghReady, resolveRepo } from '../github.js';
 import { fixerSystem } from '../prompts.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
@@ -10,7 +10,7 @@ import { AgentSession } from '../session.js';
 import { lessonTools } from '../tools/memory.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
-import { commitFix, finishTool, modelTools } from './fixer.js';
+import { closeAttempt, commitFix, finishTool, modelTools } from './fixer.js';
 
 const git = async (cwd: string, ...args: string[]) =>
   (await promisify(execFile)('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
@@ -126,7 +126,6 @@ export async function watchCi(
           state,
           head: fix.commit,
           failing: failed.map((check) => check.name),
-          attempts: fix.ci?.attempts ?? 0,
           checkedAt: new Date().toISOString(),
         };
         await workspace.saveFix(fix);
@@ -150,7 +149,7 @@ export async function watchCi(
         deps.onLog?.(`CI: all ${checks.length} check(s) passed on PR #${pr}.`);
         break;
       }
-      if ((fix.ci?.attempts ?? 0) >= settings.attempts) {
+      if (ciAttempts(fix.attempts).length >= settings.attempts) {
         await save('gave-up');
         const problem = `CI: PR #${pr} still fails ${failed.map((check) => check.name).join(', ')} after ${settings.attempts} fixer attempt(s). A person must look at it.`;
         problems.push(problem);
@@ -164,14 +163,23 @@ export async function watchCi(
         );
         break;
       }
+      try {
+        await access(fix.worktree);
+      } catch {
+        fix.ci = { ...fix.ci!, state: 'gave-up' };
+        await workspace.saveFix(fix);
+        const problem = `CI: the worktree of ${fix.issueId} is gone, so the fixer cannot change PR #${pr}. A person must look at it.`;
+        problems.push(problem);
+        deps.onLog?.(problem);
+        break;
+      }
       deps.onLog?.(`CI: PR #${pr} failed ${failed.map((check) => check.name).join(', ')}. The fixer tries to fix it.`);
       const pushed = await fixCi(root, config, fix, failed, await failureLog(gh, repo, failed), deps);
-      fix.ci = { ...fix.ci!, attempts: (fix.ci?.attempts ?? 0) + 1 };
       await workspace.saveFix(fix);
       if (!pushed) {
-        if (fix.ci.attempts >= settings.attempts) {
+        if (ciAttempts(fix.attempts).length >= settings.attempts) {
           const problem = `CI: the fixer could not fix PR #${pr}. A person must look at it.`;
-          fix.ci = { ...fix.ci, state: 'gave-up' };
+          fix.ci = { ...fix.ci!, state: 'gave-up' };
           await workspace.saveFix(fix);
           problems.push(problem);
           deps.onLog?.(problem);
@@ -180,7 +188,7 @@ export async function watchCi(
         continue;
       }
       if (!deps.wait) {
-        fix.ci = { ...fix.ci, state: 'pending' };
+        fix.ci = { ...fix.ci!, state: 'pending' };
         await workspace.saveFix(fix);
         break;
       }
@@ -191,7 +199,10 @@ export async function watchCi(
   return { problems };
 }
 
-/** One fixer attempt on a failed check. True when a new commit went to the PR branch. */
+/**
+ * One fix attempt on a failed check, added to the fix's attempts. True when a
+ * new commit went to the PR branch.
+ */
 async function fixCi(
   root: string,
   config: BugpatrolConfig,
@@ -200,12 +211,6 @@ async function fixCi(
   log: string,
   deps: CiDeps,
 ): Promise<boolean> {
-  try {
-    await access(fix.worktree);
-  } catch {
-    deps.onLog?.(`CI: the worktree of ${fix.issueId} is gone, so the fixer cannot change PR #${fix.pr!.number}.`);
-    return false;
-  }
   const workspace = new Workspace(root);
   const record = await workspace.startSession('fixer');
   const session = new AgentSession(
@@ -225,6 +230,20 @@ async function fixCi(
   });
   let summary = '';
   let status: 'finished' | 'failed' = 'failed';
+  const unfinished = fix.attempts?.at(-1);
+  if (unfinished && !unfinished.outcome) {
+    unfinished.outcome = 'abandoned';
+    unfinished.reason = 'The fixer was stopped before it finished.';
+    unfinished.endedAt = new Date().toISOString();
+  }
+  const attempt: FixAttempt = {
+    n: (fix.attempts?.at(-1)?.n ?? 0) + 1,
+    kind: 'ci',
+    sessionId: session.sessionId,
+    startedAt: new Date().toISOString(),
+  };
+  fix.attempts = [...(fix.attempts ?? []), attempt];
+  await workspace.saveFix(fix);
   try {
     const outcome = await runtime.run(
       {
@@ -245,19 +264,31 @@ async function fixCi(
       session.emit,
     );
     summary = outcome.summary ?? '';
-    if (outcome.stop !== 'done') throw new Error(outcome.error ?? `Fixer stopped: ${outcome.stop}`);
+    attempt.costUsd = outcome.costUsd;
+    if (outcome.stop !== 'done') {
+      attempt.outcome = outcome.stop === 'timeout' ? 'timeout' : 'error';
+      throw new Error(outcome.error ?? `Fixer stopped: ${outcome.stop}`);
+    }
     if (!(await git(fix.worktree, 'status', '--porcelain'))) {
       summary = summary || 'The fixer made no change.';
+      attempt.outcome = 'no-change';
       session.emit({ kind: 'fix', summary: `No change for CI on PR #${fix.pr!.number}: ${summary.split('\n')[0]}` });
       status = 'finished';
       return false;
     }
     if (fixer.verify) {
-      await promisify(execFile)('/bin/sh', ['-c', fixer.verify], {
-        cwd: fix.worktree,
-        timeout: 300_000,
-        maxBuffer: 4 * 1024 * 1024,
-      });
+      try {
+        await promisify(execFile)('/bin/sh', ['-c', fixer.verify], {
+          cwd: fix.worktree,
+          timeout: 300_000,
+          maxBuffer: 4 * 1024 * 1024,
+        });
+      } catch (error) {
+        const output = error as Error & { stdout?: string; stderr?: string };
+        attempt.outcome = 'verify-failed';
+        attempt.verifyOutput = (`${output.stdout ?? ''}${output.stderr ?? ''}`.trim() || output.message).slice(-4000);
+        throw error;
+      }
     }
     await git(fix.worktree, 'add', '-A');
     const committed = await commitFix(fix.worktree, 'pass the CI checks', fixer.commitMessage);
@@ -265,13 +296,17 @@ async function fixCi(
     fix.commit = await git(fix.worktree, 'rev-parse', 'HEAD');
     await git(fix.worktree, 'push', 'origin', fix.branch);
     session.emit({ kind: 'fix', summary: `Pushed a CI fix to PR #${fix.pr!.number} (${fix.commit.slice(0, 7)})` });
+    attempt.outcome = 'proposed';
     status = 'finished';
     return true;
   } catch (error) {
     summary = String(error).slice(0, 500);
+    attempt.outcome ??= 'error';
     session.emit({ kind: 'error', summary: `CI fix failed on PR #${fix.pr!.number}: ${summary}` });
     return false;
   } finally {
+    attempt.reason = summary || undefined;
+    await closeAttempt(workspace, fix.id, attempt, fix.worktree, fix.repo);
     await workspace.endSession(session.sessionId, { status, summary });
     await session.idle();
   }

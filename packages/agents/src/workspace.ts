@@ -228,6 +228,19 @@ export class Workspace {
   saveFix(value: FixProposal): Promise<void> {
     return atomic(paths.fix(this.root, value.id), value);
   }
+  async readFixAttemptDiff(id: string, n: number): Promise<string | undefined> {
+    try {
+      return await readFile(paths.fixAttemptDiff(this.root, id, n), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+  async saveFixAttemptDiff(id: string, n: number, diff: string): Promise<void> {
+    const file = paths.fixAttemptDiff(this.root, id, n);
+    await mkdir(join(file, '..'), { recursive: true });
+    await writeFile(file, diff);
+  }
 
   readReview(pr: number): Promise<PrReview | undefined> {
     return readJson(paths.review(this.root, pr));

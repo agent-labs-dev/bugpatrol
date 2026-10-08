@@ -90,6 +90,7 @@ export const paths = {
   issue: (root: string, id: string) => data(root, 'issues', `${recordId(id)}.json`),
   fixes: (root: string) => data(root, 'fixes'),
   fix: (root: string, id: string) => data(root, 'fixes', `${recordId(id)}.json`),
+  fixAttemptDiff: (root: string, id: string, n: number) => data(root, 'fixes', recordId(id), `attempt-${n}.diff`),
   publish: (root: string) => data(root, 'publish'),
   review: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}.json`),
   /** What one review keeps besides its record: the claim routines and their replays. Nothing else reads it. */

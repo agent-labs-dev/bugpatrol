@@ -303,6 +303,8 @@ export type RetestShot = {
 export type Retest = {
   build?: 'main';
   attempt: number;
+  /** The fix attempt whose change this retest judged. */
+  fixAttempt?: number;
   outcome: RetestOutcome;
   reason: string;
   /** What the explorer saw when it captured the after screenshot. */
@@ -316,6 +318,49 @@ export type Retest = {
   at: string;
   costUsd?: number;
 };
+
+export type FixAttemptKind = 'first' | 'rerun' | 'refix' | 'ci';
+
+/** `abandoned`: the fixer was killed, and a later fixer found the attempt unfinished. */
+export type FixAttemptOutcome =
+  | 'proposed'
+  | 'no-change'
+  | 'declined'
+  | 'verify-failed'
+  | 'error'
+  | 'timeout'
+  | 'abandoned';
+
+/** One fixer session on one issue. Its full diff is in `paths.fixAttemptDiff`. */
+export type FixAttempt = {
+  /** 1-based, in order, unique within the fix record. */
+  n: number;
+  kind: FixAttemptKind;
+  /** Undefined while the fixer runs. */
+  outcome?: FixAttemptOutcome;
+  /** The fixer's summary, or why the attempt was rejected. */
+  reason?: string;
+  diffStat?: string;
+  /** The end of the verify command's output, when it failed. */
+  verifyOutput?: string;
+  costUsd?: number;
+  sessionId?: string;
+  startedAt: string;
+  endedAt?: string;
+};
+
+/**
+ * The attempts that count toward `agents.fixer.attempts`: every one before
+ * the PR. CI fix attempts have their own limit.
+ */
+export function fixerAttempts(attempts: FixAttempt[] = []): FixAttempt[] {
+  return attempts.filter((attempt) => attempt.kind !== 'ci');
+}
+
+/** The attempts that count toward `agents.github.ci.attempts`. */
+export function ciAttempts(attempts: FixAttempt[] = []): FixAttempt[] {
+  return attempts.filter((attempt) => attempt.kind === 'ci');
+}
 
 export type FixProposal = {
   version: 1;
@@ -340,6 +385,8 @@ export type FixProposal = {
   endedAt?: string;
   costUsd?: number;
   retests?: Retest[];
+  /** Every fix attempt, oldest first. The fields above describe the current proposal. */
+  attempts?: FixAttempt[];
   pr?: {
     number: number;
     url: string;
@@ -355,7 +402,6 @@ export type FixProposal = {
     /** The commit that the checks ran on. */
     head?: string;
     failing?: string[];
-    attempts: number;
     checkedAt: string;
   };
 };

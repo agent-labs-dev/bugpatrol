@@ -202,6 +202,221 @@ describe('fixer', () => {
   });
 });
 
+describe('fix attempts', () => {
+  /** A verify command that passes only once app.txt says "fixed", like a type check. */
+  function strict(f: Awaited<ReturnType<typeof repoFixture>>, attempts?: number) {
+    const config = parseConfig({
+      ...f.config,
+      agents: {
+        ...f.config.agents,
+        fixer: {
+          ...f.config.agents.fixer,
+          verify: 'grep -q "^fixed$" app.txt || { echo "error TS2304: Cannot find name fixd." >&2; exit 2; }',
+          ...(attempts ? { attempts } : {}),
+        },
+      },
+    });
+    return new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer');
+  }
+
+  it('records a failed verify as an attempt with its diff and output', async () => {
+    const f = await repoFixture();
+    try {
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixd\n');
+          return { stop: 'done', steps: 1, costUsd: 0.5, summary: 'Fixed' };
+        },
+      };
+      const [proposal] = await runFixer(strict(f), runtime);
+      expect(proposal?.status).toBe('failed');
+      const fix = (await f.workspace.readFix('fix_iss_1'))!;
+      expect(fix.attempts).toMatchObject([
+        {
+          n: 1,
+          kind: 'first',
+          outcome: 'verify-failed',
+          verifyOutput: expect.stringContaining('error TS2304'),
+          diffStat: expect.stringContaining('app.txt'),
+          costUsd: 0.5,
+        },
+      ]);
+      const diff = await readFile(paths.fixAttemptDiff(f.root, 'fix_iss_1', 1), 'utf8');
+      expect(diff).toContain('-broken');
+      expect(diff).toContain('+fixd');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('reruns after a failed verify on the kept change, with the verify output', async () => {
+    const f = await repoFixture();
+    try {
+      const prompts: string[] = [];
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          prompts.push(task.prompt);
+          const now = await readFile(join(task.workdir!, 'app.txt'), 'utf8');
+          await writeFile(
+            join(task.workdir!, 'app.txt'),
+            prompts.length === 1 ? 'fixd\n' : now.replace('fixd', 'fixed'),
+          );
+          return { stop: 'done', steps: 1, costUsd: 0, summary: `Attempt ${prompts.length}` };
+        },
+      };
+      const session = strict(f);
+      expect((await runFixer(session, runtime))[0]?.status).toBe('failed');
+      const [proposal] = await runFixer(session, runtime);
+      expect(proposal?.status).toBe('retesting');
+      expect(prompts[0]).not.toContain('Earlier fix attempts');
+      expect(prompts[1]).toContain('Earlier fix attempts on this issue:\n1. first, verify-failed');
+      expect(prompts[1]).toContain('app.txt | 2');
+      expect(prompts[1]).toContain('error TS2304: Cannot find name fixd.');
+      expect(prompts[1]).toContain('Your last change is still in the worktree');
+      expect(proposal?.attempts?.map((item) => [item.n, item.kind, item.outcome])).toEqual([
+        [1, 'first', 'verify-failed'],
+        [2, 'rerun', 'proposed'],
+      ]);
+      expect(await f.workspace.readFixAttemptDiff('fix_iss_1', 2)).toContain('+fixed');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('saves the change of a killed fixer, then reruns from a clean worktree with that change in the prompt', async () => {
+    const f = await repoFixture();
+    try {
+      const prompts: string[] = [];
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          prompts.push(task.prompt);
+          if (prompts.length === 1) {
+            await writeFile(join(task.workdir!, 'app.txt'), 'half done\n');
+            return { stop: 'timeout', steps: 9, costUsd: 0 };
+          }
+          expect(await readFile(join(task.workdir!, 'app.txt'), 'utf8')).toBe('broken\n');
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixed\n');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'Fixed' };
+        },
+      };
+      const [first] = await runFixer(f.session, runtime);
+      expect(first?.attempts?.[0]).toMatchObject({ kind: 'first', outcome: 'timeout' });
+      // A killed fixer leaves its attempt open and its fix running.
+      const killed = (await f.workspace.readFix('fix_iss_1'))!;
+      await f.workspace.saveFix({
+        ...killed,
+        status: 'running',
+        startedAt: new Date(0).toISOString(),
+        attempts: [...killed.attempts!, { n: 2, kind: 'rerun', startedAt: new Date(0).toISOString() }],
+      });
+      await writeFile(join(killed.worktree, 'app.txt'), 'killed midway\n');
+      const [proposal] = await runFixer(f.session, runtime);
+      expect(proposal?.status).toBe('retesting');
+      expect(proposal?.attempts?.map((item) => [item.n, item.kind, item.outcome])).toEqual([
+        [1, 'first', 'timeout'],
+        [2, 'rerun', 'abandoned'],
+        [3, 'rerun', 'proposed'],
+      ]);
+      expect(await f.workspace.readFixAttemptDiff('fix_iss_1', 1)).toContain('+half done');
+      expect(await f.workspace.readFixAttemptDiff('fix_iss_1', 2)).toContain('+killed midway');
+      expect(prompts[1]).toContain('2. rerun, abandoned');
+      expect(prompts[1]).toContain('The worktree starts clean.');
+      expect(prompts[1]).toContain('+killed midway');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('hands a long last change to the rerun as a file that stays out of the fix', async () => {
+    const f = await repoFixture();
+    try {
+      const long = `${'x'.repeat(30_000)}\n`;
+      let runs = 0;
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          if (++runs === 1) {
+            await writeFile(join(task.workdir!, 'app.txt'), long);
+            return { stop: 'error', steps: 1, costUsd: 0, error: 'crashed' };
+          }
+          expect(task.prompt).toContain('.bugpatrol-last-attempt.diff');
+          expect(task.prompt).not.toContain('xxxxxxxxxx');
+          expect(await readFile(join(task.workdir!, '.bugpatrol-last-attempt.diff'), 'utf8')).toContain(long.trim());
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixed\n');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'Fixed' };
+        },
+      };
+      expect((await runFixer(f.session, runtime))[0]?.attempts?.[0]?.outcome).toBe('error');
+      const [proposal] = await runFixer(f.session, runtime);
+      expect(runs).toBe(2);
+      expect(proposal?.status).toBe('retesting');
+      expect(proposal?.diffStat).not.toContain('.bugpatrol-last-attempt.diff');
+      expect((await git(proposal!.worktree, 'show', '--stat', 'HEAD')).stdout).not.toContain('last-attempt');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('counts a fix record from before attempts were kept as having none', async () => {
+    const f = await repoFixture();
+    try {
+      await f.workspace.saveFix({
+        version: 1,
+        id: 'fix_iss_1',
+        issueId: 'iss_1',
+        status: 'failed',
+        runtime: 'cli:fake',
+        repo: f.source,
+        branch: 'bugpatrol/fix-iss_1',
+        worktree: join(paths.worktrees(f.root), 'iss_1'),
+        startedAt: new Date(0).toISOString(),
+        error: 'old failure',
+      });
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          expect(task.prompt).not.toContain('Earlier fix attempts');
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixed\n');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'Fixed' };
+        },
+      };
+      const [proposal] = await runFixer(strict(f, 1), runtime);
+      expect(proposal?.status).toBe('retesting');
+      expect(proposal?.attempts).toMatchObject([{ n: 1, outcome: 'proposed' }]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up on an issue after the configured attempts unless the issue is named', async () => {
+    const f = await repoFixture();
+    try {
+      let runs = 0;
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run() {
+          runs++;
+          return { stop: 'error', steps: 1, costUsd: 0, error: 'crashed' };
+        },
+      };
+      const session = strict(f, 2);
+      await runFixer(session, runtime);
+      const [second] = await runFixer(session, runtime);
+      expect(second?.error).toMatch(/^Gave up after 2 fix attempts\. The last one: .*crashed/);
+      expect(await runFixer(session, runtime)).toEqual([]);
+      expect(runs).toBe(2);
+      const [named] = await runFixer(session, runtime, { issueIds: ['iss_1'] });
+      expect(runs).toBe(3);
+      expect(named?.attempts).toHaveLength(3);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('fix cycle', () => {
   it('rechecks a merged fix on the main checkout and closes the issue', async () => {
     const f = await repoFixture();
@@ -350,7 +565,11 @@ describe('fix cycle', () => {
       });
       expect(fixes).toBe(2);
       expect(fix?.status).toBe('verified');
-      expect(fix?.retests?.map((item) => item.outcome)).toEqual(['not-fixed', 'fixed']);
+      expect(fix?.retests?.map((item) => [item.outcome, item.fixAttempt])).toEqual([
+        ['not-fixed', 1],
+        ['fixed', 2],
+      ]);
+      expect(fix?.attempts?.map((item) => item.kind)).toEqual(['first', 'refix']);
       expect(fix?.diff).toContain('+fix 2');
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -404,6 +623,39 @@ describe('fix cycle', () => {
       });
       expect(fixes).toBe(2);
       expect(fix?.retests).toHaveLength(2);
+      expect(fix?.status).toBe('proposed');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('ends with the change proposed when a not-fixed verdict finds no fix attempts left', async () => {
+    const f = await repoFixture();
+    try {
+      const config = parseConfig({
+        ...f.config,
+        agents: { ...f.config.agents, fixer: { ...f.config.agents.fixer, attempts: 1 } },
+      });
+      let fixes = 0;
+      const [fix] = await runFixCycle(f.root, config, {
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'fixer') await writeFile(join(task.workdir!, 'app.txt'), `fix ${++fixes}\n`);
+            if (task.role === 'explorer')
+              await task.tools
+                .find((tool) => tool.name === 'capture_after')!
+                .run({ target: 1, note: 'Still broken', reached: true });
+            if (task.role === 'judge')
+              await task.tools
+                .find((tool) => tool.name === 'verdict')!
+                .run({ outcome: 'not-fixed', reason: 'Still broken.' });
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      expect(fixes).toBe(1);
       expect(fix?.status).toBe('proposed');
     } finally {
       await rm(f.root, { recursive: true, force: true });

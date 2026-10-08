@@ -1,13 +1,22 @@
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { type FixProposal, fitLesson, type Issue, judgedRetests, paths, type RoutineStep } from '@bugpatrol/core';
+import {
+  type FixAttempt,
+  type FixProposal,
+  fitLesson,
+  fixerAttempts,
+  type Issue,
+  judgedRetests,
+  paths,
+  type RoutineStep,
+} from '@bugpatrol/core';
 import { fixerSystem } from '../prompts.js';
 import type { AgentSession } from '../session.js';
 import { lessonTools } from '../tools/memory.js';
 import type { RoleOutcome, Runtime, Tool } from '../types.js';
-import { lessonsFor } from '../workspace.js';
+import { lessonsFor, type Workspace } from '../workspace.js';
 
 const exec = promisify(execFile);
 const ranks = {
@@ -188,6 +197,43 @@ export async function linkEnvFiles(source: string, worktree: string): Promise<st
 }
 
 /**
+ * How a fix attempt finds the worktree: holding the last change that failed
+ * verify, clean at the base, or holding the proposed change it builds on.
+ */
+type WorktreeStart = 'repair' | 'clean' | 'continue';
+
+/** The worktree's whole change against the commit that the fix branch started from. */
+async function change(worktree: string, source: string): Promise<{ diffStat: string; diff: string }> {
+  await git(worktree, 'add', '-A');
+  const base = await git(worktree, 'merge-base', 'HEAD', await git(source, 'rev-parse', 'HEAD'));
+  return {
+    diffStat: await git(worktree, 'diff', '--cached', '--stat', base),
+    diff: await git(worktree, 'diff', '--cached', base),
+  };
+}
+
+/** Ends an attempt, and keeps the change it left in the worktree. */
+export async function closeAttempt(
+  workspace: Workspace,
+  fixId: string,
+  attempt: FixAttempt,
+  worktree: string,
+  source: string,
+): Promise<void> {
+  attempt.endedAt = new Date().toISOString();
+  try {
+    // A killed fixer can leave the handed-over diff behind; it is no part of the change.
+    await rm(join(worktree, LAST_DIFF), { force: true });
+    const { diffStat, diff } = await change(worktree, source);
+    attempt.diffStat = diffStat || undefined;
+    if (diff) await workspace.saveFixAttemptDiff(fixId, attempt.n, `${diff}\n`);
+  } catch (error) {
+    // A broken worktree leaves the attempt without a diff, not the fix without a record.
+    attempt.reason = `${attempt.reason ? `${attempt.reason} ` : ''}(The change could not be read: ${String(error).slice(0, 200)})`;
+  }
+}
+
+/**
  * Reads the issue again before the write. A fix takes minutes, and a human
  * may close the issue meanwhile; a human decision is never overwritten.
  */
@@ -230,6 +276,11 @@ export async function runFixer(
       (issue.fixRejected || fixes.some((fix) => fix.issueId === issue.id && fix.status === 'rejected'))
     )
       return false;
+    if (
+      !opts.issueIds &&
+      fixerAttempts(fixes.find((fix) => fix.issueId === issue.id)?.attempts).length >= config.attempts
+    )
+      return false;
     const pending = ['new', 'filed'].includes(issue.status) || failed.has(issue.id) || retry.has(issue.id);
     return (
       pending &&
@@ -254,6 +305,7 @@ export async function runFixer(
     // A stop request ends the queue between fixes, never inside one.
     if (session.cancelled) break;
     const oldFix = fixes.find((fix) => fix.issueId === issue.id);
+    const fixId = `fix_${issue.id}`;
     const baseBranch = `bugpatrol/fix-${issue.id}`;
     let branch = baseBranch;
     if (
@@ -273,7 +325,25 @@ export async function runFixer(
     } catch {
       await git(source, 'worktree', 'add', '-b', branch, worktree, 'HEAD');
     }
-    if (existing && failed.has(issue.id)) {
+    const earlier = (oldFix?.attempts ?? []).map((item) => ({ ...item }));
+    const unfinished = earlier.at(-1);
+    if (unfinished && !unfinished.outcome) {
+      unfinished.outcome = 'abandoned';
+      unfinished.reason = 'The fixer was stopped before it finished.';
+      if (existing) await closeAttempt(session.workspace, fixId, unfinished, worktree, source);
+      else unfinished.endedAt = new Date().toISOString();
+    }
+    // A change that failed only the verify command is usually close: the
+    // next attempt repairs it. Any other failure may have left a half-written
+    // worktree, so the next attempt starts clean.
+    const start: WorktreeStart = !existing
+      ? 'clean'
+      : !failed.has(issue.id)
+        ? 'continue'
+        : earlier.at(-1)?.outcome === 'verify-failed'
+          ? 'repair'
+          : 'clean';
+    if (existing && start === 'clean') {
       const base = await git(worktree, 'merge-base', 'HEAD', await git(source, 'rev-parse', 'HEAD'));
       await git(worktree, 'reset', '--hard', base);
       await git(worktree, 'clean', '-fd');
@@ -297,10 +367,16 @@ export async function runFixer(
       }
     }
     const previous = retry.get(issue.id);
+    const attempt: FixAttempt = {
+      n: (earlier.at(-1)?.n ?? 0) + 1,
+      kind: previous ? 'refix' : earlier.length || failed.has(issue.id) ? 'rerun' : 'first',
+      sessionId: session.sessionId,
+      startedAt: new Date().toISOString(),
+    };
     const proposal: FixProposal = {
       ...previous,
       version: 1,
-      id: `fix_${issue.id}`,
+      id: fixId,
       issueId: issue.id,
       status: 'running',
       runtime: runtime.label,
@@ -311,39 +387,38 @@ export async function runFixer(
       ...(oldFix?.worktreeRemovedAt ? { pr: undefined, commit: undefined } : {}),
       startedAt: previous?.startedAt ?? new Date().toISOString(),
       error: undefined,
+      attempts: [...earlier, attempt],
     };
     await session.workspace.saveFix(proposal);
     await session.workspace.saveIssue({ ...issue, status: 'fixing' });
     session.emit({ kind: 'fix', summary: `Fixing ${issue.title}` });
     try {
-      const outcome = await runOne(session, runtime, issue, worktree, previous?.retests?.at(-1));
+      const outcome = await runOne(session, runtime, issue, worktree, previous?.retests?.at(-1), { earlier, start });
+      attempt.costUsd = outcome.costUsd;
       if (outcome.stop !== 'done') {
+        attempt.outcome = outcome.stop === 'timeout' ? 'timeout' : 'error';
         throw new Error(outcome.error ?? `Fixer stopped: ${outcome.stop}`);
       }
       proposal.costUsd = (previous?.costUsd ?? 0) + outcome.costUsd;
       proposal.summary = outcome.summary;
+      attempt.reason = outcome.summary;
       await git(worktree, 'add', '-A');
       const newDiff = await git(worktree, 'diff', '--cached');
-      const sourceHead = await git(source, 'rev-parse', 'HEAD');
-      const base = await git(worktree, 'merge-base', 'HEAD', sourceHead);
-      proposal.diffStat = await git(worktree, 'diff', '--cached', '--stat', base);
-      proposal.diff = Buffer.from(await git(worktree, 'diff', '--cached', base))
+      Object.assign(proposal, await change(worktree, source));
+      proposal.diff = Buffer.from(proposal.diff ?? '')
         .subarray(0, 200_000)
         .toString('utf8');
       if (!newDiff && previous) {
         // A refix that changes nothing keeps the earlier change: it is still
         // the proposal, and the retest verdict tells the team it did not work.
+        attempt.outcome = 'no-change';
         proposal.status = 'proposed';
-        proposal.endedAt = new Date().toISOString();
-        await session.workspace.saveFix(proposal);
         await updateIssue(session, issue.id, { status: 'fix-proposed', fixId: proposal.id });
-        proposals.push(proposal);
-        continue;
-      }
-      if (!newDiff) {
+      } else if (!newDiff) {
         // No change plus an explanation is a finding too: the fixer read the
         // code and says the report is wrong or the behaviour is intended.
         proposal.status = outcome.summary ? 'declined' : 'failed';
+        attempt.outcome = outcome.summary ? 'declined' : 'no-change';
         if (proposal.status === 'declined')
           await session.workspace.upsertLessons([
             {
@@ -355,65 +430,72 @@ export async function runFixer(
           ]);
         if (!outcome.summary) proposal.error = 'The fixer made no change and gave no reason.';
         await updateIssue(session, issue.id, { status: issue.status });
-        proposal.endedAt = new Date().toISOString();
-        await session.workspace.saveFix(proposal);
-        proposals.push(proposal);
-        continue;
-      }
-      if (config.verify) {
-        try {
-          await exec('/bin/sh', ['-c', config.verify], {
-            cwd: worktree,
-            timeout: 300_000,
-            maxBuffer: 4 * 1024 * 1024,
-          });
-        } catch (error) {
-          const output = error as Error & { stdout?: string; stderr?: string };
-          const last = (output.stderr || output.stdout || output.message).trim().split('\n').at(-1) ?? 'unknown error';
+      } else {
+        if (config.verify) {
+          try {
+            await exec('/bin/sh', ['-c', config.verify], {
+              cwd: worktree,
+              timeout: 300_000,
+              maxBuffer: 4 * 1024 * 1024,
+            });
+          } catch (error) {
+            const output = error as Error & { stdout?: string; stderr?: string };
+            const text = `${output.stdout ?? ''}${output.stderr ?? ''}`.trim() || output.message;
+            const last = text.split('\n').at(-1) ?? 'unknown error';
+            await session.workspace.upsertLessons([
+              {
+                role: 'fixer',
+                source: 'verify',
+                text: fitLesson(`The verify command failed with: ${last}. Run it before you finish.`),
+              },
+            ]);
+            attempt.outcome = 'verify-failed';
+            attempt.reason = `The verify command failed: ${last}`.slice(0, 500);
+            attempt.verifyOutput = text.slice(-4000);
+            throw new Error(`Verification failed: ${attempt.verifyOutput}`, {
+              cause: error,
+            });
+          }
+        }
+        attempt.outcome = 'proposed';
+        proposal.checks = config.verify;
+        proposal.status = 'proposed';
+        const committed = await commitFix(worktree, issue.title, config.commitMessage);
+        if (!committed.ok) {
           await session.workspace.upsertLessons([
             {
               role: 'fixer',
-              source: 'verify',
-              text: fitLesson(`The verify command failed with: ${last}. Run it before you finish.`),
+              source: 'commit-hook',
+              text: fitLesson(`The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`),
             },
           ]);
-          throw new Error(`Verification failed: ${(output.stderr || output.stdout || output.message).slice(-4000)}`, {
-            cause: error,
-          });
+          // The diff is the proposal; a commit is only a convenience. A repo's
+          // commit hook (scope rules, lint) must never throw a good fix away,
+          // and Bugpatrol never bypasses a hook with --no-verify.
+          proposal.error = `Left uncommitted in the worktree: ${committed.reason}`;
+        } else {
+          proposal.commit = await git(worktree, 'rev-parse', 'HEAD');
         }
+        if (
+          committed.ok &&
+          config.retest.enabled &&
+          session.config.agents.explorer.enabled &&
+          session.config.agents.judge.enabled &&
+          (issue.evidence.routineId || issue.evidence.steps?.length || issue.candidateIds.length)
+        )
+          proposal.status = 'retesting';
+        await updateIssue(session, issue.id, { status: 'fix-proposed', fixId: proposal.id });
       }
-      proposal.checks = config.verify;
-      proposal.status = 'proposed';
-      const committed = await commitFix(worktree, issue.title, config.commitMessage);
-      if (!committed.ok) {
-        await session.workspace.upsertLessons([
-          {
-            role: 'fixer',
-            source: 'commit-hook',
-            text: fitLesson(`The commit hook rejected a commit: ${committed.reason}. Make the change pass it.`),
-          },
-        ]);
-        // The diff is the proposal; a commit is only a convenience. A repo's
-        // commit hook (scope rules, lint) must never throw a good fix away,
-        // and Bugpatrol never bypasses a hook with --no-verify.
-        proposal.error = `Left uncommitted in the worktree: ${committed.reason}`;
-      } else {
-        proposal.commit = await git(worktree, 'rev-parse', 'HEAD');
-      }
-      if (
-        committed.ok &&
-        config.retest.enabled &&
-        session.config.agents.explorer.enabled &&
-        session.config.agents.judge.enabled &&
-        (issue.evidence.routineId || issue.evidence.steps?.length || issue.candidateIds.length)
-      )
-        proposal.status = 'retesting';
-      await updateIssue(session, issue.id, { status: 'fix-proposed', fixId: proposal.id });
     } catch (error) {
       proposal.status = 'failed';
       proposal.error = String(error);
+      attempt.outcome ??= 'error';
+      attempt.reason ??= String(error).slice(0, 500);
       await updateIssue(session, issue.id, { status: issue.status });
     }
+    await closeAttempt(session.workspace, proposal.id, attempt, worktree, source);
+    if (proposal.status === 'failed' && fixerAttempts(proposal.attempts).length >= config.attempts)
+      proposal.error = `Gave up after ${config.attempts} fix attempts. The last one: ${proposal.error}`;
     proposal.endedAt = new Date().toISOString();
     await session.workspace.saveFix(proposal);
     proposals.push(proposal);
@@ -431,7 +513,8 @@ async function runOne(
   runtime: Runtime,
   issue: Issue,
   worktree: string,
-  last?: NonNullable<FixProposal['retests']>[number],
+  last: NonNullable<FixProposal['retests']>[number] | undefined,
+  history: { earlier: FixAttempt[]; start: WorktreeStart },
 ): Promise<RoleOutcome> {
   const config = session.config.agents.fixer;
   const evidencePaths = Object.entries(issue.evidence)
@@ -450,32 +533,85 @@ async function runOne(
     : last?.after
       ? resolve(session.root, last.after)
       : '(unavailable)';
-  return runtime.run(
-    {
-      role: 'fixer',
-      sessionId: session.sessionId,
-      workdir: worktree,
-      system: fixerSystem(lessonsFor(await session.workspace.readMemory(), 'fixer')),
-      prompt:
-        `Issue: ${issue.title}\nSeverity: ${issue.severity}\n${issue.body}\nEvidence:\n${evidence}\n` +
-        `Reproduction: ${repro}` +
-        (last
-          ? `\nYour last change did not fix the issue in the running app. The QA lead said: ${last.reason}. After screenshots:\n${after}\n` +
-            'First find why your last change had no effect in the running app, for example a different file that the app ' +
-            'loads on this platform. Do not trust a guess from the QA lead: check the code. When you find the cause, call ' +
-            'save_lesson with it, so that later fixes avoid it. Then fix the issue.'
-          : ''),
-      tools: [
-        ...(runtime.label.startsWith('cli:') ? [] : modelTools(worktree)),
-        ...lessonTools(session, 'fixer'),
-        finishTool(),
-      ],
-      maxSteps: config.maxSteps,
-      budgetUsd: config.budgetUsd,
-      timeoutMs: config.timeoutMs,
-    },
-    session.emit,
-  );
+  const earlierAttempts = await attemptsPrompt(session, `fix_${issue.id}`, worktree, history);
+  try {
+    return await runtime.run(
+      {
+        role: 'fixer',
+        sessionId: session.sessionId,
+        workdir: worktree,
+        system: fixerSystem(lessonsFor(await session.workspace.readMemory(), 'fixer')),
+        prompt:
+          `Issue: ${issue.title}\nSeverity: ${issue.severity}\n${issue.body}\nEvidence:\n${evidence}\n` +
+          `Reproduction: ${repro}` +
+          earlierAttempts +
+          (last
+            ? `\nYour last change did not fix the issue in the running app. The QA lead said: ${last.reason}. After screenshots:\n${after}\n` +
+              'First find why your last change had no effect in the running app, for example a different file that the app ' +
+              'loads on this platform. Do not trust a guess from the QA lead: check the code. When you find the cause, call ' +
+              'save_lesson with it, so that later fixes avoid it. Then fix the issue.'
+            : ''),
+        tools: [
+          ...(runtime.label.startsWith('cli:') ? [] : modelTools(worktree)),
+          ...lessonTools(session, 'fixer'),
+          finishTool(),
+        ],
+        maxSteps: config.maxSteps,
+        budgetUsd: config.budgetUsd,
+        timeoutMs: config.timeoutMs,
+      },
+      session.emit,
+    );
+  } finally {
+    await rm(join(worktree, LAST_DIFF), { force: true });
+  }
+}
+
+/** Where a last diff too long for the prompt waits for the fixer; removed before the change is staged. */
+const LAST_DIFF = '.bugpatrol-last-attempt.diff';
+
+/**
+ * What the earlier attempts on this issue did, so that a rerun builds on
+ * them: one line each, then the failure of the last one, and its change
+ * unless the worktree still holds it.
+ */
+async function attemptsPrompt(
+  session: AgentSession,
+  fixId: string,
+  worktree: string,
+  { earlier, start }: { earlier: FixAttempt[]; start: WorktreeStart },
+): Promise<string> {
+  const last = earlier.at(-1);
+  if (!last) return '';
+  const lines = earlier.map((attempt) => {
+    const reason = attempt.reason?.split('\n')[0]?.slice(0, 200);
+    const files = attempt.diffStat
+      ?.split('\n')
+      .slice(0, -1)
+      .map((line) => line.trim())
+      .join(', ')
+      .slice(0, 300);
+    return `${attempt.n}. ${attempt.kind}, ${attempt.outcome ?? 'unfinished'}${reason ? `: ${reason}` : ''}${files ? ` (${files})` : ''}`;
+  });
+  const parts = [`\n\nEarlier fix attempts on this issue:\n${lines.join('\n')}`];
+  if (last.verifyOutput)
+    parts.push(
+      `The last attempt failed the verify command \`${session.config.agents.fixer.verify ?? ''}\` with:\n${last.verifyOutput}`,
+    );
+  if (start === 'repair')
+    parts.push('Your last change is still in the worktree. Repair that change. Do not start over.');
+  else if (start === 'clean') {
+    const diff = await session.workspace.readFixAttemptDiff(fixId, last.n);
+    if (diff && diff.length <= 20_000)
+      parts.push(`The worktree starts clean. The last attempt's change was:\n\`\`\`diff\n${diff}\`\`\``);
+    else if (diff) {
+      await writeFile(join(worktree, LAST_DIFF), diff);
+      parts.push(
+        `The worktree starts clean. The last attempt's change is in ${LAST_DIFF}; that file goes away after you finish.`,
+      );
+    }
+  }
+  return `${parts.join('\n\n')}\n`;
 }
 
 export function stepWords(step: RoutineStep): string {

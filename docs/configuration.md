@@ -44,6 +44,7 @@ agents:
     minSeverity: minor          # fix issues at this severity or worse
     maxPerCycle: 2              # at most this many new fixes in one cycle
     verify: pnpm test           # optional: a failed command marks the fix failed
+    attempts: 3                 # fix attempts on one issue before the fixer gives up; CI fixes not counted
     commitMessage: 'fix: {title}'
     retest:
       enabled: true
