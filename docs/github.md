@@ -171,6 +171,29 @@ What you must know before you run it:
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 
+### The claim check
+
+```bash
+npx bugpatrol review 123 --claims       # list the claims for this run only
+```
+
+The claim check asks a second question: does the pull request do what it says? Turn it on with `agents.review.claims: true`, or with `--claims` for one run. It is off by default, and with it off `review` works as described above.
+
+Bugpatrol lists the claims at the top of the review, before the problems that the pull request introduces. Each claim names its source: the claims section, the title, the description, a commit, or an issue that the pull request closes. Bugpatrol does not test the claims yet, so each one shows as `untested`.
+
+To choose the claims yourself, add a `Claims` heading to the pull request description with a list under it:
+
+```markdown
+## Claims
+
+- The page goes dark when the dark mode switch changes.
+- `GET /projects/:id` returns 404 for a missing project.
+```
+
+Bugpatrol uses each list item as written. Without that section, the judge writes the claims from the title, the description, the commits, the issues that the pull request closes, and the diff. A claim with nothing to see, such as "clean up the code", goes in a folded list with the reason, and Bugpatrol does not test it.
+
+The judge session that writes the claims uses `agents.review.maxSteps`, `agents.review.budgetUsd`, and `agents.review.timeoutMs`. The review record in `.bugpatrol/runs/reviews/pr-<number>.json` keeps the claims next to the findings, and `--dry-run` writes them to the local review file. When the last review of the same commit ran without the claim check, `--claims` tests the commit again.
+
 ## Troubleshooting
 
 | Message | Action |

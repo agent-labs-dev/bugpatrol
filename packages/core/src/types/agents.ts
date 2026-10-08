@@ -314,6 +314,48 @@ export type ReviewFinding = {
   baseNote?: string;
 };
 
+/**
+ * Where a claim comes from. `section` is a claims section that the author
+ * wrote in the pull request body; Bugpatrol takes it as written. The others
+ * are the places the judge reads when it writes the claims itself.
+ */
+export type ClaimSource =
+  | { kind: 'section' }
+  | { kind: 'title' }
+  | { kind: 'body' }
+  | { kind: 'commit'; commit: string }
+  | { kind: 'issue'; number: number };
+
+/** One thing that a pull request says it does. */
+export type Claim = {
+  /** `claim-<n>`, in the order of the list. */
+  id: string;
+  text: string;
+  /** The platform that a test of the claim needs. */
+  platform: Platform;
+  source: ClaimSource;
+  testable: boolean;
+  /** Why the claim cannot be tested ("clean up the code"). Set when `testable` is false. */
+  untestable?: string;
+};
+
+export type ClaimVerdict = 'proven' | 'not-proven' | 'partly-proven' | 'untested';
+
+/**
+ * What a verdict rests on. Only `replay` and `assertion` are deterministic,
+ * so only they may ever fail a check (ADR 0001).
+ */
+export type ClaimEvidence = 'replay' | 'assertion' | 'explored' | 'bench';
+
+/** One claim of a pull request, with the verdict of the claim check. */
+export type ClaimFinding = {
+  claim: Claim;
+  verdict: ClaimVerdict;
+  /** Absent when nothing tested the claim. */
+  evidence?: ClaimEvidence;
+  reason: string;
+};
+
 /** `reviews/pr-<number>.json`: the last review of one pull request. */
 export type PrReview = {
   version: 1;
@@ -325,9 +367,11 @@ export type PrReview = {
   status: 'running' | 'finished' | 'failed';
   startedAt: string;
   endedAt?: string;
-  sessions: { explorer?: string; base?: string; judge?: string };
+  sessions: { explorer?: string; base?: string; judge?: string; claims?: string };
   /** The explorer's own account of what it tested. */
   tested?: string;
+  /** The claim check. Absent when the claim check was off. */
+  claims?: ClaimFinding[];
   findings: ReviewFinding[];
   /** The review on GitHub. */
   posted?: { url: string; at: string };

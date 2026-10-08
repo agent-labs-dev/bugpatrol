@@ -81,8 +81,8 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
       flags.dryRun = true;
       continue;
     }
-    if (command === 'review' && (flag === '--force' || flag === '--allow-fork')) {
-      flags[flag === '--force' ? 'force' : 'allowFork'] = true;
+    if (command === 'review' && (flag === '--force' || flag === '--allow-fork' || flag === '--claims')) {
+      flags[{ '--force': 'force', '--allow-fork': 'allowFork', '--claims': 'claims' }[flag]] = true;
       continue;
     }
     if (!values[command]!.includes(flag)) {
@@ -243,10 +243,13 @@ export async function runAgentCommand(
         force: Boolean(flags.force),
         allowFork: Boolean(flags.allowFork),
         maxSteps: flags.steps as number | undefined,
+        // Without the flag, agents.review.claims decides.
+        claims: flags.claims ? true : undefined,
       });
       const count = (verdict: string) => review.findings.filter((finding) => finding.verdict === verdict).length;
+      const claims = review.claims ? `${review.claims.length} claim(s), ` : '';
       log(
-        `PR #${review.pr.number}: ${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
+        `PR #${review.pr.number}: ${claims}${count('introduced')} introduced, ${count('pre-existing')} already on ${review.baseRef}, ` +
           `${count('unclear')} not compared, ${count('not-a-bug')} not a bug.`,
       );
     } finally {

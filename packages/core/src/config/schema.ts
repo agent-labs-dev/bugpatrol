@@ -427,6 +427,21 @@ export const agentsSchema = z
           .default({}),
       })
       .default({}),
+    /** `bugpatrol review <pr>`. */
+    review: z
+      .object({
+        /** The claim check: test what the pull request says it does. Off until a team opts in. */
+        claims: z.boolean().default(false),
+        /** Limits for the claim check of one review, across its sessions. */
+        maxSteps: z.number().int().positive().default(60),
+        budgetUsd: z.number().nonnegative().optional(),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .default(20 * 60 * 1000),
+      })
+      .default({}),
     patrol: z
       .object({
         intervalMinutes: z.number().positive().default(30),

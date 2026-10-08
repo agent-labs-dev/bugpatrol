@@ -1,4 +1,4 @@
-import type { PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
+import type { ClaimFinding, ClaimSource, PrReview, ReviewFinding, ReviewVerdict } from '@bugpatrol/core';
 
 /** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
 export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
@@ -47,6 +47,37 @@ export function numberDiff(diff: string): { text: string; lines: Map<string, Set
     text.push(raw);
   }
   return { text: text.join('\n'), lines };
+}
+
+function sourceWords(source: ClaimSource): string {
+  switch (source.kind) {
+    case 'section':
+      return 'the claims section';
+    case 'title':
+      return 'the title';
+    case 'body':
+      return 'the description';
+    case 'commit':
+      return `commit \`${short(source.commit)}\``;
+    case 'issue':
+      return `issue #${source.number}`;
+  }
+}
+
+/** The claims come first: they are what the author says the pull request does. */
+function claimLines(claims: ClaimFinding[] | undefined): string[] {
+  if (!claims) return [];
+  const item = (finding: ClaimFinding) =>
+    `- **${finding.claim.text}** \`${finding.verdict}\`<br><sub>From ${sourceWords(finding.claim.source)}. ${finding.reason}</sub>`;
+  const testable = claims.filter((finding) => finding.claim.testable);
+  const untestable = claims.filter((finding) => !finding.claim.testable);
+  return [
+    `#### What this pull request says it does (${claims.length})`,
+    ...(claims.length ? [] : ['Bugpatrol found no claim in the pull request.']),
+    ...(testable.length ? [testable.map(item).join('\n')] : []),
+    ...details(`Claims that Bugpatrol cannot test (${untestable.length})`, untestable.map(item)),
+    '#### Problems that this pull request introduces',
+  ];
 }
 
 export type RenderedReview = {
@@ -106,6 +137,7 @@ export function renderReview(
   const body = [
     REVIEW_MARKER,
     '### Bugpatrol review',
+    ...claimLines(review.claims),
     introduced.length
       ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
       : '**No problem found that this pull request introduces.**',

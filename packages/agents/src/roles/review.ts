@@ -5,9 +5,12 @@ import { promisify } from 'node:util';
 import {
   type BugpatrolConfig,
   type Candidate,
+  type Claim,
+  type ClaimFinding,
   ConfigError,
   InfrastructureError,
   instructionsPath,
+  type Platform,
   type PrReview,
   paths,
   type ReviewFinding,
@@ -19,7 +22,13 @@ import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
 import { activePatrolPid } from '../patrol.js';
-import { explorerBaseSystem, explorerReviewPrompt, explorerReviewSystem, judgeReviewSystem } from '../prompts.js';
+import {
+  explorerBaseSystem,
+  explorerReviewPrompt,
+  explorerReviewSystem,
+  judgeClaimsSystem,
+  judgeReviewSystem,
+} from '../prompts.js';
 import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER, supersededBody } from '../review-comment.js';
 import { createRuntime as makeRuntime } from '../runtime/index.js';
 import { AgentSession } from '../session.js';
@@ -48,6 +57,9 @@ const short = (commit: string) => commit.slice(0, 7);
 /** A lockfile diff is long and says nothing about a screen. */
 const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*', ':(exclude,glob)**/*.lockb'];
 const DIFF_LIMIT = 40_000;
+/** An issue that the pull request closes is context for the claims, and a long one would crowd out the diff. */
+const ISSUE_LIMIT = 4_000;
+const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop'];
 
 /**
  * The explorer on a pull request build acts and reports, and writes nothing
@@ -85,6 +97,8 @@ export type ReviewOptions = {
   /** Run the code of a pull request from a fork. It runs on this machine with the app's secrets. */
   allowFork?: boolean;
   maxSteps?: number;
+  /** Run the claim check for this review, also when `agents.review.claims` is off. */
+  claims?: boolean;
 };
 
 type PullRequest = {
@@ -101,6 +115,9 @@ type PullRequest = {
   diff: string;
   /** The lines of each file that the diff shows: a review comment can go on these only. */
   lines: Map<string, Set<number>>;
+  /** Read for the claim check only. */
+  commits: { commit: string; message: string }[];
+  issues: { number: number; title: string; body: string }[];
 };
 
 type Context = {
@@ -114,6 +131,9 @@ type Context = {
   log: (message: string) => void;
 };
 
+const claimCheck = (ctx: Pick<Context, 'config' | 'opts'>) =>
+  Boolean(ctx.opts.claims ?? ctx.config.agents.review.claims);
+
 /** Holds the fetched pull request commit for the time of one review. */
 const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
 
@@ -122,15 +142,21 @@ async function loadPullRequest(
   repo: string,
   source: string,
   number: number,
-  allowFork: boolean,
+  opts: { allowFork: boolean; claims: boolean },
 ): Promise<PullRequest> {
+  const fields = `number,title,body,url,baseRefName,isCrossRepository${opts.claims ? ',closingIssuesReferences' : ''}`;
   const view = JSON.parse(
-    await gh(
-      ['pr', 'view', String(number), '--repo', repo, '--json', 'number,title,body,url,baseRefName,isCrossRepository'],
-      { cwd: source },
-    ),
-  ) as { number: number; title: string; body: string; url: string; baseRefName: string; isCrossRepository: boolean };
-  if (view.isCrossRepository && !allowFork)
+    await gh(['pr', 'view', String(number), '--repo', repo, '--json', fields], { cwd: source }),
+  ) as {
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+    baseRefName: string;
+    isCrossRepository: boolean;
+    closingIssuesReferences?: { number: number }[];
+  };
+  if (view.isCrossRepository && !opts.allowFork)
     throw new ConfigError(
       `PR #${number} comes from a fork. A review runs its code on this machine, with the secrets of the app. ` +
         'Read the diff first. If you trust it, run the review again with --allow-fork.',
@@ -149,6 +175,23 @@ async function loadPullRequest(
   const base = await git(source, 'merge-base', head, baseRef);
   const files = (await git(source, 'diff', '--name-only', base, head)).split('\n').filter(Boolean);
   const diff = numberDiff(await git(source, 'diff', '--no-color', base, head, '--', ...DIFF_PATHS));
+  const commits = opts.claims
+    ? (await git(source, 'log', '--reverse', '--format=%H%n%B%x00', `${base}..${head}`))
+        .split('\0')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => {
+          const [commit, ...message] = entry.split('\n');
+          return { commit: commit!, message: message.join('\n').trim() };
+        })
+    : [];
+  const issues: PullRequest['issues'] = [];
+  for (const { number: issue } of view.closingIssuesReferences ?? []) {
+    const read = JSON.parse(
+      await gh(['issue', 'view', String(issue), '--repo', repo, '--json', 'number,title,body'], { cwd: source }),
+    ) as { number: number; title: string; body: string | null };
+    issues.push({ number: read.number, title: read.title, body: (read.body ?? '').slice(0, ISSUE_LIMIT) });
+  }
   return {
     number,
     url: view.url,
@@ -160,6 +203,8 @@ async function loadPullRequest(
     files,
     diff: diff.text.length > DIFF_LIMIT ? `${diff.text.slice(0, DIFF_LIMIT)}\n(cut: the diff is longer)` : diff.text,
     lines: diff.lines,
+    commits,
+    issues,
   };
 }
 
@@ -537,6 +582,175 @@ async function settleCandidates(ctx: Context, sessionId: string, findings: Revie
     await appendFile(join(paths.session(ctx.root, sessionId), 'decisions.jsonl'), `${lines.join('\n')}\n`);
 }
 
+/**
+ * The claims of a claims section that the author wrote in the pull request
+ * body: a heading named Claims, then a list. Each list item is one claim, as written.
+ */
+function sectionClaims(body: string): string[] | undefined {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{1,6}\s+claims\s*:?\s*$/i.test(line.trim()));
+  if (start < 0) return undefined;
+  const level = /^#+/.exec(lines[start]!.trim())![0].length;
+  const claims: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const heading = /^(#{1,6})\s/.exec(line.trim());
+    if (heading && heading[1]!.length <= level) break;
+    const item = /^\s{0,3}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(line);
+    if (item) claims.push(item[1]!.trim());
+    // A line that continues the item above it.
+    else if (claims.length && /^\s+\S/.test(line)) claims[claims.length - 1] += ` ${line.trim()}`;
+  }
+  return claims.length ? claims : undefined;
+}
+
+/** Nothing tests a claim yet: every claim is listed with the reason that it is untested. */
+function untested(claims: Claim[]): ClaimFinding[] {
+  return claims.map((claim) => ({
+    claim,
+    verdict: 'untested',
+    reason: claim.untestable ?? 'Bugpatrol lists the claims, and does not test them yet.',
+  }));
+}
+
+/** The claims of the pull request: the author's claims section as written, or else the judge's. */
+async function readClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
+  const { config, pr } = ctx;
+  const section = sectionClaims(pr.body);
+  if (section)
+    return section.map((text, index) => ({
+      id: `claim-${index + 1}`,
+      text,
+      platform: config.app.platform,
+      source: { kind: 'section' },
+      testable: true,
+    }));
+  return writeClaims(ctx, review);
+}
+
+/** Without a claims section, the judge writes the claims from what the pull request says. */
+async function writeClaims(ctx: Context, review: PrReview): Promise<Claim[]> {
+  const { root, config, workspace, pr, opts } = ctx;
+  const vars = new Vars(config.app.secrets);
+  const record = await workspace.startSession('judge');
+  review.sessions.claims = record.id;
+  const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, ctx.log);
+  opts.onSession?.(session);
+  const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
+  const claims: Claim[] = [];
+  const sourceOf = (input: Record<string, unknown>): Claim['source'] | string => {
+    if (input.source === 'title' || input.source === 'body') return { kind: input.source };
+    if (input.source === 'commit') {
+      const found = pr.commits.find((item) => item.commit === input.commit);
+      return found
+        ? { kind: 'commit', commit: found.commit }
+        : `The pull request has no commit ${String(input.commit)}. Use a full hash from the prompt.`;
+    }
+    if (input.source === 'issue') {
+      const found = pr.issues.find((item) => item.number === input.issue);
+      return found
+        ? { kind: 'issue', number: found.number }
+        : `The pull request closes no issue #${String(input.issue)}. ` +
+            `It closes: ${pr.issues.map((item) => `#${item.number}`).join(', ') || 'none'}.`;
+    }
+    return 'Use the source title, body, commit or issue.';
+  };
+  const tools: Tool[] = [
+    {
+      name: 'add_claim',
+      description:
+        'Add one claim of the pull request. Name its source: title, body, commit (with the commit hash) or issue ' +
+        '(with the issue number). A claim that cannot be tested needs testable false and a reason.',
+      inputSchema: schema(
+        {
+          text: string,
+          platform: { type: 'string', enum: PLATFORMS },
+          source: { type: 'string', enum: ['title', 'body', 'commit', 'issue'] },
+          commit: string,
+          issue: { type: 'integer', minimum: 1 },
+          testable: { type: 'boolean' },
+          reason: string,
+        },
+        ['text', 'platform', 'source', 'testable'],
+      ),
+      async run(input) {
+        const refuse = (message: string) => ({ ...response(message), isError: true });
+        const text = String(input.text ?? '').trim();
+        const reason = String(input.reason ?? '').trim();
+        const testable = input.testable !== false;
+        const source = sourceOf(input);
+        if (!text) return refuse('Write the claim in text.');
+        if (!PLATFORMS.includes(input.platform as Platform))
+          return refuse(`Use one platform of ${PLATFORMS.join(', ')}.`);
+        if (!testable && !reason) return refuse('Say in reason why this claim cannot be tested.');
+        if (typeof source === 'string') return refuse(source);
+        const claim: Claim = {
+          id: `claim-${claims.length + 1}`,
+          text: vars.redact(text) as string,
+          platform: input.platform as Platform,
+          source,
+          testable,
+          ...(testable ? {} : { untestable: vars.redact(reason) as string }),
+        };
+        claims.push(claim);
+        return response(`${claim.id}: ${testable ? 'testable' : 'not testable'}.`);
+      },
+    },
+    {
+      name: 'finish',
+      description: 'Finish with one sentence, when every claim is added.',
+      inputSchema: schema({ summary: string }, ['summary']),
+      async run(input) {
+        return { ...response(String(input.summary ?? '')), done: true };
+      },
+    },
+  ];
+  const limits = config.agents.review;
+  let cost = 0;
+  let steps = 0;
+  let status: 'finished' | 'failed' = 'finished';
+  const start = `Reading the claims of PR #${pr.number}`;
+  await session.activity(start, 0, runtime.label);
+  session.emit({ kind: 'session-start', summary: start });
+  try {
+    const outcome = await runtime.run(
+      {
+        role: 'judge',
+        sessionId: record.id,
+        system: judgeClaimsSystem(lessonsFor(await workspace.readMemory(), 'judge')),
+        prompt: [
+          `PULL REQUEST #${pr.number}: ${pr.title}`,
+          pr.body.trim() || '(no description)',
+          `PLATFORM OF THE APP: ${config.app.platform}`,
+          `COMMITS\n${pr.commits.map((item) => `commit ${item.commit}\n${item.message}`).join('\n\n') || '(none)'}`,
+          `ISSUES THAT IT CLOSES\n${
+            pr.issues.map((item) => `ISSUE #${item.number}: ${item.title}\n${item.body.trim()}`).join('\n\n') ||
+            '(none)'
+          }`,
+          `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
+        ].join('\n\n'),
+        tools,
+        maxSteps: limits.maxSteps,
+        budgetUsd: limits.budgetUsd,
+        timeoutMs: limits.timeoutMs,
+      },
+      session.emit,
+    );
+    cost = outcome.costUsd;
+    steps = outcome.steps;
+  } catch (error) {
+    status = 'failed';
+    throw error;
+  } finally {
+    review.costUsd += cost;
+    const summary = `PR #${pr.number}: ${claims.length} claim(s)`;
+    await workspace.endSession(record.id, { status, summary, steps, costUsd: cost });
+    session.emit({ kind: 'session-end', summary });
+    await session.idle(cost);
+    opts.onSession?.();
+  }
+  return claims;
+}
+
 async function runReview(ctx: Context): Promise<PrReview> {
   const { workspace, pr } = ctx;
   const review: PrReview = {
@@ -553,6 +767,7 @@ async function runReview(ctx: Context): Promise<PrReview> {
   };
   await workspace.saveReview(review);
   try {
+    if (claimCheck(ctx)) review.claims = untested(await readClaims(ctx, review));
     if (!pr.files.length) {
       review.tested = `The pull request changes no file against \`${pr.baseRef}\`.`;
     } else {
@@ -726,11 +941,15 @@ export async function reviewPullRequest(
   const log = opts.onLog ?? (() => {});
   const { repo } = await resolveRepo(gh, config, source);
   try {
-    const pr = await loadPullRequest(gh, repo, source, number, Boolean(opts.allowFork));
+    const pr = await loadPullRequest(gh, repo, source, number, {
+      allowFork: Boolean(opts.allowFork),
+      claims: claimCheck({ config, opts }),
+    });
     const ctx: Context = { root, source, config, workspace, repo, pr, opts, log };
     const last = await workspace.readReview(number);
     let review: PrReview;
-    if (last?.status === 'finished' && last.head === pr.head && !opts.force) {
+    const covered = last && (last.claims || !claimCheck(ctx));
+    if (last?.status === 'finished' && last.head === pr.head && covered && !opts.force) {
       log(`PR #${number} has a review of ${short(pr.head)}: published it again. Use --force to test the commit again.`);
       review = last;
     } else {

@@ -52,6 +52,7 @@ describe('agent command flags', () => {
       force: true,
       allowFork: true,
     });
+    expect(parseAgentFlags('review', ['12', '--claims'])).toEqual({ pr: 12, claims: true });
   });
 
   it('rejects unknown flags and invalid step counts', () => {
@@ -61,5 +62,6 @@ describe('agent command flags', () => {
     expect(() => parseAgentFlags('review', [])).toThrow(/pull request number or URL/);
     expect(() => parseAgentFlags('review', ['--dry-run'])).toThrow(/pull request number or URL/);
     expect(() => parseAgentFlags('review', ['12', '--goal', 'x'])).toThrow(/Unknown flag/);
+    expect(() => parseAgentFlags('explore', ['--claims'])).toThrow(/Unknown flag/);
   });
 });

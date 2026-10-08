@@ -13,6 +13,8 @@ describe('parseConfig', () => {
     expect(c.surfaces.fixPRs).toBe(false);
     expect(c.determinism.blockThirdPartyRequests).toBe(true);
     expect(c.viewports).toHaveLength(2);
+    expect(c.agents.review).toMatchObject({ claims: false, maxSteps: 60 });
+    expect(c.agents.review.budgetUsd).toBeUndefined();
   });
 
   it('rejects an unknown version rather than guessing', () => {

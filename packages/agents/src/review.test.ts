@@ -17,7 +17,10 @@ const exec = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await exec('git', args, { cwd })).stdout.trim();
 
 /** A source checkout on main, and an origin that has pull request 7 with one changed file. */
-async function fixture(github: Record<string, unknown> = { enabled: true, repo: 'o/r' }) {
+async function fixture(
+  github: Record<string, unknown> = { enabled: true, repo: 'o/r' },
+  review: Record<string, unknown> = {},
+) {
   const root = await mkdtemp(join(tmpdir(), 'bugpatrol-review-'));
   const origin = join(root, 'origin.git');
   const source = join(root, 'source');
@@ -44,13 +47,24 @@ async function fixture(github: Record<string, unknown> = { enabled: true, repo: 
   const config = parseConfig({
     version: 1,
     app: { source: 'source', connect: { url: 'fake://home' } },
-    agents: { github },
+    agents: { github, review },
   });
   return { root, source, head, base: await git(source, 'rev-parse', 'main'), config, workspace: new Workspace(root) };
 }
 
-/** `reviews` and `comments` are the rows that the jq filters of the review print. */
-function fakeGh(state: { fork?: boolean; reviews?: string; comments?: string } = {}) {
+/**
+ * `reviews` and `comments` are the rows that the jq filters of the review print.
+ * `issues` are the issues that the pull request closes.
+ */
+function fakeGh(
+  state: {
+    fork?: boolean;
+    reviews?: string;
+    comments?: string;
+    body?: string;
+    issues?: { number: number; title: string; body: string }[];
+  } = {},
+) {
   const calls: { args: string[]; input?: string }[] = [];
   const gh: Gh = async (args, opts) => {
     calls.push({ args, input: opts?.input });
@@ -60,11 +74,20 @@ function fakeGh(state: { fork?: boolean; reviews?: string; comments?: string } =
       return JSON.stringify({
         number: 7,
         title: 'Change settings',
-        body: 'Changes how the settings screen saves.',
+        body: state.body ?? 'Changes how the settings screen saves.',
         url: 'https://github.com/o/r/pull/7',
         baseRefName: 'main',
         isCrossRepository: Boolean(state.fork),
+        closingIssuesReferences: (state.issues ?? []).map((issue) => ({
+          number: issue.number,
+          url: `https://github.com/o/r/issues/${issue.number}`,
+        })),
       });
+    if (args[0] === 'issue') {
+      const issue = state.issues?.find((item) => String(item.number) === args[2]);
+      if (!issue) throw new Error(`Unexpected gh ${args.join(' ')}`);
+      return JSON.stringify(issue);
+    }
     if (args.includes('--paginate')) return (args[2]!.endsWith('/reviews') ? state.reviews : state.comments) ?? '';
     if (args.includes('DELETE')) return '';
     if (args.some((arg) => arg.includes('/reviews')))
@@ -117,6 +140,47 @@ function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
             severity: 'major',
           });
         await tool(task, 'finish').run({ summary: 'Tested the settings screen.' });
+      } else if (tool(task, 'add_claim')) {
+        // A source that the pull request does not have.
+        const wrong = await tool(task, 'add_claim').run({
+          text: 'Fixes the login.',
+          platform: 'web',
+          source: 'issue',
+          issue: 99,
+          testable: true,
+        });
+        expect(wrong.isError).toBe(true);
+        // An untestable claim needs a reason.
+        const bare = await tool(task, 'add_claim').run({
+          text: 'Cleans up the settings code.',
+          platform: 'web',
+          source: 'body',
+          testable: false,
+        });
+        expect(bare.isError).toBe(true);
+        const commit = /commit ([0-9a-f]{40})/.exec(task.prompt)![1];
+        await tool(task, 'add_claim').run({
+          text: 'The save button saves the settings.',
+          platform: 'web',
+          source: 'commit',
+          commit,
+          testable: true,
+        });
+        await tool(task, 'add_claim').run({
+          text: 'Saving works again after a reload.',
+          platform: 'web',
+          source: 'issue',
+          issue: 12,
+          testable: true,
+        });
+        await tool(task, 'add_claim').run({
+          text: 'Cleans up the settings code.',
+          platform: 'web',
+          source: 'body',
+          testable: false,
+          reason: 'No screen or request shows how clean the code is.',
+        });
+        await tool(task, 'finish').run({ summary: 'Three claims.' });
       } else if (tool(task, 'capture_after')) {
         await tool(task, 'replay_issue_steps').run({ target: 1 });
         await tool(task, 'capture_after').run({ target: 1, note: 'Save works on this build.', reached: true });
@@ -335,6 +399,180 @@ describe('pull request review', () => {
       expect(agents.tasks).toHaveLength(3);
       await run({ force: true });
       expect(agents.tasks).toHaveLength(6);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the claims of the author-written claims section as written, untested', async () => {
+    const f = await fixture({ enabled: false }, { claims: true });
+    try {
+      const body = [
+        'Changes how the settings screen saves.',
+        '',
+        '## Claims',
+        '',
+        '- The save button saves the settings.',
+        '* A saved setting shows after a reload.',
+        '',
+        '## Notes',
+        '',
+        '- Not a claim.',
+      ].join('\n');
+      const { gh } = fakeGh({ body });
+      const agents = scripted('introduced', 0);
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: screens,
+        dryRun: true,
+      });
+      // The author wrote the claims, so no model writes them.
+      expect(agents.tasks).toHaveLength(1);
+      expect(review.claims).toEqual([
+        {
+          claim: {
+            id: 'claim-1',
+            text: 'The save button saves the settings.',
+            platform: 'web',
+            source: { kind: 'section' },
+            testable: true,
+          },
+          verdict: 'untested',
+          reason: 'Bugpatrol lists the claims, and does not test them yet.',
+        },
+        {
+          claim: {
+            id: 'claim-2',
+            text: 'A saved setting shows after a reload.',
+            platform: 'web',
+            source: { kind: 'section' },
+            testable: true,
+          },
+          verdict: 'untested',
+          reason: 'Bugpatrol lists the claims, and does not test them yet.',
+        },
+      ]);
+      expect((await f.workspace.readReview(7))!.claims).toEqual(review.claims);
+      const file = await readFile(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'), 'utf8');
+      expect(file).toContain('The save button saves the settings.');
+      expect(file).not.toContain('Not a claim.');
+      // Claims first, then the problems that the pull request introduces.
+      expect(file.indexOf('A saved setting shows after a reload.')).toBeLessThan(
+        file.indexOf('No problem found that this pull request introduces.'),
+      );
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('lets the judge write the claims from the pull request, and lists an untestable claim with its reason', async () => {
+    const f = await fixture();
+    try {
+      const { gh, posted } = fakeGh({
+        body: 'Changes how the settings screen saves, and cleans up the settings code.',
+        issues: [{ number: 12, title: 'Settings do not save', body: 'Saving does nothing after a reload.' }],
+      });
+      const agents = scripted('introduced', 1);
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: screens,
+        claims: true,
+      });
+      const [claims, explorer] = agents.tasks;
+      // The judge reads the title, the body, the commits, the closed issues and the diff.
+      expect(claims!.role).toBe('judge');
+      expect(claims!.prompt).toContain('PULL REQUEST #7: Change settings');
+      expect(claims!.prompt).toContain('cleans up the settings code');
+      expect(claims!.prompt).toContain(`commit ${f.head}`);
+      expect(claims!.prompt).toContain('change settings');
+      expect(claims!.prompt).toContain('ISSUE #12: Settings do not save');
+      expect(claims!.prompt).toContain('Saving does nothing after a reload.');
+      expect(claims!.prompt).toContain('+    1 save is broken');
+      expect(review.sessions.claims).toBeDefined();
+      expect(review.claims).toMatchObject([
+        {
+          claim: {
+            id: 'claim-1',
+            text: 'The save button saves the settings.',
+            source: { kind: 'commit', commit: f.head },
+            testable: true,
+          },
+          verdict: 'untested',
+        },
+        { claim: { id: 'claim-2', source: { kind: 'issue', number: 12 }, testable: true }, verdict: 'untested' },
+        {
+          claim: {
+            id: 'claim-3',
+            text: 'Cleans up the settings code.',
+            source: { kind: 'body' },
+            testable: false,
+            untestable: 'No screen or request shows how clean the code is.',
+          },
+          verdict: 'untested',
+          reason: 'No screen or request shows how clean the code is.',
+        },
+      ]);
+      // An untestable claim is never explored.
+      expect(explorer!.prompt).not.toContain('Cleans up the settings code.');
+      expect(review.findings).toHaveLength(1);
+
+      // One review: the claims first, then the problems that the pull request introduces.
+      expect(posted()).toHaveLength(1);
+      const [sent] = posted();
+      expect(sent).toMatchObject({ commit_id: f.head, event: 'COMMENT' });
+      expect(sent!.body.startsWith(REVIEW_MARKER)).toBe(true);
+      expect(sent!.body).toContain(`From commit \`${f.head.slice(0, 7)}\``);
+      expect(sent!.body).toContain('Claims that Bugpatrol cannot test (1)');
+      expect(sent!.body).toContain('No screen or request shows how clean the code is.');
+      expect(sent!.body.indexOf('The save button saves the settings.')).toBeLessThan(
+        sent!.body.indexOf('**1 problem that this pull request introduces.**'),
+      );
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('with the claim check off, reads no claim and asks GitHub for nothing more', async () => {
+    const f = await fixture();
+    try {
+      const { gh, calls, posted } = fakeGh({ body: '## Claims\n\n- The save button saves the settings.' });
+      const agents = scripted('introduced', 1);
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: agents.createRuntime,
+        createDriver: screens,
+      });
+      expect(review.claims).toBeUndefined();
+      expect(review.sessions.claims).toBeUndefined();
+      expect(agents.tasks.map((task) => task.role)).toEqual(['explorer', 'explorer', 'judge']);
+      expect(calls.some((call) => call.args[0] === 'issue')).toBe(false);
+      expect(calls.find((call) => call.args[0] === 'pr')!.args.join(' ')).not.toContain('closingIssuesReferences');
+      expect(posted()[0]!.body).not.toContain('What this pull request says it does');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('on the same commit, tests again when the last review had no claim check', async () => {
+    const f = await fixture({ enabled: false });
+    try {
+      const { gh } = fakeGh({ body: '## Claims\n\n- The save button saves the settings.' });
+      const agents = scripted('introduced', 0);
+      const run = (claims?: boolean) =>
+        reviewPullRequest(f.root, f.config, 7, {
+          gh,
+          createRuntime: agents.createRuntime,
+          createDriver: screens,
+          dryRun: true,
+          claims,
+        });
+      expect((await run()).claims).toBeUndefined();
+      expect((await run(true)).claims).toMatchObject([{ claim: { text: 'The save button saves the settings.' } }]);
+      expect(agents.tasks).toHaveLength(2);
+      await run(true);
+      expect(agents.tasks).toHaveLength(2);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

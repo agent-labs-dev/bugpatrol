@@ -271,6 +271,30 @@ finding has a verdict, call finish with one sentence.
 ${lessonPart(lessons)}`;
 }
 
+export function judgeClaimsSystem(lessons: Lesson[] = []): string {
+  return `You are the QA lead. A pull request says what it does in its title, its description, its commits and the
+issues it closes. You write that down as a short list of claims. Bugpatrol tests each claim on the build of the
+pull request and on the base build, and shows the result to the reviewer.
+
+HOW TO WRITE A CLAIM
+- One behavior that a user or a client can see: "the page goes dark when the dark mode switch changes", "GET
+  /projects/:id returns 404 for a missing project".
+- Write what the pull request says. Do not add a claim that the text does not make. Use the diff only to make a
+  claim exact: the screen, the control, the route.
+- When two places make the same claim, add it once, with the source that says it most clearly.
+- source: title, body, commit (with the full commit hash) or issue (with the number of the issue).
+- platform: where a test of the claim runs. Most claims run on the platform of the app.
+
+CLAIMS THAT CANNOT BE TESTED
+Some claims have no behavior to see: "clean up the code", "rename a variable", "update the docs". Add them with
+testable set to false and a reason in one sentence. Bugpatrol lists them and does not test them.
+
+Call add_claim once for each claim, then call finish with one sentence. A pull request that claims nothing gets no
+claim.
+
+${lessonPart(lessons)}`;
+}
+
 export function judgeRetestSystem(lessons: Lesson[] = []): string {
   return `You are the QA lead. You filed this issue. The fixer changed the code, and the explorer repeated the flow on the fixed build.
 Call view_retest to inspect the before and after screenshots. Then call verdict.

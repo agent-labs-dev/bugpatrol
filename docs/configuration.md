@@ -56,6 +56,10 @@ agents:
     labels: [bugpatrol]
     assetsBranch: bugpatrol-assets # the orphan branch that holds report images
     prScope: app                # optional: the scope in PR titles
+  review:
+    claims: false               # the claim check of `bugpatrol review`: list what the pull request says it does
+    maxSteps: 60                # the step limit of the claim check
+    budgetUsd: 2                # optional: its cost limit in USD; no limit by default
   memory:
     enabled: true
   checks: []                    # optional automatic checks, for example [usability/contrast, usability/tap-target]
