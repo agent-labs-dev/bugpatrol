@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError } from '../errors.js';
-import { parseConfig, resolveSecretRefs } from './load.js';
+import { parseConfig } from './load.js';
 
 const minimal = { version: 1, run: { command: 'pnpm dev', url: 'http://localhost:3000' } };
 
@@ -31,17 +31,14 @@ describe('parseConfig', () => {
     expect(() => parseConfig({ ...minimal, version: 2 })).toThrow(ConfigError);
   });
 
+  it('rejects an auth login flow, since nothing reads it, but accepts the kind: none older configs carry', () => {
+    expect(() => parseConfig({ ...minimal, auth: { kind: 'none' } })).not.toThrow();
+    expect(() => parseConfig({ ...minimal, auth: { kind: 'form', loginUrl: '/login' } })).toThrow(
+      /does not read `auth`/,
+    );
+  });
+
   it('requires a bring-up command', () => {
     expect(() => parseConfig({ version: 1, run: { url: 'http://localhost:3000' } })).toThrow(ConfigError);
-  });
-});
-
-describe('resolveSecretRefs', () => {
-  it('resolves ${VAR} from the environment', () => {
-    expect(resolveSecretRefs({ a: '${TOKEN}' }, { TOKEN: 's3cret' })).toEqual({ a: 's3cret' });
-  });
-
-  it('fails loudly on a missing secret instead of sending an empty string', () => {
-    expect(() => resolveSecretRefs('${MISSING}', {})).toThrow(ConfigError);
   });
 });

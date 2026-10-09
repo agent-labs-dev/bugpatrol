@@ -743,9 +743,6 @@ run:
     timeoutMs: 60000
   seeds: []
 
-auth:
-  kind: none                   # none | form | storageState | seededUser | ssoBypass | manual
-
 viewports:
   - { name: desktop, width: 1440, height: 900 }
   - { name: mobile,  width: 390,  height: 844 }

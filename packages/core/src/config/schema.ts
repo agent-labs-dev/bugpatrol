@@ -2,8 +2,6 @@ import { z } from 'zod';
 import type { AgentRole } from '../types/agents.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
 
-const secretRefString = z.string().describe('A ${ENV_VAR} reference. Never a literal credential (spec 11.4).');
-
 export const viewportSchema = z.object({
   name: z.string(),
   width: z.number().int().positive(),
@@ -25,28 +23,6 @@ export const runSchema = z.object({
     .default({}),
   seeds: z.array(z.string()).default([]),
 });
-
-export const authSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('none') }),
-  z.object({
-    kind: z.literal('form'),
-    loginUrl: z.string(),
-    credentials: secretRefString.optional(),
-    steps: z.array(actionSchema).default([]),
-  }),
-  z.object({ kind: z.literal('storageState'), path: z.string(), expiresAt: z.string().optional() }),
-  z.object({
-    kind: z.literal('seededUser'),
-    seedCommand: z.string(),
-    credentials: secretRefString.optional(),
-  }),
-  z.object({
-    kind: z.literal('ssoBypass'),
-    header: z.string().optional(),
-    token: secretRefString.optional(),
-  }),
-  z.object({ kind: z.literal('manual'), path: z.string() }),
-]);
 
 export const maskSchema = z.object({
   selector: z.string(),
@@ -529,7 +505,16 @@ export const bugpatrolConfigSchema = z
     run: runSchema.optional(),
     app: appSchema,
     agents: agentsSchema,
-    auth: authSchema.default({ kind: 'none' }),
+    /** Never read. Accept the `kind: none` older `init` wrote; reject a login flow instead of ignoring it. */
+    auth: z
+      .object({
+        kind: z.literal('none', {
+          errorMap: () => ({
+            message: 'Bugpatrol does not read `auth`. Sign in through `app.setup` and `app.instructions`.',
+          }),
+        }),
+      })
+      .optional(),
     viewports: z
       .array(viewportSchema)
       .min(1)
