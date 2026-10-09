@@ -1,5 +1,5 @@
 import type { BugpatrolConfig } from '../config/schema.js';
-import type { ArtifactRef, ProjectId, SecretRef } from './ids.js';
+import type { ProjectId, SecretRef } from './ids.js';
 
 export type Project = {
   id: ProjectId;
