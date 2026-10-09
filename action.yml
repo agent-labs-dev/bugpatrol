@@ -14,7 +14,7 @@ inputs:
     default: ${{ github.token }}
   package:
     description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball. On a release tag, the default is the version of that release.
-    default: bugpatrol@latest
+    default: bugpatrol@0.3.0
   node-version:
     description: The Node.js version that runs Bugpatrol.
     default: '22'
