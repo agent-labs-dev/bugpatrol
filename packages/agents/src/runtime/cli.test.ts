@@ -176,3 +176,40 @@ describe('CLI token usage', () => {
     }
   });
 });
+
+describe('opencode --format json', () => {
+  const textEvent = (text: string) =>
+    JSON.stringify({ type: 'text', timestamp: 2, sessionID: 'ses_1', part: { type: 'text', text } });
+
+  it('joins the text events, and skips the step and tool events', () => {
+    const out = [
+      '{"type":"step_start","timestamp":1,"sessionID":"ses_1","part":{"type":"step-start"}}',
+      textEvent('Looking at the dashboard.'),
+      '{"type":"tool_use","timestamp":3,"sessionID":"ses_1","part":{"type":"tool","tool":"execute"}}',
+      '{"type":"step_finish","timestamp":4,"sessionID":"ses_1","part":{"type":"step-finish","reason":"tool-calls"}}',
+      textEvent('Done.'),
+    ].join('\n');
+    expect(parseCliOutput(out)).toEqual({ text: 'Looking at the dashboard.\nDone.' });
+  });
+
+  it('strips the thinking blocks, also one that never closes', () => {
+    const out = [
+      textEvent('<thinking>Not needed.</thinking>\n\nok'),
+      textEvent("Let's try that.\n\n<thinking>I will use the search tool."),
+    ].join('\n');
+    expect(parseCliOutput(out)).toEqual({ text: "ok\nLet's try that." });
+  });
+
+  it('passes non-JSON lines through', () => {
+    const out = ['starting up', textEvent('hi')].join('\n');
+    expect(parseCliOutput(out)).toEqual({ text: 'starting up\nhi' });
+  });
+
+  it('reports the error message when there is no text', () => {
+    const out =
+      '{"type":"error","timestamp":1791554237076,"sessionID":"ses_edf0bd7b0ffeVMG5lgWPZuOnAL","error":{"type":"provider.auth","message":"anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.","status":403}}';
+    expect(parseCliOutput(out)).toEqual({
+      text: 'anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.',
+    });
+  });
+});

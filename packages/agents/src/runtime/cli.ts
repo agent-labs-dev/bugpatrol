@@ -35,11 +35,59 @@ function displayLine(line: string): string {
   }
 }
 
+/** A JSON event line with `part` text, or an `error` with a message. */
+function isStructuredEventLine(line: string): boolean {
+  if (!line.trimStart().startsWith('{')) return false;
+  try {
+    const event = JSON.parse(line) as { part?: { type?: unknown }; error?: { message?: unknown } };
+    return typeof event.part?.type === 'string' || typeof event.error?.message === 'string';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The text of newline-delimited JSON events with `part` text: each `text`
+ * event joined, with the `<thinking>` blocks removed. Step and tool events
+ * add nothing. A run that printed no text reports its error messages, so a
+ * provider failure surfaces instead of a silent empty finish.
+ */
+function parseStructuredEvents(lines: string[]): Parsed {
+  const text: string[] = [];
+  const errors: string[] = [];
+  for (const line of lines) {
+    if (line.trimStart().startsWith('{')) {
+      try {
+        const event = JSON.parse(line) as {
+          type?: string;
+          part?: { type?: string; text?: string };
+          error?: { message?: string };
+        };
+        if (event.type === 'text' && typeof event.part?.text === 'string') {
+          const cleaned = event.part.text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/g, '').trim();
+          if (cleaned) text.push(cleaned);
+        } else if (typeof event.error?.message === 'string') {
+          errors.push(event.error.message);
+        }
+        continue;
+      } catch {
+        /* a text line that starts with a brace */
+      }
+    }
+    const shown = displayLine(line);
+    if (shown) text.push(shown);
+  }
+  if (text.length) return { text: text.join('\n') };
+  if (errors.length) return { text: errors.join('\n') };
+  return { text: '' };
+}
+
 /**
  * What a CLI printed: the text, and the token usage when the CLI reports it.
  * `claude -p --output-format json` prints one JSON object with the result and
  * its usage. `codex exec --json` prints one event on each line, with the usage
- * on each `turn.completed`. Plain text has no usage.
+ * on each `turn.completed`. `opencode run --format json` prints one event on
+ * each line, with the text on each `text` event. Plain text has no usage.
  */
 export function parseCliOutput(stdout: string): Parsed {
   const trimmed = stdout.trim();
@@ -67,7 +115,9 @@ export function parseCliOutput(stdout: string): Parsed {
   let tokens: TokenUsage | undefined;
   let events = 0;
   const text: string[] = [];
-  for (const line of trimmed.split('\n')) {
+  const lines = trimmed.split('\n');
+  if (lines.some(isStructuredEventLine)) return parseStructuredEvents(lines);
+  for (const line of lines) {
     if (line.trimStart().startsWith('{')) {
       try {
         const event = JSON.parse(line) as { type?: string; usage?: unknown };
