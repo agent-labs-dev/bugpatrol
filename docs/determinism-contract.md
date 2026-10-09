@@ -1,6 +1,6 @@
 # The determinism contract
 
-The research is unambiguous: false positives from rendering differences are the number-one reason teams abandon visual testing. Reports of "50–95% of tests fail randomly" are not outliers, and the second-order damage is worse — once engineers believe the red is noise, they ignore real failures too.
+The research is unambiguous: false positives from rendering differences are the number-one reason teams abandon visual testing. Reports of "50-95% of tests fail randomly" are not outliers, and the second-order damage is worse - once engineers believe the red is noise, they ignore real failures too.
 
 So determinism is not a configuration surface. It is a **contract**, and every clause is enforced in code rather than documented as advice.
 
@@ -62,13 +62,13 @@ Blocking third-party requests serves two purposes at once: it removes the larges
 
 ## Masking
 
-Some content is legitimately unstable: avatars, relative timestamps, live counters. The contract is that **masks are declared, visible and accounted for** — never silent.
+Some content is legitimately unstable: avatars, relative timestamps, live counters. The contract is that **masks are declared, visible and accounted for** - never silent.
 
 Masked regions are excluded from the numerator *and* the denominator of the diff score, and **the percentage of the screen masked is reported alongside every diff**.
 
 A diff that is 60% masked is not a passing diff. It is a hollow test, and the report says so (`evaluate()` raises a `hollow-test` flag).
 
-## Tolerance — and the trap in it
+## Tolerance - and the trap in it
 
 Every existing tool exposes a tolerance knob, and every one of them has a user who turned it up until the build went green and it stopped catching anything. The research documents both failure modes: anti-aliasing suppression masking genuine regressions, and a zero-threshold config reporting a completely missing button as **PASSING**.
 
@@ -85,6 +85,6 @@ Every existing tool exposes a tolerance knob, and every one of them has a user w
 
 ## Bugpatrol's own acceptance test
 
-Three consecutive runs against an unchanged commit must produce zero diffs across every screen and viewport. It runs on every commit — see `.github/workflows/determinism.yml`.
+Three consecutive runs against an unchanged commit must produce zero diffs across every screen and viewport. It runs on every commit - see `.github/workflows/determinism.yml`.
 
 Until that holds, nothing built on top of this signal can be trusted.

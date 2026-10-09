@@ -322,7 +322,7 @@ export async function runAgentCommand(
     const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, { onLog: log });
     applyRetest(config, fix, result);
     await workspace.saveFix(fix);
-    log(`Retest: ${result.outcome} — ${result.reason}`);
+    log(`Retest: ${result.outcome}: ${result.reason}`);
     return;
   }
   let app: Awaited<ReturnType<typeof startApp>> | undefined;

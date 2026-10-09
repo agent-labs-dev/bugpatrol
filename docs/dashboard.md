@@ -5,7 +5,7 @@ npx bugpatrol dashboard            # http://127.0.0.1:4311
 npx bugpatrol dashboard --port 5000
 ```
 
-The dashboard is the bird's-eye view of the agents. It reads the files under `.bugpatrol/runs/` and updates live. You can keep it open while a patrol runs.
+The dashboard shows agent activity and results. It reads the files under `.bugpatrol/runs/` and updates live. You can keep it open while a patrol runs.
 
 ## Token usage
 
@@ -34,6 +34,7 @@ The cost on the dashboard counts only the API calls that Bugpatrol makes: the ag
 - **Issues**: each issue with its screenshots and steps, the judge's reason, the fix with its diff, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so.
 - **Reviews**: each pull request that `bugpatrol review` reviewed, with its head and base commits. A review page lists each claim with its verdict, the evidence source, the reason, and what Bugpatrol saw on the base build and on the pull request build. The problems that the pull request introduced follow, with base and head screenshots.
 - **Activity**: each session as a timeline, one line for each action.
+- **Flow**: agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes.
 - **Screens**: a graph shows how screens connect. Switch to the grid to see each latest screenshot.
 - **Memory**: the lessons that the agents learned.
 - **Checks**: the results of `bugpatrol run` (shown only when there are runs).

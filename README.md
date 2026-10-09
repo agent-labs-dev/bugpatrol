@@ -15,9 +15,9 @@ Bugpatrol is a QA team made of agents. It uses your app the way a tester does, f
 - A **fixer** agent writes a fix in its own git worktree. Then the explorer and the judge **retest** the fix in the running app.
 - Bugpatrol **publishes** to GitHub: a PR for each fix, and an issue for each major bug with no fix.
 
-It works on web apps, desktop apps (Electron), and mobile apps (iOS and Android, native or React Native). It runs on your machine, and it can run all day as a patrol.
+It tests web apps, Electron and other desktop apps, iOS and Android apps, HTTP APIs and CLIs. It runs on your machine, and it can run all day as a patrol.
 
-The [Nebula](https://nebula.gg) team uses Bugpatrol every day to test our own web, desktop, and mobile apps. We made it open source, so that all teams can use it.
+The [Nebula](https://nebula.gg) team uses Bugpatrol every day to test our own desktop and mobile apps. We made it open source, so that all teams can use it.
 
 ```bash
 npx bugpatrol
@@ -61,9 +61,9 @@ flowchart TB
 
 - The patrol does not stop by itself. Every 30 minutes, it pulls the latest `origin/main`.
 - The patrol explores and judges only when `main` has new commits. On the same commit, it skips these two steps, but it still finishes the open work: fixes, retests, publish, CI checks, and the GitHub sync. So a patrol that runs all day costs little when nobody merges code, and a fix never waits for the next merge.
-- Bugpatrol keeps the last tested commit in `.bugpatrol/runs/`, so a restart also skips a commit that it tested before. To test again with no new commit, for example after a config change, use `patrol --force`.
-- You can change the wait with `agents.patrol.intervalMinutes`. To stop after a number of cycles, set `agents.patrol.cycles`. To run one cycle only, use `patrol --once`.
-- You can also run `patrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start.
+- Bugpatrol keeps the last tested commit in `.bugpatrol/runs/`, so a restart also skips a commit that it tested before. To test again with no new commit, for example after a config change, use `npx bugpatrol --force`.
+- You can change the wait with `agents.patrol.intervalMinutes`. To stop after a number of cycles, set `agents.patrol.cycles`. To run one cycle only, use `npx bugpatrol --once`.
+- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start.
 - To use a different branch, set `agents.patrol.pull`.
 - Let the patrol run all the time on a dedicated computer or a cloud VM. The patrol changes the checkout of the repo, so do not run it in the checkout where you work.
 
@@ -205,9 +205,12 @@ The dashboard reads the files in `.bugpatrol/`, so it works during a patrol and 
 | --- | --- |
 | Overview | Each agent and its task now, the issues that need attention, the live screen, the screens found, and the token usage |
 | Issues | Each issue with its screenshots and steps, the judge's reason, the fix and its diff, the retest, and the PR or issue on GitHub |
+| Reviews | Pull-request claims, verdicts and evidence from base and head builds |
 | Activity | Each session as a timeline, with one line for each action |
+| Flow | Agent actions, failed requests and backend logs in time order |
 | Screens | A graph of how the screens connect, or a grid of the latest screenshots |
 | Memory | The lessons that the agents learned |
+| Checks | Results from `bugpatrol run` |
 
 [The dashboard](docs/dashboard.md) tells more.
 
@@ -242,7 +245,7 @@ Give the judge your strongest model, and give the explorer a fast, low-cost mode
 
 | Area | Supported |
 | --- | --- |
-| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro) |
+| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), desktop apps through Cua, HTTP APIs and CLIs |
 | Login | Any auth system: your own setup commands plus plain-English instructions |
 | Agent LLMs | Claude Code, Codex, Kimi CLI, pi, or any CLI agent; or an API key for OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint |
 | GitHub | PRs, issues, and state sync through the `gh` CLI |

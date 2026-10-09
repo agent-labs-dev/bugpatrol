@@ -171,7 +171,7 @@ try {
         port,
         onReady: (url) => {
           process.stdout.write(`Bugpatrol dashboard on ${url}\n`);
-          process.stdout.write('Watching .bugpatrol/runs/ — runs appear as they finish. Ctrl-C to stop.\n');
+          process.stdout.write('Watching .bugpatrol/runs/: runs appear as they finish. Ctrl-C to stop.\n');
         },
       });
       // Deliberately does not exit: this is a server, and the watcher is the

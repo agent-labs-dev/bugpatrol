@@ -1,19 +1,19 @@
 # The detection rubric
 
-The brief names the hardest requirement precisely: find things that are "not logical", "not intuitive", "don't make sense", and typos. Those are not detector names — they are outcomes. This document converts each into something a program can evaluate.
+The brief names the hardest requirement precisely: find things that are "not logical", "not intuitive", "don't make sense", and typos. Those are not detector names - they are outcomes. This document converts each into something a program can evaluate.
 
 ## The governing rule
 
 **A finding must be explainable to an engineer in one sentence, and that sentence must name a consequence.**
 
-- "4.3% of pixels changed" — fails.
-- "The Save button is behind the sticky footer and is unreachable at its centre point" — passes.
+- "4.3% of pixels changed" - fails.
+- "The Save button is behind the sticky footer and is unreachable at its centre point" - passes.
 
 Where a detector cannot produce such a sentence, it reports at lower confidence and routes to a question rather than an issue.
 
 The success metric is not findings per run. It is **the proportion of findings a human accepts as real**, tracked per detector, so a noisy detector can be tuned or retired.
 
-## 1. Layout and rendering invariants — tier 1, deterministic
+## 1. Layout and rendering invariants - tier 1, deterministic
 
 The highest-value detectors in the product: deterministic, free, and they catch the "this looks broken" class that pixel diffing alone cannot explain.
 
@@ -34,7 +34,7 @@ The highest-value detectors in the product: deterministic, free, and they catch 
 
 Implemented in `packages/invariants/`. Geometry comes from an in-page probe (`probe.ts`) running against real computed layout, not inferred from the DOM.
 
-## 2. Accessibility — tier 1
+## 2. Accessibility - tier 1
 
 axe-core violations, reported as **new violations versus baseline** rather than an absolute count. An app with 400 existing violations must not produce 400 findings on its first run.
 
@@ -42,7 +42,7 @@ Plus targeted checks: missing `alt`, missing form labels, missing page `title`, 
 
 *Status: planned for M3.*
 
-## 3. Content and copy — tier 1–2
+## 3. Content and copy - tier 1-2
 
 This is where "find typos" becomes concrete. It decomposes into five distinct detectors:
 
@@ -50,7 +50,7 @@ This is where "find typos" becomes concrete. It decomposes into five distinct de
 | -------- | ------ |
 | Spelling | `cspell`/`hunspell` over user-visible strings, with a project dictionary seeded from the AppModel's domain vocabulary |
 | False-positive filtering | Every hit goes to the decider as a `Noul`: is this a misspelling, or a brand/identifier/coinage? |
-| Untranslated strings | Raw i18n keys rendered into the UI (`common.submit`) — distinctive, high-confidence |
+| Untranslated strings | Raw i18n keys rendered into the UI (`common.submit`) - distinctive, high-confidence |
 | Placeholder leakage | Lorem ipsum, `TODO`, `FIXME`, `test123`, `foo`, `asdf` |
 | Terminology inconsistency | Same concept named differently across screens ("Project" vs "Workspace") |
 | Tone and clarity drift | Mixed imperative/second person, inconsistent capitalisation of the same control |
@@ -59,7 +59,7 @@ The dictionary-plus-decider combination is what makes this usable. A raw spellch
 
 *Status: planned for M4. The `IS_MISSPELLING` question is defined in `packages/decide/src/questions.ts`.*
 
-## 4. State, feedback and error handling — tier 1–2
+## 4. State, feedback and error handling - tier 1-2
 
 | Detector | Signal |
 | -------- | ------ |
@@ -71,7 +71,7 @@ The dictionary-plus-decider combination is what makes this usable. A raw spellch
 | Validation gap | A form accepting obviously invalid input without complaint |
 | Undismissable dialog | A modal with no close affordance except browser back |
 
-## 5. Navigation and flow logic — tier 2–3
+## 5. Navigation and flow logic - tier 2-3
 
 Closest to "not logical", and deliberately the tier that **never blocks a merge**, because it is the least objective.
 
@@ -85,21 +85,21 @@ Closest to "not logical", and deliberately the tier that **never blocks a merge*
 | Unconfirmed destructive action | Delete/remove/revoke with no confirmation step |
 | Feedback-free success | A submit that succeeds with nothing the user can perceive |
 | Broken internal link | A link resolving to a 404 or a route absent from the table |
-| Flow regression | A recorded flow can no longer complete — **the highest-severity functional signal Bugpatrol produces** |
+| Flow regression | A recorded flow can no longer complete - **the highest-severity functional signal Bugpatrol produces** |
 
-## 6. Visual semantics — tier 3, sampled
+## 6. Visual semantics - tier 3, sampled
 
 The residue invariants cannot express, and the only place a vision model is genuinely required: "is this screen coherent?", "does this empty state look half-finished?", "does this error message match the failure that occurred?".
 
 Sampled, never on every screen, never blocking.
 
-## 7. Change-aware detectors — tier 1–2
+## 7. Change-aware detectors - tier 1-2
 
 Derived from the diff rather than the absolute state, which is what makes them low-noise.
 
 | Detector | Signal |
 | -------- | ------ |
-| Copy changed | Text on a control changed — often intentional, so it **asks** rather than accuses |
+| Copy changed | Text on a control changed - often intentional, so it **asks** rather than accuses |
 | Control removed | A previously present interactive element is gone |
 | Screen added/removed | A route appeared or disappeared versus the AppModel |
 | Affordance changed | A button became a link; a primary action became secondary |

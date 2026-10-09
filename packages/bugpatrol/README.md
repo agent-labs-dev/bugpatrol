@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/agent-labs-dev/bugpatrol/main/assets/banner.png" alt="Bugpatrol: AI agents that explore your app, find bugs, and fix them." width="100%">
 </p>
 
-Bugpatrol is a QA team made of agents. It uses your web, Electron, iOS, or Android app the way a tester does. It finds bugs, fixes them, checks each fix in the running app, and opens the pull requests and issues for your team.
+Bugpatrol is a QA team made of agents. It uses your web, Electron, iOS, Android or desktop app, HTTP API or CLI the way a tester does. It finds bugs, fixes them, checks each fix in the running app, and opens the pull requests and issues for your team.
 
 ```sh
 npx bugpatrol init         # find the app and the LLMs, and write .bugpatrol/
