@@ -226,7 +226,7 @@ Bugpatrol has three LLM agents:
 
 Each agent can use a different LLM:
 
-- A local agent CLI, with your existing login: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), or [pi](https://github.com/badlogic/pi-mono).
+- A local agent CLI, with your existing login: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [opencode](https://opencode.ai), or [pi](https://github.com/badlogic/pi-mono).
 - An API key: OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint.
 
 Give the judge your strongest model, and give the explorer a fast, low-cost model. We recommend these models:
@@ -247,7 +247,7 @@ Give the judge your strongest model, and give the explorer a fast, low-cost mode
 | --- | --- |
 | Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), Linux desktop apps through Cua and Xvfb, HTTP APIs and CLIs |
 | Login | Any auth system: your own setup commands plus plain-English instructions |
-| Agent LLMs | Claude Code, Codex, Kimi CLI, pi, or any CLI agent; or an API key for OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint |
+| Agent LLMs | Claude Code, Codex, Kimi CLI, opencode, pi, or any CLI agent; or an API key for OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint |
 | GitHub | PRs, issues, and state sync through the `gh` CLI |
 | Output | A local dashboard, GitHub PRs and issues, and JSON files under `.bugpatrol/runs/` |
 

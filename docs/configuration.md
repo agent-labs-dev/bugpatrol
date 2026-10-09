@@ -37,7 +37,7 @@ agents:
   explorer:
     maxSteps: 150               # one step is one tool call; full coverage needs many
     budgetUsd: 5                # optional: a cost limit for one session in USD; no limit by default
-    use: claude                 # a local agent CLI: claude | codex | kimi | pi
+    use: claude                 # a local agent CLI: claude | codex | kimi | opencode | pi
   judge:
     use: { runtime: model, via: openrouter, model: z-ai/glm-5.3-flash }   # or an API key
   fixer:
@@ -124,7 +124,7 @@ For mobile, the default device is the booted simulator or the running emulator.
 
 Each agent (explorer, judge, fixer) runs on an LLM. Each agent can use a different provider:
 
-- A local agent CLI: `use: claude`, `use: codex`, `use: kimi`, or `use: pi`. It uses your existing login.
+- A local agent CLI: `use: claude`, `use: codex`, `use: kimi`, `use: opencode`, or `use: pi`. It uses your existing login.
 - An API key: `use: { runtime: model, via: openrouter, model: <id> }`. `via` is `openrouter`, `vercel`, `openai`, `anthropic`, or `custom`.
 - A full command: `use: { runtime: cli, command: '...' }`, for extra flags.
 

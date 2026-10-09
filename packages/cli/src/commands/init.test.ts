@@ -127,6 +127,11 @@ describe('detectProviders', () => {
     expect(detected.keys).toEqual(['openrouter']);
   });
 
+  it('finds opencode on PATH', () => {
+    const detected = detectProviders({ PATH: fakePath('opencode') }, () => '');
+    expect(detected.clis).toEqual(['opencode']);
+  });
+
   it('skips pi without pi-mcp-adapter, because the explorer needs MCP', () => {
     const PATH = fakePath('pi');
     expect(detectProviders({ PATH }, () => '').clis).toEqual([]);
@@ -182,6 +187,7 @@ describe('renderConfig', () => {
     answers({ platform: 'android', start: undefined, appId: undefined }),
     answers({ platform: 'cli', start: 'pnpm build' }),
     answers({ providers: { explorer: 'openrouter', judge: 'vercel', fixer: 'codex' } }),
+    answers({ providers: { explorer: 'opencode', judge: 'opencode', fixer: 'opencode' } }),
     answers({ providers: { explorer: 'pi', judge: 'kimi', fixer: 'pi' }, piPermissionModes: true }),
   ])('writes a config that parses: %#', (input) => {
     expect(() => parseConfig(parse(renderConfig(input)))).not.toThrow();
@@ -207,6 +213,24 @@ describe('renderConfig', () => {
     expect(config.agents.fixer.enabled).toBe(false);
     expect(config.agents.github.enabled).toBe(false);
     expect(renderConfig(answers())).not.toMatch(/jev|decisions/i);
+  });
+
+  it('expands the opencode preset per role, and keeps the fixer off', () => {
+    const config = parseConfig(
+      parse(renderConfig(answers({ providers: { explorer: 'opencode', judge: 'opencode', fixer: 'opencode' } }))),
+    );
+    expect(config.agents.explorer.use).toMatchObject({
+      runtime: 'cli',
+      command: expect.stringContaining('OPENCODE_CONFIG_CONTENT='),
+    });
+    expect(config.agents.explorer.use).toMatchObject({
+      command: expect.stringContaining('opencode run --standalone --auto --format json'),
+    });
+    expect(config.agents.fixer.use).toMatchObject({
+      runtime: 'cli',
+      command: 'opencode run --standalone --auto --format json',
+    });
+    expect(config.agents.fixer.enabled).toBe(false);
   });
 
   it('writes a model route for an API key provider', () => {
@@ -349,7 +373,7 @@ describe('interview', () => {
 describe('parseInitFlags', () => {
   it('rejects unknown flags and providers', () => {
     expect(() => parseInitFlags(['--bogus'])).toThrow(/Unknown flag/);
-    expect(() => parseInitFlags(['--agent', 'gemini'])).toThrow(/claude, codex, kimi, pi/);
+    expect(() => parseInitFlags(['--agent', 'gemini'])).toThrow(/claude, codex, kimi, opencode, pi/);
   });
 });
 

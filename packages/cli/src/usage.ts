@@ -75,7 +75,7 @@ export const COMMAND_HELP: Record<string, string> = {
   --start "<command>"    the command that starts the app
   --url <url>            web: the app URL
   --app-id <id>          ios, android: the bundle ID or the package name
-  --agent <a>            the LLM for all agents: claude | codex | kimi | pi | openrouter | vercel | openai | anthropic
+  --agent <a>            the LLM for all agents: claude | codex | kimi | opencode | pi | openrouter | vercel | openai | anthropic
   --explorer, --judge, --fixer <a>   the LLM for one agent
   --gate                 write a starter config for the deterministic web gate
 `,
