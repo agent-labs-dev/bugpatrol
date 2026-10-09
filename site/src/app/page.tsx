@@ -38,7 +38,10 @@ const patrolFacts = [
 ];
 
 const support = [
-  { label: 'Platforms', value: 'Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro)' },
+  {
+    label: 'Platforms',
+    value: 'Web (Playwright), Electron (CDP), iOS and Android (Maestro), Linux desktop (Cua/Xvfb), HTTP APIs and CLIs',
+  },
   { label: 'Login', value: 'Any auth system: your own setup commands plus plain-English instructions' },
   {
     label: 'Agent LLMs',
@@ -203,7 +206,9 @@ export default function Home() {
                 View on GitHub
               </a>
             </div>
-            <p className="mt-8 font-mono text-muted text-xs tracking-wider">WEB · ELECTRON · iOS · ANDROID</p>
+            <p className="mt-8 font-mono text-muted text-xs tracking-wider">
+              WEB · ELECTRON · iOS · ANDROID · DESKTOP · API · CLI
+            </p>
           </div>
           <div className="mx-auto max-w-6xl px-6">
             <Image

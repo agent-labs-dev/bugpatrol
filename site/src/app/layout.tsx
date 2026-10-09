@@ -9,7 +9,7 @@ const jetbrains = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrai
 const siteUrl = 'https://agent-labs-dev.github.io/bugpatrol/';
 const title = 'Bugpatrol: a QA team made of agents';
 const description =
-  'Bugpatrol uses your app the way a tester does, finds bugs, fixes them, checks each fix in the running app, and opens the pull requests. Web, Electron, iOS, and Android. Open source.';
+  'Bugpatrol uses your app the way a tester does, finds bugs, fixes them, checks each fix in the running app, and opens the pull requests. Web, Electron, iOS, Android, desktop, HTTP APIs and CLIs. Open source.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

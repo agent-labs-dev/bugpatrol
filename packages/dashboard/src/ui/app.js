@@ -250,7 +250,7 @@ function renderLiveBanner() {
   const total = live.plannedCaptures || done;
   return el('div', { class: 'runbanner' }, [
     el('span', { class: 'spinner' }),
-    el('span', { text: `Run in progress — ${done}/${total} captures` }),
+    el('span', { text: `Run in progress: ${done}/${total} captures` }),
     live.currentStep ? el('span', { class: 'muted', text: live.currentStep }) : null,
   ]);
 }
@@ -367,7 +367,7 @@ function renderDetail() {
         ...trace.suppressed.map((s) =>
           el('div', { class: 'finding' }, [
             el('div', { text: `${s.ruleId} on ${s.screenId}` }),
-            el('div', { class: 'why', text: `"${s.reason}" — ${s.decidedBy}` }),
+            el('div', { class: 'why', text: `"${s.reason}": ${s.decidedBy}` }),
           ]),
         ),
       ]),
@@ -500,7 +500,7 @@ function renderReasoning(screen) {
       'Pixel diff',
       d.identical
         ? `identical (${d.engine}, ${Math.round(d.durationMs)}ms)`
-        : `${d.changedPixels} px across ${d.regionCount} region(s) — ` +
+        : `${d.changedPixels} px across ${d.regionCount} region(s): ` +
             `${(d.changedFraction * 100).toFixed(3)}% of compared area (${d.engine})`,
     );
     add('Masked', `${(d.maskedFraction * 100).toFixed(1)}% of the screen, ` + `${d.maskedRegionCount} region(s)`);
@@ -523,7 +523,7 @@ function renderReasoning(screen) {
     const d = screen.decision;
     add(
       'Decision layer',
-      d.decider === 'none' ? `not consulted — ${d.skippedReason}` : `${d.decider}, $${(d.costUsd ?? 0).toFixed(6)}`,
+      d.decider === 'none' ? `not consulted: ${d.skippedReason}` : `${d.decider}, $${(d.costUsd ?? 0).toFixed(6)}`,
     );
     if (d.stateChars) add('State digest', `${d.stateChars} chars (hash ${String(d.stateHash ?? '').slice(0, 12)})`);
     for (const [key, answer] of Object.entries(d.answers ?? {})) {
@@ -570,7 +570,7 @@ function roleIcon(role) {
 }
 
 function relativeTime(value) {
-  if (!value) return '—';
+  if (!value) return '-';
   const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
   if (!Number.isFinite(seconds)) return value;
   if (seconds < 60) return 'just now';
@@ -628,10 +628,10 @@ function renderUsage(usage) {
               el('td', { text: row.model }),
               el('td', { text: String(row.sessions) }),
               el('td', { text: count(row.tokens.input) }),
-              el('td', { text: row.tokens.cacheRead ? count(row.tokens.cacheRead) : '—' }),
+              el('td', { text: row.tokens.cacheRead ? count(row.tokens.cacheRead) : '-' }),
               el('td', { text: count(row.tokens.output) }),
               el('td', { text: count(Math.round((row.tokens.input + row.tokens.output) / Math.max(1, row.sessions))) }),
-              el('td', { text: row.tokens.listCostUsd ? money(row.tokens.listCostUsd) : '—' }),
+              el('td', { text: row.tokens.listCostUsd ? money(row.tokens.listCostUsd) : '-' }),
             ]),
           ),
         ])
@@ -2075,7 +2075,7 @@ const lightboxCaption = document.getElementById('lightbox-caption');
 
 function openLightbox(path, caption) {
   lightboxImg.src = artifact(path);
-  lightboxCaption.textContent = `${caption} — ${path}`;
+  lightboxCaption.textContent = `${caption}: ${path}`;
   lightbox.hidden = false;
 }
 lightbox.addEventListener('click', () => {

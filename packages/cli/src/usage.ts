@@ -71,7 +71,7 @@ export const COMMAND_HELP: Record<string, string> = {
   init: `bugpatrol init [flags]
   Find the app and the LLMs, and write .bugpatrol/bugpatrol.yml and .bugpatrol/instructions.md.
   --yes, -y              use the detected values, with no questions
-  --platform <p>         web | electron | ios | android
+  --platform <p>         web | electron | ios | android | api | desktop | cli
   --start "<command>"    the command that starts the app
   --url <url>            web: the app URL
   --app-id <id>          ios, android: the bundle ID or the package name
