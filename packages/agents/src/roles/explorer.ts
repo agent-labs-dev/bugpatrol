@@ -23,6 +23,10 @@ function sessionSummary(outcome: RoleOutcome, screens: number, candidates: numbe
   // The counts come from the files, not from the model: its own count can be wrong.
   const counts = `${screens} screen(s) known, ${candidates} candidate(s) raised in ${outcome.steps} steps.`;
   if (outcome.stop === 'done' && outcome.summary) return `${outcome.summary.trim()}\n${counts}`;
+  if (outcome.stop === 'error') {
+    const cause = (outcome.error ?? outcome.summary ?? '').trim().replace(/\s+/g, ' ').slice(0, 300);
+    if (cause) return `The explorer stopped on an error: ${cause}. ${counts}`;
+  }
   return `The explorer ${STOP_REASONS[outcome.stop]}. ${counts}`;
 }
 
