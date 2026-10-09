@@ -33,8 +33,8 @@ const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
     tools: `kimi --quiet --mcp-config '{"mcpServers":{"bugpatrol":{"url":"'{mcpUrl}'"}}}'`,
     fixer: 'kimi --quiet --yolo',
   },
-  // opencode reads extra config from the environment: the inline config gives
-  // it only the Bugpatrol MCP server, with every other tool denied.
+  // opencode reads extra config from the environment: the inline config adds
+  // the Bugpatrol MCP server and denies every other tool.
   opencode: {
     tools: `OPENCODE_CONFIG_CONTENT='{"mcp":{"servers":{"bugpatrol":{"type":"remote","url":"'{mcpUrl}'","oauth":false}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"bugpatrol_*","resource":"*","effect":"allow"},{"action":"execute","resource":"*","effect":"allow"}]}' opencode run --standalone --auto --format json`,
     fixer: 'opencode run --standalone --auto --format json',

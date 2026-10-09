@@ -220,7 +220,43 @@ describe('opencode --format json', () => {
       textEvent('Fixing the clipped label.'),
       '{"type":"error","timestamp":5,"sessionID":"ses_1","error":{"type":"provider.quota","message":"Insufficient Balance","status":402}}',
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({ text: 'Fixing the clipped label.', error: 'Insufficient Balance' });
+    expect(parseCliOutput(out)).toEqual({
+      text: 'Fixing the clipped label.',
+      tokens: undefined,
+      error: 'Insufficient Balance',
+    });
+  });
+
+  it('sums the tokens and the cost across step_finish events', () => {
+    const stepFinish = (tokens: object, cost: number) =>
+      JSON.stringify({
+        type: 'step_finish',
+        timestamp: 1,
+        sessionID: 'ses_1',
+        part: { type: 'step-finish', tokens, cost },
+      });
+    const out = [
+      textEvent('Working.'),
+      stepFinish({ input: 3, output: 175, reasoning: 0, cache: { read: 15054, write: 1367 } }, 0.0225),
+      stepFinish({ input: 3, output: 313, reasoning: 0, cache: { read: 20, write: 0 } }, 0.0451),
+    ].join('\n');
+    expect(parseCliOutput(out)).toEqual({
+      text: 'Working.',
+      tokens: { input: 6, output: 488, cacheRead: 15074, cacheWrite: 1367, listCostUsd: 0.0676 },
+      error: undefined,
+    });
+  });
+
+  it('does not treat a codex failure event as an opencode stream', () => {
+    const out = [
+      '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"Looking at Settings."}}',
+      '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":20}}',
+      '{"type":"turn.failed","error":{"message":"model response stream ended unexpectedly"}}',
+    ].join('\n');
+    expect(parseCliOutput(out)).toEqual({
+      text: 'Looking at Settings.',
+      tokens: { input: 1000, output: 20, cacheRead: 800 },
+    });
   });
 
   it.skipIf(!canListen)('marks the run an error when the CLI exits non-zero with an error event', async () => {

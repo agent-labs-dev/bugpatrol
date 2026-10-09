@@ -65,7 +65,7 @@ npx bugpatrol init
 To use the detected values with no questions, add `--yes`. To select the LLM, add `--agent`:
 
 ```bash
-npx bugpatrol init --yes --agent claude     # claude | codex | kimi | pi | openrouter | vercel | openai | anthropic
+npx bugpatrol init --yes --agent claude     # claude | codex | kimi | opencode | pi | openrouter | vercel | openai | anthropic
 npx bugpatrol init --yes --explorer claude --judge claude --fixer codex
 ```
 
@@ -167,7 +167,7 @@ agents:
     commitMessage: 'fix(app): {title}'     # match your commit hook
     retest: { prepare: npm ci }            # installs the dependencies in each new worktree
     verify: npm run typecheck && npm test  # Bugpatrol runs this after each fix
-    use: claude                            # or codex, kimi, pi, or an API key
+    use: claude                            # or codex, kimi, opencode, pi, or an API key
 ```
 
 Set `verify` to the checks that a fix must pass. Bugpatrol runs the command itself after the fixer stops, so a fix never depends on the agent to run it. If `verify` fails, the fix fails, and the fixer gets a lesson with the error.

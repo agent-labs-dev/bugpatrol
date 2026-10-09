@@ -15,20 +15,30 @@ function quote(value: string): string {
 
 type Parsed = { text: string; tokens?: TokenUsage; model?: string; error?: string };
 
+function startsLikeJson(line: string): boolean {
+  return line.trimStart().startsWith('{');
+}
+
 /**
  * One line of CLI output, as text for the activity feed. A JSON event line
  * (`codex exec --json`) becomes its message text, or nothing.
  */
 function displayLine(line: string): string {
-  if (!line.trimStart().startsWith('{')) return line;
+  if (!startsLikeJson(line)) return line;
   try {
-    const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: string } };
+    const event = JSON.parse(line) as {
+      type?: string;
+      item?: { type?: string; text?: string };
+      part?: { type?: string; text?: string };
+    };
     if (
       event.type === 'item.completed' &&
       typeof event.item?.text === 'string' &&
       ['agent_message', 'reasoning'].includes(event.item.type ?? '')
     )
       return event.item.text;
+    if (event.type === 'text' && typeof event.part?.text === 'string')
+      return event.part.text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/g, '').trim();
     return '';
   } catch {
     return line;
@@ -36,10 +46,10 @@ function displayLine(line: string): string {
 }
 
 function isStructuredEventLine(line: string): boolean {
-  if (!line.trimStart().startsWith('{')) return false;
+  if (!startsLikeJson(line)) return false;
   try {
-    const event = JSON.parse(line) as { part?: { type?: unknown }; error?: { message?: unknown } };
-    return typeof event.part?.type === 'string' || typeof event.error?.message === 'string';
+    const event = JSON.parse(line) as { type?: string; part?: { type?: unknown }; error?: { message?: unknown } };
+    return typeof event.part?.type === 'string' || (event.type === 'error' && typeof event.error?.message === 'string');
   } catch {
     return false;
   }
@@ -48,31 +58,48 @@ function isStructuredEventLine(line: string): boolean {
 function parseStructuredEvents(lines: string[]): Parsed {
   const text: string[] = [];
   const errors: string[] = [];
+  let tokens: TokenUsage | undefined;
+  let costUsd = 0;
   for (const line of lines) {
-    if (line.trimStart().startsWith('{')) {
+    if (startsLikeJson(line)) {
       try {
         const event = JSON.parse(line) as {
           type?: string;
-          part?: { type?: string; text?: string };
+          part?: {
+            type?: string;
+            text?: string;
+            tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
+            cost?: number;
+          };
           error?: { message?: string };
         };
         if (event.type === 'text' && typeof event.part?.text === 'string') {
           const cleaned = event.part.text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/g, '').trim();
           if (cleaned) text.push(cleaned);
-        } else if (typeof event.error?.message === 'string') {
+        } else if (event.type === 'step_finish' && event.part?.tokens) {
+          const t = event.part.tokens;
+          tokens = addUsage(tokens, {
+            input: (t.input ?? 0) + (t.reasoning ?? 0),
+            output: t.output ?? 0,
+            cacheRead: t.cache?.read ?? 0,
+            cacheWrite: t.cache?.write ?? 0,
+          });
+          costUsd += event.part.cost ?? 0;
+        } else if (event.type === 'error' && typeof event.error?.message === 'string') {
           errors.push(event.error.message);
         }
         continue;
       } catch {
-        /* a text line that starts with a brace */
+        /* fall through to displayLine */
       }
     }
     const shown = displayLine(line);
     if (shown) text.push(shown);
   }
+  if (tokens && costUsd) tokens.listCostUsd = costUsd;
   const joined = text.join('\n');
   const cause = errors.join('\n');
-  return cause ? { text: joined, error: cause } : { text: joined };
+  return { text: joined, tokens, ...(cause ? { error: cause } : {}) };
 }
 
 /**
@@ -111,7 +138,7 @@ export function parseCliOutput(stdout: string): Parsed {
   const lines = trimmed.split('\n');
   if (lines.some(isStructuredEventLine)) return parseStructuredEvents(lines);
   for (const line of lines) {
-    if (line.trimStart().startsWith('{')) {
+    if (startsLikeJson(line)) {
       try {
         const event = JSON.parse(line) as { type?: string; usage?: unknown };
         events++;
@@ -280,7 +307,12 @@ export class CliRuntime implements Runtime {
           stop: 'error',
           steps,
           costUsd: 0,
-          error: inputError || parsed.error || stderr.trim().split('\n').slice(-20).join('\n') || `CLI exited ${code}`,
+          error:
+            inputError ||
+            parsed.error ||
+            stderr.trim().split('\n').slice(-20).join('\n') ||
+            text ||
+            `CLI exited ${code}`,
         };
       }
       if (parsed.error) {
