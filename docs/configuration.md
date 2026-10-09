@@ -161,4 +161,4 @@ The layout checks can report controls that are correct, for example text hidden 
 
 ## The deterministic gate
 
-The web gate (`bugpatrol run`) has more settings: `run`, `auth`, `viewports`, `scope`, `crawl`, `mask`, `tolerance`, `determinism`, and `decisions` (an optional general model that reviews the gate findings). `bugpatrol init --gate` writes a starter file with all of them. Refer to [The deterministic gate](deterministic-gate.md) and to [bugpatrol.example.yml](../bugpatrol.example.yml).
+The web gate (`bugpatrol run`) has more settings: `run`, `viewports`, `scope`, `crawl`, `mask`, `tolerance`, `determinism`, and `decisions` (an optional general model that reviews the gate findings). `bugpatrol init --gate` writes a starter file with all of them. Refer to [The deterministic gate](deterministic-gate.md) and to [bugpatrol.example.yml](../bugpatrol.example.yml).

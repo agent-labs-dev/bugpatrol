@@ -1,5 +1,5 @@
 import type { BugpatrolConfig } from '../config/schema.js';
-import type { ArtifactRef, ProjectId, SecretRef } from './ids.js';
+import type { ProjectId, SecretRef } from './ids.js';
 
 export type Project = {
   id: ProjectId;
@@ -42,14 +42,6 @@ export type HealthCheck = {
   timeoutMs: number;
 };
 
-export type AuthStrategy =
-  | { kind: 'none' }
-  | { kind: 'form'; loginUrl: string; credential: SecretRef; steps: Action[] }
-  | { kind: 'storageState'; ref: ArtifactRef; expiresAt?: Date }
-  | { kind: 'seededUser'; seedCommand: string; credential: SecretRef }
-  | { kind: 'ssoBypass'; header?: string; token?: SecretRef }
-  | { kind: 'manual'; ref: ArtifactRef };
-
 export type RecipeResolution = 'config' | 'precedent' | 'convention' | 'docs' | 'agent' | 'manual';
 
 /** How to actually run the product, resolved once during Recon. */
@@ -64,7 +56,6 @@ export type Recipe = {
   run: string;
   healthCheck: HealthCheck;
   env: Record<string, SecretRef>;
-  auth: AuthStrategy;
   fixtures?: string[];
   viewports: Viewport[];
   resolvedBy: RecipeResolution;

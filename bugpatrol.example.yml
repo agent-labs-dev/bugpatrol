@@ -12,16 +12,6 @@ run:
     timeoutMs: 60000
   seeds: ["pnpm db:seed"]
 
-auth:
-  kind: form
-  loginUrl: /login
-  credentials: ${BUGPATROL_TEST_USER}
-  steps:
-    - fill: { selector: "#email", value: "${BUGPATROL_TEST_EMAIL}" }
-    - fill: { selector: "#password", value: "${BUGPATROL_TEST_PASSWORD}" }
-    - click: { selector: "button[type=submit]" }
-    - expect: { url: "/dashboard" }
-
 viewports:
   - { name: desktop, width: 1440, height: 900 }
   - { name: mobile,  width: 390,  height: 844 }

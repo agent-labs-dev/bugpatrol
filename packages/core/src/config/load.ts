@@ -52,28 +52,6 @@ function mergeShallow(raw: unknown, overrides: Partial<BugpatrolConfig>): unknow
 }
 
 /**
- * Resolves ${VAR} references against the environment. Applied to the config
- * only at run time, in the process that drives the browser -- resolved values
- * never reach the model context, the artifacts, or the report.
- */
-export function resolveSecretRefs<T>(value: T, env: NodeJS.ProcessEnv = process.env): T {
-  if (typeof value === 'string') {
-    return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, name: string) => {
-      const found = env[name];
-      if (found === undefined) throw new ConfigError(`Secret ${name} is not set in the environment`);
-      return found;
-    }) as unknown as T;
-  }
-  if (Array.isArray(value)) return value.map((v) => resolveSecretRefs(v, env)) as unknown as T;
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[k] = resolveSecretRefs(v, env);
-    return out as T;
-  }
-  return value;
-}
-
-/**
  * The `run` block, for commands that start a web app themselves. Only
  * `bugpatrol run` and the web driver need it; other platforms start through
  * `app.setup` (ADR 0005).
