@@ -13,7 +13,7 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-type Parsed = { text: string; tokens?: TokenUsage; model?: string };
+type Parsed = { text: string; tokens?: TokenUsage; model?: string; error?: string };
 
 /**
  * One line of CLI output, as text for the activity feed. A JSON event line
@@ -77,9 +77,9 @@ function parseStructuredEvents(lines: string[]): Parsed {
     const shown = displayLine(line);
     if (shown) text.push(shown);
   }
-  if (text.length) return { text: text.join('\n') };
-  if (errors.length) return { text: errors.join('\n') };
-  return { text: '' };
+  const joined = text.join('\n');
+  const cause = errors.join('\n');
+  return { text: joined, ...(cause ? { error: cause } : {}) };
 }
 
 /**
@@ -287,8 +287,11 @@ export class CliRuntime implements Runtime {
           stop: 'error',
           steps,
           costUsd: 0,
-          error: inputError || stderr.trim().split('\n').slice(-20).join('\n') || text || `CLI exited ${code}`,
+          error: inputError || parsed.error || stderr.trim().split('\n').slice(-20).join('\n') || `CLI exited ${code}`,
         };
+      }
+      if (parsed.error) {
+        return { stop: 'error', steps, costUsd: 0, error: parsed.error, summary: summary || text, finished };
       }
       return {
         stop: 'done',

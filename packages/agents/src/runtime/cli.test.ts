@@ -209,7 +209,58 @@ describe('opencode --format json', () => {
     const out =
       '{"type":"error","timestamp":1791554237076,"sessionID":"ses_edf0bd7b0ffeVMG5lgWPZuOnAL","error":{"type":"provider.auth","message":"anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.","status":403}}';
     expect(parseCliOutput(out)).toEqual({
-      text: 'anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.',
+      text: '',
+      error:
+        'anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.',
     });
+  });
+
+  it('keeps the text and the error apart when both arrive', () => {
+    const out = [
+      textEvent('Fixing the clipped label.'),
+      '{"type":"error","timestamp":5,"sessionID":"ses_1","error":{"type":"provider.quota","message":"Insufficient Balance","status":402}}',
+    ].join('\n');
+    expect(parseCliOutput(out)).toEqual({ text: 'Fixing the clipped label.', error: 'Insufficient Balance' });
+  });
+
+  it.skipIf(!canListen)('marks the run an error when the CLI exits non-zero with an error event', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-error-'));
+    try {
+      const script = join(root, 'fail.mjs');
+      await writeFile(
+        script,
+        [
+          "console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: 'half the work done' } }))",
+          "console.log(JSON.stringify({ type: 'error', error: { type: 'provider.quota', message: 'Insufficient Balance' } }))",
+          'process.exit(1)',
+        ].join('\n'),
+      );
+      const outcome = await new CliRuntime({ runtime: 'cli', command: `node ${JSON.stringify(script)}` }).run(
+        task(root),
+        () => {},
+      );
+      expect(outcome).toMatchObject({ stop: 'error', error: 'Insufficient Balance' });
+      expect(outcome.summary).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!canListen)('marks the run an error when an error event arrives on a clean exit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-clean-error-'));
+    try {
+      const script = join(root, 'fail-clean.mjs');
+      await writeFile(
+        script,
+        "console.log(JSON.stringify({ type: 'error', error: { message: 'model rejected the request' } }))",
+      );
+      const outcome = await new CliRuntime({ runtime: 'cli', command: `node ${JSON.stringify(script)}` }).run(
+        task(root),
+        () => {},
+      );
+      expect(outcome).toMatchObject({ stop: 'error', error: 'model rejected the request' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
