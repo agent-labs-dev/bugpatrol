@@ -13,7 +13,7 @@ export function createRuntime(use: RoleRuntime, opts: { fetch?: typeof fetch } =
 
 /** Gives status displays a stable, short label for a configured runtime. */
 export function describeRuntime(use: RoleRuntime): string {
-  return use.runtime === 'model' ? `model:${use.via}/${use.model}` : `cli:${use.command.split(/\s+/)[0] ?? 'shell'}`;
+  return use.runtime === 'model' ? `model:${use.via}/${use.model}` : `cli:${commandProgram(use.command) ?? 'shell'}`;
 }
 
 /** The first word of a shell command that names a program, past any `NAME=value`. */

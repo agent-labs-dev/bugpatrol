@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { addUsage, formatUsage, type RoleRuntime, type TokenUsage, usageFrom } from '@bugpatrol/core';
 import { serveTools } from '../mcp-server.js';
 import type { EventSink, RoleOutcome, RoleTask, Runtime } from '../types.js';
+import { commandProgram } from './index.js';
 import { firstLine } from './model.js';
 
 type CliUse = Extract<RoleRuntime, { runtime: 'cli' }>;
@@ -158,7 +159,7 @@ export class CliRuntime implements Runtime {
   readonly label: string;
 
   constructor(private readonly use: CliUse) {
-    this.label = `cli:${use.command.split(/\s+/)[0] ?? 'shell'}`;
+    this.label = `cli:${commandProgram(use.command) ?? 'shell'}`;
   }
 
   async run(task: RoleTask, emit: EventSink): Promise<RoleOutcome> {
