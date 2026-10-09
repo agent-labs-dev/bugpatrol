@@ -40,7 +40,7 @@ const patrolFacts = [
 const support = [
   {
     label: 'Platforms',
-    value: 'Web (Playwright), Electron (CDP), iOS and Android (Maestro), desktop (Cua), HTTP APIs and CLIs',
+    value: 'Web (Playwright), Electron (CDP), iOS and Android (Maestro), Linux desktop (Cua/Xvfb), HTTP APIs and CLIs',
   },
   { label: 'Login', value: 'Any auth system: your own setup commands plus plain-English instructions' },
   {

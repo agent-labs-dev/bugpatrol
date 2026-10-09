@@ -46,9 +46,9 @@ Run this command in your repo:
 npx bugpatrol init
 ```
 
-`init` finds your app and the LLMs on your machine, and it asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
+`init` detects web, Electron, iOS or Android defaults and installed LLMs, then asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
 
-1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads these from `package.json`, the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, and the Gradle files.
+1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads defaults from `package.json`, the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, and the Gradle files. Select desktop, HTTP API or CLI manually, or pass `--platform desktop`, `--platform api` or `--platform cli`.
 2. The LLM for each agent: the explorer, the judge, and the fixer. An installed agent CLI (Claude Code, Codex, Kimi CLI, or pi) comes first, because it needs no API key. If you have no CLI, `init` recommends an OpenRouter or a Vercel AI Gateway key, and shows where to get one.
 
 `init` puts all the Bugpatrol files in one `.bugpatrol/` folder, and it never overwrites a file:

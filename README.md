@@ -105,7 +105,7 @@ For a web app, install Chromium for Playwright one time:
 PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium
 ```
 
-1. Run `init` in your repo. It finds your app and the LLMs on your machine, and asks which LLM each agent uses:
+1. Run `init` in your repo. It detects web, Electron, iOS or Android defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop, API or CLI explicitly:
 
    ```bash
    npx bugpatrol init
@@ -245,7 +245,7 @@ Give the judge your strongest model, and give the explorer a fast, low-cost mode
 
 | Area | Supported |
 | --- | --- |
-| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), desktop apps through Cua, HTTP APIs and CLIs |
+| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), Linux desktop apps through Cua and Xvfb, HTTP APIs and CLIs |
 | Login | Any auth system: your own setup commands plus plain-English instructions |
 | Agent LLMs | Claude Code, Codex, Kimi CLI, pi, or any CLI agent; or an API key for OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint |
 | GitHub | PRs, issues, and state sync through the `gh` CLI |

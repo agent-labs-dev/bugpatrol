@@ -55,7 +55,7 @@ export async function runIssueCommand(
         role: 'judge',
         source: 'human',
         scope: issue.screenId,
-        text: fitLesson(`Not a bug: ${issue.title}: ${reason}`),
+        text: fitLesson(`Not a bug: ${issue.title} — ${reason}`),
       },
     ]);
     log(`Dismissed ${issue.id}: ${issue.title}`);
