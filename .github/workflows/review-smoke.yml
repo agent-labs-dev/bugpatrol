@@ -1,5 +1,9 @@
 # Runs the Bugpatrol review Action (action.yml) on each pull request, with the
-# Bugpatrol of the pull request itself, against the fixture app.
+# Bugpatrol of the pull request itself. Each job reviews one app and posts its
+# own named review (agents.review.name):
+#   - fixture-app: the fixture app, a stand-in for a team's app
+#   - dashboard:   Bugpatrol's dashboard, built from each side of the change
+#   - cli:         Bugpatrol's command line, built from each side of the change
 name: Review smoke
 
 on:
@@ -9,6 +13,8 @@ on:
       - .github/workflows/review-smoke.yml
       - examples/fixture-app/**
       - examples/review-smoke/**
+      - examples/review-smoke-dashboard/**
+      - examples/review-smoke-cli/**
       - packages/**
       - pnpm-lock.yaml
 
@@ -23,10 +29,22 @@ concurrency:
 
 jobs:
   review:
+    name: review (${{ matrix.app }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: fixture-app
+            dir: examples/review-smoke
+          - app: dashboard
+            dir: examples/review-smoke-dashboard
+          - app: cli
+            dir: examples/review-smoke-cli
     # A pull request from a fork gets no secrets, so the review could not run.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The explorer alone may use its 20 minutes; the base build and the judge come after.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # No `version:` here: it is read from package.json's packageManager.
@@ -45,6 +63,6 @@ jobs:
       - uses: ./
         with:
           package: ${{ steps.pack.outputs.tarball }}
-          working-directory: examples/review-smoke
+          working-directory: ${{ matrix.dir }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

@@ -60,6 +60,7 @@ agents:
     assetsBranch: bugpatrol-assets # the orphan branch that holds report images
     prScope: app                # optional: the scope in PR titles
   review:
+    name: web                   # optional: tells two reviews of one pull request apart, each with its own review and check run
     claims: false               # the claim check of `bugpatrol review`: test what the pull request says it does
     block: false                # set a check run that fails on a disproof from a replay (needs `checks: write`)
     maxSteps: 150               # the model steps of one claim check, across all its sessions

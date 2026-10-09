@@ -14,7 +14,7 @@ import type { Gh } from './github.js';
 import { numberDiff, REVIEW_MARKER, renderReview, SUPERSEDED_MARKER } from './review-comment.js';
 import { reviewPullRequest } from './roles/review.js';
 import { FakeDriver } from './testing/fake-driver.js';
-import type { RoleTask, Runtime, Tool } from './types.js';
+import type { RoleOutcome, RoleTask, Runtime, Tool } from './types.js';
 import { Workspace } from './workspace.js';
 
 const exec = promisify(execFile);
@@ -65,6 +65,8 @@ function fakeGh(
     fork?: boolean;
     reviews?: string;
     comments?: string;
+    /** The ids of the PR comments that the sticky-comment query selects. */
+    sticky?: string;
     body?: string;
     issues?: { number: number; title: string; body: string }[];
   } = {},
@@ -92,8 +94,18 @@ function fakeGh(
       if (!issue) throw new Error(`Unexpected gh ${args.join(' ')}`);
       return JSON.stringify(issue);
     }
-    if (args.includes('--paginate')) return (args[2]!.endsWith('/reviews') ? state.reviews : state.comments) ?? '';
+    if (args.includes('--paginate'))
+      return (
+        (args[2]!.endsWith('/issues/7/comments')
+          ? state.sticky
+          : args[2]!.endsWith('/reviews')
+            ? state.reviews
+            : state.comments) ?? ''
+      );
+    if (args.some((arg) => /\/issues\/(7\/)?comments/.test(arg)))
+      return JSON.stringify({ html_url: 'https://github.com/o/r/pull/7#issuecomment-91' });
     if (args.includes('DELETE')) return '';
+    if (args[1] === 'graphql') return '{}';
     if (args.some((arg) => arg.endsWith('/check-runs')))
       return JSON.stringify({ html_url: 'https://github.com/o/r/runs/1' });
     if (args.some((arg) => arg.includes('/reviews')))
@@ -118,7 +130,10 @@ function fakeGh(
     comments: { path: string; line: number; side: string; body: string }[];
   };
   const posted = () => sent('POST', '/reviews').map((call) => call.input as Posted);
-  return { gh, calls, sent, posted, state };
+  /** The body of the sticky PR comment, as last created or edited. */
+  const sticky = () =>
+    [...sent('POST', '/issues/7/comments'), ...sent('PATCH', '/issues/comments/')].at(-1)?.input?.body as string;
+  return { gh, calls, sent, posted, sticky, state };
 }
 
 const tool = (task: RoleTask, name: string) => task.tools.find((item) => item.name === name)!;
@@ -136,8 +151,14 @@ const screens = () =>
  * The three agents of a review, scripted: the explorer reports `reports` bugs, and the judge gives `verdict`.
  * With `line`, the judge puts the finding on that line of settings.txt.
  */
-function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
+function scripted(
+  verdict: ReviewVerdict,
+  reports = 1,
+  line?: number,
+  explorer: { finish?: Record<string, unknown>; stop?: RoleOutcome['stop']; steps?: number } = {},
+) {
   const tasks: RoleTask[] = [];
+  const refusals: string[] = [];
   const runtime: Runtime = {
     label: 'scripted',
     async run(task) {
@@ -152,7 +173,21 @@ function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
             expected: 'The settings are saved.',
             severity: 'major',
           });
-        await tool(task, 'finish').run({ summary: 'Tested the settings screen.' });
+        if (explorer.finish) {
+          const long = await tool(task, 'finish').run({ tested: ['x'.repeat(200)], untested: [] });
+          if (long.isError) refusals.push(long.content.map((item) => ('text' in item ? item.text : '')).join(''));
+          await tool(task, 'finish').run(explorer.finish);
+        } else {
+          const done = await tool(task, 'finish').run({ tested: ['The settings screen'], untested: [] });
+          expect(done.isError).toBeFalsy();
+        }
+        if (explorer.stop)
+          return {
+            stop: explorer.stop,
+            steps: explorer.steps ?? 15,
+            costUsd: 0.5,
+            finished: explorer.stop === 'max-steps',
+          };
       } else if (tool(task, 'add_claim')) {
         // A source that the pull request does not have.
         const wrong = await tool(task, 'add_claim').run({
@@ -233,7 +268,7 @@ function scripted(verdict: ReviewVerdict, reports = 1, line?: number) {
       return { stop: 'done', steps: 3, costUsd: 0.5, summary: 'Tested the settings screen.' };
     },
   };
-  return { tasks, createRuntime: () => runtime };
+  return { tasks, refusals, createRuntime: () => runtime };
 }
 
 // Each test runs real git and one or more whole reviews.
@@ -241,7 +276,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('tests the pull request build, repeats the flow on the base, and comments on the line that causes the problem', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh();
+      const { gh, posted, sticky } = fakeGh();
       const agents = scripted('introduced', 1, 1);
       const drivers: FakeDriver[] = [];
       const review = await reviewPullRequest(f.root, f.config, 7, {
@@ -282,16 +317,18 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(posted()).toHaveLength(1);
       expect(sent).toMatchObject({ commit_id: f.head, event: 'COMMENT' });
       expect(sent!.body).toContain(REVIEW_MARKER);
-      expect(sent!.body).toContain('**1 problem that this pull request introduces.**');
-      expect(sent!.body).toContain('Each one is a comment on the changed line that causes it.');
-      expect(sent!.body).not.toContain('<img');
+      expect(sticky()).toContain('**1 problem introduced**');
+      expect(sticky()).toContain(
+        '**1. The save button does nothing on Settings** · major · on `settings.txt:1` (line comment)',
+      );
+      expect(sticky()).not.toContain('<img');
       expect(sent!.comments).toMatchObject([{ path: 'settings.txt', line: 1, side: 'RIGHT' }]);
       expect(sent!.comments[0]!.body).toContain('**The save button does nothing on Settings**');
       expect(
         sent!.comments[0]!.body.match(/<img src="https:\/\/github\.com\/o\/r\/blob\/bugpatrol-assets\/pr-7\//g),
       ).toHaveLength(2);
       expect(await f.workspace.readReview(7)).toMatchObject({
-        posted: { url: 'https://github.com/o/r/pull/7#pullrequestreview-1' },
+        posted: { url: 'https://github.com/o/r/pull/7#issuecomment-91' },
       });
 
       // A later `bugpatrol judge` must not file this as an issue of the main branch.
@@ -311,7 +348,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('says in the log and in the review when the app has no guide', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh();
+      const { gh, sticky } = fakeGh();
       const logs: string[] = [];
       const review = await reviewPullRequest(f.root, f.config, 7, {
         gh,
@@ -323,7 +360,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
         'Config: .bugpatrol/bugpatrol.yml. No app guide at .bugpatrol/instructions.md, so the explorer runs without one.',
       );
       expect(review.files).toEqual({ config: '.bugpatrol/bugpatrol.yml' });
-      expect(posted()[0]!.body).toContain('Bugpatrol found no app guide');
+      expect(sticky()).toContain('> **Next run:** Add `.bugpatrol/instructions.md`');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -334,7 +371,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
     try {
       await mkdir(join(f.root, '.bugpatrol'), { recursive: true });
       await writeFile(join(f.root, '.bugpatrol', 'instructions.md'), 'You start signed in on the Home screen.\n');
-      const { gh, posted } = fakeGh();
+      const { gh, sticky } = fakeGh();
       const logs: string[] = [];
       const agents = scripted('introduced');
       const review = await reviewPullRequest(f.root, f.config, 7, {
@@ -349,7 +386,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
       const [explorer, base] = agents.tasks;
       expect(explorer!.system).toContain('You start signed in on the Home screen.');
       expect(base!.system).toContain('You start signed in on the Home screen.');
-      expect(posted()[0]!.body).not.toContain('Bugpatrol found no app guide');
+      expect(sticky()).not.toContain('**Next run:**');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -358,16 +395,15 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('keeps an introduced problem in the review body when the judge names no line', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh();
+      const { gh, posted, sticky } = fakeGh();
       await reviewPullRequest(f.root, f.config, 7, {
         gh,
         createRuntime: scripted('introduced').createRuntime,
         createDriver: screens,
       });
-      const [sent] = posted();
-      expect(sent!.comments).toEqual([]);
-      expect(sent!.body).toContain('#### 1. The save button does nothing on Settings');
-      expect(sent!.body.match(/<img /g)).toHaveLength(2);
+      expect(posted()).toEqual([]);
+      expect(sticky()).toContain('**1. The save button does nothing on Settings** · major');
+      expect(sticky().match(/<img /g)).toHaveLength(2);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -377,8 +413,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
     const f = await fixture();
     try {
       // Review 55 is of an older commit. A person answered its comment 2.
-      const { gh, posted, sent } = fakeGh({
-        reviews: '55 0000000000000000000000000000000000000000',
+      const { gh, calls, posted, sent, sticky } = fakeGh({
+        reviews: '55 0000000000000000000000000000000000000000 PRR_55',
         comments: ['1 55 null', '2 55 null', '3 55 2', '4 77 null'].join('\n'),
       });
       const review = await reviewPullRequest(f.root, f.config, 7, {
@@ -390,14 +426,187 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(review.findings).toMatchObject([{ verdict: 'pre-existing' }]);
       expect(review.findings[0]!.file).toBeUndefined();
       expect(existsSync(join(paths.session(f.root, review.sessions.explorer!), 'decisions.jsonl'))).toBe(false);
-      expect(posted()).toHaveLength(1);
-      expect(posted()[0]!.comments).toEqual([]);
-      expect(posted()[0]!.body).toContain('**No problem found that this pull request introduces.**');
-      expect(posted()[0]!.body).toContain('Already on `main`, not from this pull request (1)');
+      expect(posted()).toEqual([]);
+      expect(sticky()).toContain('**No problem introduced**');
+      expect(sticky()).toContain('<summary>Other findings (1): 1 already on `main`</summary>');
       const replaced = sent('PUT', '/reviews/');
       expect(replaced.map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
       expect(replaced[0]!.input!.body).toContain(SUPERSEDED_MARKER);
+      // GitHub keeps a submitted review for good, so the replaced one is folded away as outdated.
+      const hidden = calls.filter((call) => call.args[1] === 'graphql');
+      expect(hidden.map((call) => call.args.join(' '))).toEqual([
+        expect.stringMatching(/minimizeComment\(input: \{subjectId: \$id, classifier: OUTDATED\}\).* -f id=PRR_55$/),
+      ]);
       expect(sent('DELETE', '/comments/').map((call) => call.path)).toEqual(['repos/o/r/pulls/comments/1']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('with a name, replaces only the older reviews of the same name', async () => {
+    const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'dashboard' });
+    try {
+      const { gh, calls, sent, sticky } = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
+      await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('pre-existing', 1, 1).createRuntime,
+        createDriver: screens,
+      });
+      const marker = '<!-- bugpatrol:review:dashboard -->';
+      expect(sticky().startsWith(marker)).toBe(true);
+      // GitHub applies the filter; it must select this name's reviews only.
+      const query = calls.find((call) => call.args.includes('--paginate') && call.args[2]!.endsWith('/reviews'))!;
+      expect(query.args.at(-1)).toContain(marker);
+      expect(sent('PUT', '/reviews/')[0]!.input!.body).toContain(marker);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps what the explorer tested and did not reach as short lines, and the limit that cut it short', async () => {
+    const f = await fixture();
+    try {
+      const agents = scripted('introduced', 1, 1, {
+        finish: {
+          tested: ['Save on the settings screen'],
+          untested: [{ what: 'Settings on a narrow window', why: 'ran out of steps' }],
+        },
+        stop: 'max-steps',
+      });
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh: fakeGh().gh,
+        createRuntime: agents.createRuntime,
+        createDriver: screens,
+      });
+      expect(agents.refusals[0]).toContain('140 characters');
+      expect(review.coverage).toEqual({
+        tested: ['Save on the settings screen'],
+        untested: [{ what: 'Settings on a narrow window', why: 'ran out of steps' }],
+      });
+      expect(review.cutShort).toEqual({ by: 'max-steps', limit: f.config.agents.explorer.maxSteps });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps one PR comment for each review, and edits it on each push', async () => {
+    const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'web' });
+    try {
+      const github = fakeGh();
+      const run = () =>
+        reviewPullRequest(f.root, f.config, 7, {
+          gh: github.gh,
+          createRuntime: scripted('pre-existing', 1).createRuntime,
+          createDriver: screens,
+          force: true,
+        });
+      const first = await run();
+      expect(github.sent('POST', '/issues/7/comments')).toHaveLength(1);
+      expect(github.sticky().startsWith('<!-- bugpatrol:review:web -->')).toBe(true);
+      expect(first.posted?.url).toBe('https://github.com/o/r/pull/7#issuecomment-91');
+      // The query finds the comment of this name only.
+      const query = github.calls.find((call) => call.args[2]?.endsWith('/issues/7/comments'))!;
+      expect(query.args.at(-1)).toContain('<!-- bugpatrol:review:web -->');
+      github.state.sticky = '91';
+      await run();
+      expect(github.sent('POST', '/issues/7/comments')).toHaveLength(1);
+      expect(github.sent('PATCH', '/issues/comments/').map((call) => call.path)).toEqual([
+        'repos/o/r/issues/comments/91',
+      ]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('puts the line comments in a review of their own that links the PR comment, and replaces older reviews', async () => {
+    const f = await fixture();
+    try {
+      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
+      await reviewPullRequest(f.root, f.config, 7, {
+        gh: github.gh,
+        createRuntime: scripted('introduced', 1, 1).createRuntime,
+        createDriver: screens,
+      });
+      const [review] = github.posted();
+      expect(review!.comments).toHaveLength(1);
+      expect(review!.body).toContain('1 problem on the changed lines');
+      expect(review!.body).toContain('https://github.com/o/r/pull/7#issuecomment-91');
+      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('posts no review when no problem is on a line, and still replaces the older reviews', async () => {
+    const f = await fixture();
+    try {
+      const github = fakeGh({ reviews: '55 0000000000000000000000000000000000000000 PRR_55' });
+      await reviewPullRequest(f.root, f.config, 7, {
+        gh: github.gh,
+        createRuntime: scripted('pre-existing', 1).createRuntime,
+        createDriver: screens,
+      });
+      expect(github.posted()).toEqual([]);
+      expect(github.sticky()).toContain('Other findings (1)');
+      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/55']);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('posts what an explorer tested before it ran out of time, and fails when it did nothing', async () => {
+    const f = await fixture();
+    try {
+      const timedOut = (steps: number) =>
+        reviewPullRequest(f.root, f.config, 7, {
+          gh: fakeGh().gh,
+          createRuntime: scripted('introduced', 1, 1, {
+            finish: { tested: ['The settings screen'], untested: [] },
+            stop: 'timeout',
+            steps,
+          }).createRuntime,
+          createDriver: screens,
+          force: true,
+        });
+      const review = await timedOut(40);
+      expect(review.status).toBe('finished');
+      expect(review.cutShort).toEqual({ by: 'timeout', limit: f.config.agents.explorer.timeoutMs });
+      await expect(timedOut(0)).rejects.toThrow('The explorer did not finish (timeout)');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('takes untested lines as plain text too, and refuses one with nothing in it', async () => {
+    const f = await fixture();
+    try {
+      let refused = '';
+      const agents = scripted('introduced', 0, undefined, {
+        finish: {
+          tested: ['The settings screen'],
+          untested: ['Settings on a narrow window: ran out of steps', 'Dark mode'],
+        },
+      });
+      const runtime = agents.createRuntime();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh: fakeGh().gh,
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task, emit) {
+            if (task.role === 'explorer') {
+              const empty = await tool(task, 'finish').run({ tested: [], untested: [{ why: 'no what' }, 'Dark mode'] });
+              refused = empty.content.map((item) => ('text' in item ? item.text : '')).join('');
+            }
+            return runtime.run(task, emit);
+          },
+        }),
+        createDriver: screens,
+      });
+      expect(refused).toContain('what');
+      expect(review.coverage!.untested).toEqual([
+        { what: 'Settings on a narrow window', why: 'ran out of steps' },
+        { what: 'Dark mode', why: '' },
+      ]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -406,7 +615,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('does not start the base build when the explorer reports nothing', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh();
+      const { gh, sticky } = fakeGh();
       const agents = scripted('introduced', 0);
       let drivers = 0;
       const review = await reviewPullRequest(f.root, f.config, 7, {
@@ -421,13 +630,13 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(agents.tasks).toHaveLength(1);
       expect(review).toMatchObject({ status: 'finished', findings: [], tested: 'Tested the settings screen.' });
       expect(review.sessions.base).toBeUndefined();
-      expect(posted()[0]!.body).toContain('tested what the diff can affect');
+      expect(sticky()).toContain('#### Tested\n\n- The settings screen');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
   });
 
-  it('on the same commit, updates the body of its review and tests nothing', async () => {
+  it('on the same commit, edits its PR comment and tests nothing', async () => {
     const f = await fixture();
     try {
       const github = fakeGh();
@@ -439,12 +648,16 @@ describe('pull request review', { timeout: 30_000 }, () => {
           createDriver: screens,
         });
       await run();
-      github.state.reviews = `90 ${f.head}`;
+      github.state.reviews = `90 ${f.head} PRR_90`;
+      github.state.sticky = '91';
       await run();
       expect(agents.tasks).toHaveLength(3);
       // A second review of the same commit would notify the author again for nothing.
       expect(github.posted()).toHaveLength(1);
-      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/90']);
+      expect(github.sent('PATCH', '/issues/comments/').map((call) => call.path)).toEqual([
+        'repos/o/r/issues/comments/91',
+      ]);
+      expect(github.sent('PUT', '/reviews/')).toEqual([]);
       expect(github.sent('DELETE', '/comments/')).toEqual([]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -553,9 +766,9 @@ describe('pull request review', { timeout: 30_000 }, () => {
       const file = await readFile(join(f.root, '.bugpatrol', 'runs', 'reviews', 'pr-7.md'), 'utf8');
       expect(file).toContain('The save button saves the settings.');
       expect(file).not.toContain('Not a claim.');
-      // Claims first, then the problems that the pull request introduces.
-      expect(file.indexOf('A saved setting shows after a reload.')).toBeLessThan(
-        file.indexOf('No problem found that this pull request introduces.'),
+      // The count of problems leads, then the claims.
+      expect(file.indexOf('**No problem introduced**')).toBeLessThan(
+        file.indexOf('A saved setting shows after a reload.'),
       );
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -565,7 +778,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('lets the judge write the claims from the pull request, and lists an untestable claim with its reason', async () => {
     const f = await fixture();
     try {
-      const { gh, posted } = fakeGh({
+      const { gh, posted, sticky } = fakeGh({
         body: 'Changes how the settings screen saves, and cleans up the settings code.',
         issues: [{ number: 12, title: 'Settings do not save', body: 'Saving does nothing after a reload.' }],
       });
@@ -614,16 +827,16 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(explorer!.prompt).not.toContain('Cleans up the settings code.');
       expect(review.findings).toHaveLength(1);
 
-      // One review: the claims first, then the problems that the pull request introduces.
-      expect(posted()).toHaveLength(1);
-      const [sent] = posted();
-      expect(sent).toMatchObject({ commit_id: f.head, event: 'COMMENT' });
-      expect(sent!.body.startsWith(REVIEW_MARKER)).toBe(true);
-      expect(sent!.body).toContain(`From commit \`${f.head.slice(0, 7)}\``);
-      expect(sent!.body).toContain('Claims that Bugpatrol could not test (3)');
-      expect(sent!.body).toContain('No screen or request shows how clean the code is.');
-      expect(sent!.body.indexOf('The save button saves the settings.')).toBeLessThan(
-        sent!.body.indexOf('**1 problem that this pull request introduces.**'),
+      // One PR comment: the problems first, then the claims. No problem is on a line, so no review.
+      expect(posted()).toEqual([]);
+      const body = sticky();
+      expect(body.startsWith(REVIEW_MARKER)).toBe(true);
+      expect(body).toContain('#### Claims (3): 3 untested');
+      expect(body).toContain(
+        '| Cleans up the settings code. | Untested: No screen or request shows how clean the code is. | |',
+      );
+      expect(body.indexOf('**1 problem introduced**')).toBeLessThan(
+        body.indexOf('The save button saves the settings.'),
       );
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -633,7 +846,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
   it('with the claim check off, reads no claim and asks GitHub for nothing more', async () => {
     const f = await fixture();
     try {
-      const { gh, calls, posted } = fakeGh({ body: '## Claims\n\n- The save button saves the settings.' });
+      const { gh, calls, sticky } = fakeGh({ body: '## Claims\n\n- The save button saves the settings.' });
       const agents = scripted('introduced', 1);
       const review = await reviewPullRequest(f.root, f.config, 7, {
         gh,
@@ -645,7 +858,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(agents.tasks.map((task) => task.role)).toEqual(['explorer', 'explorer', 'judge']);
       expect(calls.some((call) => call.args[0] === 'issue')).toBe(false);
       expect(calls.find((call) => call.args[0] === 'pr')!.args.join(' ')).not.toContain('closingIssuesReferences');
-      expect(posted()[0]!.body).not.toContain('What this pull request says it does');
+      expect(sticky()).not.toContain('What this pull request says it does');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -891,9 +1104,9 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(await f.workspace.listRoutines()).toEqual([]);
       expect(await f.workspace.readAppMap()).toBeUndefined();
 
-      const [sent] = github.posted();
-      expect(sent!.body).toContain('#### The dark mode switch makes the page dark.');
-      expect(sent!.body).toContain('`proven`');
+      const sent = { body: github.sticky() };
+      expect(sent!.body).toContain('| The dark mode switch makes the page dark. | Proven | replay, judged |');
+      expect(sent!.body).toContain('<summary>Proven: The dark mode switch makes the page dark.</summary>');
       expect(sent!.body).toContain(
         'Evidence: the judge, from the screens of a replay of the same steps on both builds.',
       );
@@ -904,13 +1117,13 @@ describe('claim check', { timeout: 30_000 }, () => {
         sent!.body.match(/<img src="https:\/\/github\.com\/o\/r\/blob\/bugpatrol-assets\/pr-7\//g)!.length,
       ).toBeGreaterThanOrEqual(2);
 
-      // The same commit with no --force tests nothing, and updates the review.
-      github.state.reviews = `90 ${f.head}`;
+      // The same commit with no --force tests nothing, and edits the PR comment.
+      github.state.sticky = '91';
       await run();
       expect(agents.tasks).toHaveLength(3);
       expect(app.drivers.head).toHaveLength(2);
-      expect(github.posted()).toHaveLength(1);
-      expect(github.sent('PUT', '/reviews/').map((call) => call.path)).toEqual(['repos/o/r/pulls/7/reviews/90']);
+      expect(github.sent('PATCH', '/issues/comments/')).toHaveLength(1);
+      expect(github.sent('PUT', '/reviews/')).toEqual([]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -996,13 +1209,16 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(file).toContain(`<img src="${join(f.root, byId['claim-1']!.head!.shots.at(-1)!)}"`);
       expect(file).toContain('Bugpatrol saw: The header kept its light background.');
       expect(file).toContain('Evidence: the explorer and the judge, with no replay.');
-      expect(file).toContain('Claims that Bugpatrol could not test (3)');
+      expect(file).toContain('#### Claims (5): 1 partly proven · 1 not proven · 3 untested');
       expect(file).toContain('Bugpatrol saw: The toast showed for about two seconds.');
-      const untested = file.slice(file.indexOf('Claims that Bugpatrol could not test'));
-      expect(untested).toContain('Export works for free accounts.');
-      expect(untested).toContain('The export needs a paid account.');
-      expect(untested).toContain('The explorer did not reach this claim.');
-      expect(untested).not.toContain('The dark mode switch makes the header dark.');
+      expect(file).toContain('| Export works for free accounts. | Untested: The export needs a paid account. | |');
+      expect(file).toContain(
+        '| The settings page loads faster. | Untested: The explorer did not reach this claim. | |',
+      );
+      // A tested claim's details are open when the pull request does not do what it says.
+      expect(file).toContain(
+        '<details open><summary>Not proven: The dark mode switch makes the header dark.</summary>',
+      );
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1046,7 +1262,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(uploads.filter((path) => path.endsWith('.gif'))).toHaveLength(2);
       expect(uploads.filter((path) => path.endsWith('.mp4'))).toHaveLength(2);
       expect(uploads.filter((path) => path.endsWith('.png'))).toHaveLength(0);
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       const url = 'https://github.com/o/r/blob/bugpatrol-assets/pr-7/';
       expect(sent!.body).toMatch(
         new RegExp(
@@ -1095,9 +1311,9 @@ describe('claim check', { timeout: 30_000 }, () => {
         { claim: { id: 'claim-1' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
         { claim: { id: 'claim-2' }, verdict: 'untested', reason: 'No Android emulator runs on this machine.' },
       ]);
-      const [sent] = github.posted();
-      expect(sent!.body).toContain('Claims that Bugpatrol could not test (2)');
-      expect(sent!.body).toContain('No Android emulator runs on this machine.');
+      const sent = { body: github.sticky() };
+      expect(sent!.body).toContain('#### Claims (2): 2 untested');
+      expect(sent!.body).toContain('Untested: No Android emulator runs on this machine.');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1156,7 +1372,7 @@ describe('claim check', { timeout: 30_000 }, () => {
       expect(logs).toContain(
         'Did not upload .bugpatrol/runs/reviews/pr-7/claim-1/head.mp4: it has 11.0 MB, over the limit of 10 MB.',
       );
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       expect(sent!.body).not.toContain('<a href');
       expect(sent!.body).toContain(
         'Full video: `.bugpatrol/runs/reviews/pr-7/claim-1/head.mp4` in the run, and in the dashboard',
@@ -1387,8 +1603,8 @@ describe('claim check with benchmarks', { timeout: 30_000 }, () => {
       expect(text).toContain('median 12');
       expect(text).toContain('median 13');
 
-      const [sent] = github.posted();
-      expect(sent!.body).toContain('#### The settings page loads faster.');
+      const sent = { body: github.sticky() };
+      expect(sent!.body).toContain('| The settings page loads faster. | Partly proven | benchmark |');
       expect(sent!.body).toContain('Evidence: a benchmark on both builds.');
       expect(sent!.body).toContain('| Median | 12 | 13 |');
       expect(sent!.body).toContain('| Spread | 10 to 14 | 11 to 15 |');
@@ -1557,7 +1773,7 @@ describe('blocking claim check', { timeout: 30_000 }, () => {
       expect(app.drivers.head).toHaveLength(2);
       expect(checks()).toEqual([]);
       expect(review.check).toBeUndefined();
-      expect(gh.posted()).toHaveLength(1);
+      expect(gh.sticky()).toContain('Does not block the merge.');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1666,6 +1882,18 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       ]);
       expect(review.claims![1]!.steps).toHaveLength(2);
       expect(app.drivers.base[0]!.current).toBe('saved');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('names its check run after the review name', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root);
+      const { github } = await reviewRepro(f, { head: false, base: false }, { block: true, name: 'cli' });
+      const [check] = github.sent('POST', '/check-runs').map((call) => call.input as CheckRun);
+      expect(check!.name).toBe('Bugpatrol claim check (cli)');
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -1861,7 +2089,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
         expect((await readFile(join(f.root, recording.gif!))).subarray(0, 6).toString()).toBe('GIF89a');
       }
 
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       expect(sent!.body).toContain('Evidence: an exact check on both builds.');
       expect(sent!.body).toMatch(/<img src="[^"]+head\.gif\?raw=true" width="360">/);
       expect(sent!.body).toMatch(/<img src="[^"]+base\.gif\?raw=true" width="360">/);
@@ -1919,7 +2147,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
       });
       expect(finding!.head!.outputs).toEqual(finding!.base!.outputs);
       expect(finding!.compared).toEqual({ rules: expect.arrayContaining(['ISO 8601 times become <time>']), parts: [] });
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       expect(sent!.body).toContain('Evidence: an exact check on both builds.');
       expect(sent!.body).toContain('Normalised before the diff');
       expect(sent!.body).toContain('ISO 8601 times become &lt;time&gt;');
@@ -1939,7 +2167,7 @@ describe('CLI claim', { timeout: 60_000 }, () => {
         saw: 'The output of `cat settings.txt` differs.',
         compared: { parts: [{ step: '$ cat settings.txt', diff: '- save works\n+ save is broken' }] },
       });
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       expect(sent!.body).toContain('```diff\n- save works\n+ save is broken\n```');
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -2150,7 +2378,7 @@ describe('API claim', { timeout: 60_000 }, () => {
         expect(cast).not.toContain(SECRET);
         expect((await readFile(join(f.root, recording.gif!))).subarray(0, 6).toString()).toBe('GIF89a');
       }
-      const [sent] = github.posted();
+      const sent = { body: github.sticky() };
       expect(sent!.body).toContain('Evidence: an exact check on both builds.');
       expect(sent!.body).toContain('Terminal recording</a>');
       expect(sent!.body).toContain('| The status is 404 | Failed, the status is 200 | Passed |');
@@ -2320,29 +2548,155 @@ describe('review rendering', () => {
       (file, line) => file === 'src/a.ts' && line === 11,
     );
 
-  it('puts a problem on its line, and keeps the others in the body, worst first', () => {
+  it('keeps a named marker and the unnamed marker apart, since GitHub matches them as substrings', () => {
+    const named = renderReview(
+      review,
+      (path) => path,
+      () => true,
+      'cli',
+    ).body;
+    expect(named.startsWith('<!-- bugpatrol:review:cli -->')).toBe(true);
+    expect(named).toContain('### Bugpatrol review: cli');
+    expect(named).not.toContain(REVIEW_MARKER);
+    expect(REVIEW_MARKER).not.toContain('<!-- bugpatrol:review:cli -->');
+  });
+
+  it('leads with the count and the commits, and lists each introduced problem, worst first', () => {
     const { body, comments } = render();
     expect(comments).toEqual([{ path: 'src/a.ts', line: 11, body: expect.stringContaining('**A critical problem**') }]);
     expect(comments[0]!.body).toContain(
       '| <img src="https://img/base2.png" width="360"> | <img src="https://img/head2.png" width="360"> |',
     );
     expect(body.startsWith(REVIEW_MARKER)).toBe(true);
-    expect(body).toContain('**3 problems that this pull request introduces.**');
-    expect(body).toContain('1 of them is a comment on the changed line that causes it. The others are below.');
-    expect(body).toContain('(`aaaaaaa`) and from its base (`bbbbbbb` on `main`)');
-    expect(body).not.toContain('A critical problem');
-    // A line that the diff does not show would make GitHub refuse the review.
-    expect(body.indexOf('#### 1. A problem on a line outside the diff')).toBeLessThan(
-      body.indexOf('#### 2. A minor problem'),
-    );
-    // With no base screenshot, the cell says why.
+    expect(body).toContain('**3 problems introduced** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(body).toContain('#### Problems this pull request introduces (3)');
+    const lines = [
+      '**1. A critical problem** · critical · on `src/a.ts:11` (line comment)',
+      // A line that the diff does not show would make GitHub refuse the review.
+      '**2. A problem on a line outside the diff** · major · `src/a.ts:400`',
+      '**3. A minor problem** · minor · screen `settings`',
+    ];
+    for (const line of lines) expect(body).toContain(line);
+    expect(body.indexOf(lines[0]!)).toBeLessThan(body.indexOf(lines[1]!));
+    expect(body.indexOf(lines[1]!)).toBeLessThan(body.indexOf(lines[2]!));
+    // The line comment holds the details of a problem on its line; the body holds the others'.
+    expect(body).not.toContain('Critical reason.');
+    expect(body).toContain('Minor reason.');
     expect(body).toContain('| _Not reached on the base build. The screen is new._ | <img src="https://img/head.png"');
-    expect(body).toContain(
-      '<details><summary>Steps</summary>\n\n1. Run the routine enter-app\n2. Tap Save\n\n</details>',
+    expect(body).toContain('<details><summary>Screenshots and steps</summary>');
+    expect(body).toContain('1. Run the routine enter-app\n2. Tap Save');
+  });
+
+  it('says when nothing was introduced', () => {
+    const { body } = renderReview(
+      { ...review, findings: [] },
+      (path) => path,
+      () => true,
     );
-    expect(body).toContain('<details><summary>Could not compare (1)</summary>');
-    expect(body).toContain('<details><summary>Reported, then judged not a bug (1)</summary>');
-    expect(body).not.toContain('Already on `main`');
-    expect(body).toContain('This review does not block the merge.');
+    expect(body).toContain('**No problem introduced** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(body).not.toContain('#### Problems');
+  });
+
+  it('folds the findings that are not from this pull request into one table', () => {
+    const { body } = render();
+    expect(body).toContain('<details><summary>Other findings (2): 1 could not compare · 1 not a bug</summary>');
+    expect(body).toContain('| Finding | Severity | Verdict | Why |');
+    expect(body).toContain('| Unclear | minor | Could not compare | No base. |');
+    expect(body).toContain('| Intended | minor | Not a bug | By design. |');
+  });
+
+  it('lists what the explorer tested and did not reach, one line each', () => {
+    const { body } = renderReview(
+      {
+        ...review,
+        coverage: {
+          tested: ['Save on the settings screen'],
+          untested: [{ what: 'Settings on a narrow window', why: 'ran out of steps' }],
+        },
+      },
+      (path) => path,
+      () => true,
+    );
+    expect(body).toContain('#### Tested\n\n- Save on the settings screen');
+    expect(body).toContain('#### Not tested\n\n- Settings on a narrow window: ran out of steps');
+    const bare = renderReview(
+      { ...review, coverage: { tested: [], untested: [{ what: 'Dark mode', why: '' }] } },
+      (path) => path,
+      () => true,
+    ).body;
+    expect(bare).toContain('#### Not tested\n\n- Dark mode');
+    expect(bare).not.toContain('- Dark mode:');
+    expect(body).not.toContain('Tested the settings screen.');
+    // A review from before the explorer gave lines keeps its text.
+    expect(render().body).toContain('#### Tested\n\nTested the settings screen.');
+  });
+
+  it('gives one hint for the next run, the one that would help most', () => {
+    const hint = (extra: Partial<PrReview>) =>
+      renderReview(
+        { ...review, ...extra },
+        (path) => path,
+        () => true,
+      ).body.match(/^> \*\*Next run:\*\* .*$/m)?.[0];
+    expect(hint({ cutShort: { by: 'max-steps', limit: 15 }, files: { config: 'c' } })).toBe(
+      "> **Next run:** The explorer used all 15 steps. Raise `agents.explorer.maxSteps`, or the Action's `steps` input.",
+    );
+    expect(hint({ cutShort: { by: 'timeout', limit: 20 * 60 * 1000 } })).toBe(
+      '> **Next run:** The explorer used its 20 minutes. Raise `agents.explorer.timeoutMs`.',
+    );
+    expect(hint({ cutShort: { by: 'budget', limit: 0.5 } })).toBe(
+      '> **Next run:** The explorer spent its $0.50 budget. Raise `agents.explorer.budgetUsd`.',
+    );
+    expect(hint({ files: { config: 'c' } })).toBe(
+      '> **Next run:** Add `.bugpatrol/instructions.md`, an app guide that tells the explorer how to use the app.',
+    );
+    expect(hint({ files: { config: 'c', guide: 'g' } })).toBeUndefined();
+  });
+
+  it('puts the claims in a table, and opens the details of a claim that the pull request breaks', () => {
+    const claim = (id: string, text: string) =>
+      ({ id, text, platform: 'web', source: { kind: 'body' }, testable: true }) as const;
+    const { body } = renderReview(
+      {
+        ...review,
+        claims: [
+          {
+            claim: claim('claim-1', 'Dark mode persists'),
+            verdict: 'proven',
+            evidence: 'assertion',
+            reason: 'Both checks pass.',
+          },
+          {
+            claim: claim('claim-2', 'Rename works'),
+            verdict: 'not-proven',
+            evidence: 'replay',
+            reason: 'The name stays.',
+          },
+          { claim: claim('claim-3', 'Loads faster'), verdict: 'untested', reason: 'Needs iOS.' },
+        ],
+      },
+      (path) => path,
+      () => true,
+    );
+    expect(body).toContain('#### Claims (3): 1 proven · 1 not proven · 1 untested');
+    expect(body).toContain('| Claim | Verdict | Evidence |');
+    expect(body).toContain('| Rename works | Not proven | replay |');
+    expect(body).toContain('| Dark mode persists | Proven | exact check |');
+    expect(body).toContain('| Loads faster | Untested: Needs iOS. | |');
+    expect(body).toContain('<details open><summary>Not proven: Rename works</summary>');
+    expect(body).toContain('<details><summary>Proven: Dark mode persists</summary>');
+    expect(body).not.toContain('<summary>Loads faster');
+  });
+
+  it('says that the comment follows each push, and blocks nothing unless a check run does', () => {
+    expect(render().body).toContain(
+      '<sub>Updated on each push. Tests only what the diff can affect. Does not block the merge.</sub>',
+    );
+    const blocking = renderReview(
+      { ...review, check: { conclusion: 'neutral', title: 't', summary: 's' } },
+      (path) => path,
+      () => true,
+    ).body;
+    expect(blocking).not.toContain('Does not block the merge.');
   });
 });

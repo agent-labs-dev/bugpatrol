@@ -957,6 +957,23 @@ h1 {
   color: var(--muted);
   font-size: 0.75rem;
 }
+.attempt-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.attempt {
+  border-left: 2px solid var(--line);
+  padding: 0.25rem 0 0.75rem 0.9rem;
+  margin-bottom: 0.5rem;
+}
+.attempt h3 {
+  margin: 0;
+}
+.gave-up {
+  color: var(--critical);
+  font-weight: 600;
+}
 .earlier-retests summary {
   cursor: pointer;
   color: var(--muted);

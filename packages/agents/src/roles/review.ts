@@ -35,9 +35,10 @@ import {
 } from '../prompts.js';
 import {
   claimMedia,
+  lineReviewBody,
   numberDiff,
-  REVIEW_MARKER,
   renderReview,
+  reviewMarker,
   SUPERSEDED_MARKER,
   short,
   supersededBody,
@@ -67,7 +68,7 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 });
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
-const CHECK_NAME = 'Bugpatrol claim check';
+const checkName = (name?: string) => (name ? `Bugpatrol claim check (${name})` : 'Bugpatrol claim check');
 
 /** A lockfile diff is long and says nothing about a screen. */
 const DIFF_PATHS = ['.', ':(exclude,glob)**/*.lock', ':(exclude,glob)**/*-lock.*', ':(exclude,glob)**/*.lockb'];
@@ -100,8 +101,56 @@ const REVIEW_TOOLS = new Set([
   'switch_window',
   'report_bug',
   'list_screens',
-  'finish',
 ]);
+
+/** A line of the review that a reader scans: one screen, flow, or reason. */
+const COVERAGE_LINE = 140;
+
+/** The review explorer's finish: what it tested, and what it did not reach and why, as lines of the review. */
+function coverageFinish(keep: (coverage: NonNullable<PrReview['coverage']>) => void): Tool {
+  const refuse = (message: string) => ({ ...response(message), isError: true });
+  return {
+    name: 'finish',
+    description:
+      'Finish with each screen or flow that you tested, and each one the change can affect that you did not reach, ' +
+      `with why. One short line each, under ${COVERAGE_LINE} characters.`,
+    inputSchema: schema(
+      {
+        tested: { type: 'array', items: string },
+        untested: { type: 'array', items: schema({ what: string, why: string }, ['what', 'why']) },
+      },
+      ['tested', 'untested'],
+    ),
+    async run(input) {
+      const tested = (Array.isArray(input.tested) ? input.tested : []).map((line) => String(line).trim());
+      // Some models send "what: why" as one string instead of an object.
+      const untested = (Array.isArray(input.untested) ? input.untested : []).map((item) => {
+        if (typeof item === 'string') {
+          const [what = '', ...why] = item.split(': ');
+          return { what: what.trim(), why: why.join(': ').trim() };
+        }
+        const { what, why } = (item ?? {}) as { what?: unknown; why?: unknown };
+        return { what: String(what ?? '').trim(), why: String(why ?? '').trim() };
+      });
+      if (tested.some((line) => !line) || untested.some((item) => !item.what))
+        return refuse('Each line needs text: a screen or flow in tested, and what (with why) in untested.');
+      if (!tested.length && !untested.length)
+        return refuse('Name what you tested in tested, and what you did not reach in untested.');
+      const long = [...tested, ...untested.flatMap((item) => [item.what, item.why])].find(
+        (line) => line.length > COVERAGE_LINE,
+      );
+      if (long) return refuse(`Keep each line under ${COVERAGE_LINE} characters. Too long: ${long}`);
+      keep({ tested, untested });
+      const text = [
+        tested.length ? `Tested: ${tested.join('; ')}.` : '',
+        untested.length
+          ? `Not reached: ${untested.map((item) => (item.why ? `${item.what} (${item.why})` : item.what)).join('; ')}.`
+          : '',
+      ];
+      return { ...response(text.filter(Boolean).join(' ')), done: true };
+    },
+  };
+}
 
 export type ReviewOptions = {
   gh?: Gh;
@@ -363,6 +412,9 @@ async function exploreHead(
               ].join('\n\n'),
               tools: [
                 ...explorerTools(session, { replay: { save: false } }).filter((tool) => REVIEW_TOOLS.has(tool.name)),
+                coverageFinish((coverage) => {
+                  review.coverage = vars.redact(coverage) as typeof coverage;
+                }),
                 ...(claimWork?.tools ?? []),
               ].map((tool) => stopOnCancellation(session, claimWork ? claimWork.meter(tool) : tool)),
               maxSteps,
@@ -372,8 +424,9 @@ async function exploreHead(
             session.emit,
           ),
       );
-      // "No problem found" from an explorer that did not run would be a false review.
-      if (outcome.stop === 'error' || outcome.stop === 'timeout')
+      // "No problem found" from an explorer that did not run would be a false review. One that ran out of
+      // time after it tested something tested part of the change, as one that ran out of steps.
+      if (outcome.stop === 'error' || (outcome.stop === 'timeout' && !outcome.steps))
         throw new InfrastructureError(
           `The explorer did not finish (${outcome.stop}): ${outcome.error ?? outcome.summary ?? 'no result'}`,
         );
@@ -382,6 +435,10 @@ async function exploreHead(
       review.costUsd += outcome.costUsd;
       const summary = outcome.summary?.trim();
       const cutShort = `The explorer stopped before it finished (${outcome.stop}), so it tested a part of the change only.`;
+      if (outcome.stop === 'max-steps') review.cutShort = { by: 'max-steps', limit: maxSteps };
+      if (outcome.stop === 'timeout') review.cutShort = { by: 'timeout', limit: config.agents.explorer.timeoutMs };
+      if (outcome.stop === 'budget' && config.agents.explorer.budgetUsd !== undefined)
+        review.cutShort = { by: 'budget', limit: config.agents.explorer.budgetUsd };
       review.tested =
         summary && (outcome.stop === 'done' || outcome.finished)
           ? (vars.redact(outcome.stop === 'done' ? summary : `${cutShort}\n\n${summary}`) as string)
@@ -950,28 +1007,55 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
 }
 
 /** The marked reviews on the pull request that no later review replaced yet. */
-async function openReviews(gh: Gh, reviews: string): Promise<{ id: string; commit: string }[]> {
-  const select = `.[] | select(.body | contains("${REVIEW_MARKER}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
-  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id)"`]))
+async function openReviews(
+  gh: Gh,
+  reviews: string,
+  name?: string,
+): Promise<{ id: string; commit: string; node: string }[]> {
+  const select = `.[] | select(.body | contains("${reviewMarker(name)}")) | select(.body | contains("${SUPERSEDED_MARKER}") | not)`;
+  return (await gh(['api', '--paginate', reviews, '--jq', `${select} | "\\(.id) \\(.commit_id) \\(.node_id)"`]))
     .split('\n')
     .filter(Boolean)
     .map((row) => {
-      const [id, commit] = row.split(' ');
-      return { id: id!, commit: commit! };
+      const [id, commit, node] = row.split(' ');
+      return { id: id!, commit: commit!, node: node! };
     });
+}
+
+/** Creates the PR comment of this review, or edits it: one comment for each review name, for the life of the PR. */
+async function saveSticky(
+  gh: Gh,
+  repo: string,
+  pr: number,
+  marker: string,
+  body: string,
+): Promise<{ html_url: string; created: boolean }> {
+  const comments = `repos/${repo}/issues/${pr}/comments`;
+  const [id] = (await gh(['api', '--paginate', comments, '--jq', `.[] | select(.body | contains("${marker}")) | .id`]))
+    .split('\n')
+    .filter(Boolean);
+  const input = JSON.stringify({ body });
+  if (id) {
+    const edited = JSON.parse(
+      await gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${id}`, '--input', '-'], { input }),
+    ) as { html_url: string };
+    return { html_url: edited.html_url, created: false };
+  }
+  const made = JSON.parse(await gh(['api', '-X', 'POST', comments, '--input', '-'], { input })) as { html_url: string };
+  return { html_url: made.html_url, created: true };
 }
 
 /**
  * GitHub keeps a submitted review for good, so an old review gets a one-line
- * body, and Bugpatrol deletes its line comments. A comment that a person
- * answered stays: the answer is theirs.
+ * body, Bugpatrol deletes its line comments, and folds it away as outdated.
+ * A comment that a person answered stays: the answer is theirs.
  */
-async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head: string): Promise<void> {
+async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string; node: string }[], head: string): Promise<void> {
   const pulls = `repos/${ctx.repo}/pulls`;
   const ids = new Set(old.map((review) => review.id));
   for (const id of ids)
     await gh(['api', '-X', 'PUT', `${pulls}/${ctx.pr.number}/reviews/${id}`, '--input', '-'], {
-      input: JSON.stringify({ body: supersededBody(head) }),
+      input: JSON.stringify({ body: supersededBody(head, ctx.config.agents.review.name) }),
     });
   const rows = (
     await gh([
@@ -989,12 +1073,22 @@ async function supersede(ctx: ReviewContext, gh: Gh, old: { id: string }[], head
   for (const [id, review, parent] of rows)
     if (ids.has(review) && parent === 'null' && !answered.has(id))
       await gh(['api', '-X', 'DELETE', `${pulls}/comments/${id}`]);
+  for (const { node } of old)
+    await gh([
+      'api',
+      'graphql',
+      '-f',
+      'query=mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }',
+      '-f',
+      `id=${node}`,
+    ]);
 }
 
 /**
- * Posts a pull request review with the event COMMENT, which never blocks a
- * merge. A new test of the pull request posts a new review and replaces the
- * older ones. The same result on the same commit only updates the body.
+ * Keeps one PR comment for the review and edits it on each push. The problems
+ * on changed lines go in a pull request review with the event COMMENT, which
+ * never blocks a merge. A new test replaces the line comments of the older
+ * reviews. The same result on the same commit only edits the PR comment.
  */
 async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, tested: boolean): Promise<void> {
   const { root, config, repo, pr } = ctx;
@@ -1002,7 +1096,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
   if (ctx.opts.dryRun) {
     const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
-    const rendered = renderReview(review, (path) => resolve(root, path), inDiff);
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(
       file,
@@ -1014,7 +1108,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
           ),
           ...(review.check
             ? [
-                `---\n\nCheck run ${CHECK_NAME}: \`${review.check.conclusion}\`, ${review.check.title}\n\n${review.check.summary}`,
+                `---\n\nCheck run ${checkName(config.agents.review.name)}: \`${review.check.conclusion}\`, ${review.check.title}\n\n${review.check.summary}`,
               ]
             : []),
         ].join('\n\n'),
@@ -1046,23 +1140,21 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
     }
   }
-  const rendered = renderReview(review, (path) => urls.get(path), inDiff);
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name);
   const body = limitBody(redact(rendered.body));
-  const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
-  const open = await openReviews(gh, reviews);
-  const current = open.find((item) => item.commit === review.head);
-  let posted: { html_url: string };
-  if (current && !tested) {
-    posted = JSON.parse(
-      await gh(['api', '-X', 'PUT', `${reviews}/${current.id}`, '--input', '-'], { input: JSON.stringify({ body }) }),
-    );
-  } else {
-    posted = JSON.parse(
+  const name = config.agents.review.name;
+  const posted = await saveSticky(gh, repo, pr.number, reviewMarker(name), body);
+  review.posted = { url: posted.html_url, at: new Date().toISOString() };
+  // A test of a new commit replaces the line comments of the older ones.
+  if (tested) {
+    const reviews = `repos/${repo}/pulls/${pr.number}/reviews`;
+    const open = await openReviews(gh, reviews, name);
+    if (rendered.comments.length)
       await gh(['api', '-X', 'POST', reviews, '--input', '-'], {
         input: JSON.stringify({
           commit_id: review.head,
           event: 'COMMENT',
-          body,
+          body: lineReviewBody(rendered.comments.length, posted.html_url, name),
           comments: rendered.comments.map((comment) => ({
             path: comment.path,
             line: comment.line,
@@ -1070,17 +1162,15 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
             body: limitBody(redact(comment.body)),
           })),
         }),
-      }),
-    );
+      });
     try {
       await supersede(ctx, gh, open, review.head);
     } catch (error) {
       ctx.log(`Could not replace the older review(s) of PR #${pr.number}: ${String(error).split('\n')[0]}`);
     }
   }
-  review.posted = { url: posted.html_url, at: new Date().toISOString() };
   await ctx.workspace.saveReview(review);
-  ctx.log(`${current && !tested ? 'Updated' : 'Posted'} the review of PR #${pr.number}: ${posted.html_url}`);
+  ctx.log(`${posted.created ? 'Posted' : 'Updated'} the review of PR #${pr.number}: ${posted.html_url}`);
   if (review.check) await setCheckRun(ctx, gh, review, review.check);
 }
 
@@ -1095,7 +1185,7 @@ async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: 
     const run = JSON.parse(
       await gh(['api', '-X', 'POST', `repos/${ctx.repo}/check-runs`, '--input', '-'], {
         input: JSON.stringify({
-          name: CHECK_NAME,
+          name: checkName(ctx.config.agents.review.name),
           head_sha: review.head,
           status: 'completed',
           conclusion: check.conclusion,

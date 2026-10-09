@@ -44,7 +44,8 @@ try {
 }
 const graphCamera = { box: null, key: '' };
 let showBackLinks = false;
-let renderedReviews = '';
+let renderedState = '';
+let renderedPage = '';
 
 // ---------------------------------------------------------------- data
 
@@ -61,6 +62,12 @@ async function getJson(url) {
 }
 
 const artifact = (path) => `/api/artifact?path=${encodeURIComponent(path)}`;
+
+async function fetchText(path) {
+  const response = await fetch(artifact(path));
+  if (!response.ok) throw new Error(String(response.status));
+  return response.text();
+}
 
 async function refresh({ keepSelection = true } = {}) {
   const snapshot = await getJson('/api/state');
@@ -134,13 +141,13 @@ async function refresh({ keepSelection = true } = {}) {
       state.selectedReview = reviews[0]?.pr.number ?? null;
     }
     const detail = state.selectedReview ? await getJson(`/api/reviews/${state.selectedReview}`) : null;
-    // A rebuilt page restarts a playing video, so skip the render when the review did not change.
-    const key = JSON.stringify([reviews, detail]);
-    if (key === renderedReviews && view.querySelector('.review-page')) return;
-    renderedReviews = key;
     state.reviews = reviews;
     state.reviewDetail = detail;
   }
+  // A rebuilt page closes what the reader opened and restarts a playing video: skip it when nothing changed.
+  const key = JSON.stringify(state);
+  if (key === renderedState && view.childElementCount) return;
+  renderedState = key;
   render();
 }
 
@@ -162,6 +169,18 @@ function render() {
     button.classList.toggle('active', button.dataset.view === state.view);
     if (button.dataset.view === 'checks') button.hidden = !hasChecks;
   }
+  // The same page, drawn again with new data, keeps what the reader opened and where they were.
+  const page = JSON.stringify([
+    state.view,
+    state.selectedIssueId,
+    state.selectedSessionId,
+    state.selectedReview,
+    state.selectedRunId,
+    state.selectedScreenId,
+  ]);
+  const opened = page === renderedPage ? detailsOpen() : undefined;
+  const scroll = window.scrollY;
+  renderedPage = page;
   view.innerHTML = '';
   if (state.view === 'checks') {
     const banner = renderLiveBanner();
@@ -178,6 +197,25 @@ function render() {
     checks: renderRuns,
   };
   view.append(renderers[state.view]());
+  if (opened) {
+    for (const [key, details] of detailsByKey()) if (opened.has(key)) details.open = opened.get(key);
+    window.scrollTo(0, scroll);
+  }
+}
+
+/** Each <details> on the page by its summary and its place among the ones with the same summary. */
+function detailsByKey() {
+  const seen = new Map();
+  return [...view.querySelectorAll('details')].map((details) => {
+    const summary = details.querySelector('summary')?.textContent ?? '';
+    const nth = (seen.get(summary) ?? 0) + 1;
+    seen.set(summary, nth);
+    return [`${summary}#${nth}`, details];
+  });
+}
+
+function detailsOpen() {
+  return new Map(detailsByKey().map(([key, details]) => [key, details.open]));
 }
 
 function el(tag, props = {}, children = []) {
@@ -826,7 +864,7 @@ function visibleIssues() {
 function renderIssueDetail() {
   const detail = state.issueDetail;
   if (!detail) return el('section', { class: 'card panel empty', text: 'Select an issue.' });
-  const { issue, fix, candidates } = detail;
+  const { issue, fix, candidates, gaveUpAfter, attemptDiffs = {} } = detail;
   const evidence = issue.evidence ?? {};
   const shots = [
     ['Screenshot', evidence.screenshot],
@@ -888,21 +926,26 @@ function renderIssueDetail() {
     fix
       ? el('section', { class: 'fix' }, [
           el('div', { class: 'section-title' }, [el('h2', { text: 'Proposed fix' }), fixBadge(fix)]),
+          gaveUpAfter
+            ? el('p', { class: 'gave-up', text: `The fixer stopped after ${gaveUpAfter} fix attempts.` })
+            : null,
           markdown(fix.summary || 'No summary yet.'),
-          ...(fix.retests?.length
-            ? [
-                retestBlock(fix.retests.at(-1), issue),
-                fix.retests.length > 1
-                  ? el('details', { class: 'earlier-retests' }, [
-                      el('summary', { text: `Earlier attempts (${fix.retests.length - 1})` }),
-                      ...fix.retests
-                        .slice(0, -1)
-                        .reverse()
-                        .map((retest) => retestBlock(retest, issue)),
-                    ])
-                  : null,
-              ]
-            : []),
+          ...(fix.attempts?.length
+            ? []
+            : fix.retests?.length
+              ? [
+                  retestBlock(fix.retests.at(-1), issue),
+                  fix.retests.length > 1
+                    ? el('details', { class: 'earlier-retests' }, [
+                        el('summary', { text: `Earlier retests (${fix.retests.length - 1})` }),
+                        ...fix.retests
+                          .slice(0, -1)
+                          .reverse()
+                          .map((retest) => retestBlock(retest, issue)),
+                      ])
+                    : null,
+                ]
+              : []),
           title('Code change'),
           fix.diffStat ? el('pre', { text: fix.diffStat }) : null,
           // Collapsed: the verdict and the screenshots come first; the diff is
@@ -919,6 +962,9 @@ function renderIssueDetail() {
               ? el('span', { text: `Worktree removed ${new Date(fix.worktreeRemovedAt).toLocaleString()}` })
               : el('code', { text: fix.worktree }),
           ]),
+          ...(fix.attempts?.length
+            ? [title('Fix attempts', 'oldest first'), attemptTimeline(fix, issue, attemptDiffs)]
+            : []),
         ])
       : null,
   ]);
@@ -1013,6 +1059,78 @@ function fixBadge(fix) {
               : 'Proposed';
   const kind = fix.status === 'verified' ? 'pass' : ['declined', 'failed'].includes(fix.status) ? 'fail' : 'warn';
   return el('span', { class: `badge ${kind}`, text: label });
+}
+
+const ATTEMPT_KINDS = { first: 'First fix', rerun: 'Rerun', refix: 'Refix', ci: 'CI fix' };
+const ATTEMPT_OUTCOMES = {
+  proposed: ['Proposed', 'pass'],
+  'no-change': ['No change', 'warn'],
+  declined: ['Declined', 'warn'],
+  'verify-failed': ['Verify failed', 'fail'],
+  error: ['Error', 'fail'],
+  timeout: ['Timed out', 'fail'],
+  abandoned: ['Abandoned', 'fail'],
+};
+
+/** Each fix attempt, oldest first, with the retests that judged it. */
+function attemptTimeline(fix, issue, attemptDiffs) {
+  const last = fix.attempts.at(-1).n;
+  const judged = (n) =>
+    (fix.retests ?? []).filter((retest) =>
+      // A retest from before attempts were recorded, or one naming an unknown attempt, judged the last one.
+      fix.attempts.some((attempt) => attempt.n === retest.fixAttempt) ? retest.fixAttempt === n : n === last,
+    );
+  return el(
+    'ol',
+    { class: 'attempt-timeline' },
+    fix.attempts.map((attempt) => {
+      const [outcome, kind] = attempt.outcome
+        ? (ATTEMPT_OUTCOMES[attempt.outcome] ?? [attempt.outcome, 'info'])
+        : ['Running…', 'info'];
+      return el('li', { class: 'attempt' }, [
+        el('div', { class: 'detail-heading' }, [
+          el('h3', { text: `Attempt ${attempt.n}: ${ATTEMPT_KINDS[attempt.kind] ?? attempt.kind}` }),
+          el('span', { class: `badge ${kind}`, text: outcome }),
+        ]),
+        el('div', { class: 'kv' }, [
+          el('span', { text: relativeTime(attempt.startedAt) }),
+          attempt.costUsd !== undefined ? el('span', { text: money(attempt.costUsd) }) : null,
+        ]),
+        attempt.reason ? markdown(attempt.reason) : null,
+        attempt.diffStat ? el('pre', { text: attempt.diffStat }) : null,
+        attemptDiffs[attempt.n] ? lazyDiff(attemptDiffs[attempt.n]) : null,
+        attempt.verifyOutput
+          ? el('details', { class: 'diff-details' }, [
+              el('summary', { text: 'Show the verify output' }),
+              el('pre', { text: attempt.verifyOutput }),
+            ])
+          : null,
+        ...judged(attempt.n).map((retest) => retestBlock(retest, issue)),
+      ]);
+    }),
+  );
+}
+
+/** A diff file that loads the first time the reader opens it. */
+function lazyDiff(path) {
+  const body = el('div', { class: 'muted', text: 'Loading…' });
+  let loaded = false;
+  return el(
+    'details',
+    {
+      class: 'diff-details',
+      ontoggle: (event) => {
+        if (!event.target.open || loaded) return;
+        loaded = true;
+        fetchText(path)
+          .then((diff) => body.replaceWith(diffBlock(diff)))
+          .catch((error) => {
+            body.textContent = `Could not read the diff: ${error.message}`;
+          });
+      },
+    },
+    [el('summary', { text: 'Show the diff' }), body],
+  );
 }
 
 function retestBlock(retest, issue) {
@@ -1884,8 +2002,7 @@ function castPlayer(path) {
       }, at * 1000);
     });
   });
-  fetch(artifact(path))
-    .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+  fetchText(path)
     .then((text) => {
       cast = parseCast(text);
       if (!cast) throw new Error('not an asciicast file');

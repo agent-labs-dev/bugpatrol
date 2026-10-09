@@ -162,17 +162,25 @@ function prune(messages: Message[]): void {
   }
 }
 
+/**
+ * The longest wait for one model response. A provider can keep a request open
+ * and send nothing; without this, one stalled request takes the rest of the session.
+ */
+const REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
+
 /** Provider calls and tool calls share one step budget, with history kept paired. */
 export class ModelRuntime implements Runtime {
   readonly label: string;
   private readonly request: typeof fetch;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly use: ModelUse,
-    options: { fetch?: typeof fetch } = {},
+    options: { fetch?: typeof fetch; requestTimeoutMs?: number } = {},
   ) {
     this.label = `model:${use.via}/${use.model}`;
     this.request = options.fetch ?? fetch;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   async run(task: RoleTask, emit: EventSink): Promise<RoleOutcome> {
@@ -372,7 +380,16 @@ export class ModelRuntime implements Runtime {
   ): Promise<ResponsePayload> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), Math.max(1, deadline - Date.now()));
+      const left = Math.max(1, deadline - Date.now());
+      // Aborted by this request's own limit, not the session's: ask again.
+      let stalled = false;
+      const timer = setTimeout(
+        () => {
+          stalled = this.requestTimeoutMs < left;
+          controller.abort();
+        },
+        Math.min(left, this.requestTimeoutMs),
+      );
       try {
         const response = await this.request(endpoint, {
           method: 'POST',
@@ -394,7 +411,8 @@ export class ModelRuntime implements Runtime {
       } catch (error) {
         if (
           attempt === 2 ||
-          (error instanceof Error && (/^Model returned 4(?!29)/.test(error.message) || error.name === 'AbortError'))
+          (error instanceof Error &&
+            (/^Model returned 4(?!29)/.test(error.message) || (error.name === 'AbortError' && !stalled)))
         ) {
           throw error;
         }

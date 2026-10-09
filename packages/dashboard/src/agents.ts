@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import {
   type AgentEvent,
@@ -7,9 +7,11 @@ import {
   type AgentsFile,
   type AppMap,
   addUsage,
+  type BugpatrolConfig,
   type Candidate,
   type ClaimVerdict,
   type FixProposal,
+  fixerAttempts,
   type Issue,
   loadConfig,
   type MemoryFile,
@@ -232,7 +234,16 @@ export class AgentReader {
     return readJson<SessionFlow>(paths.sessionFlow(this.root, id));
   }
 
-  issue(id: string): { issue: Issue; fix?: FixProposal; candidates: Candidate[]; routine?: Routine } | undefined {
+  issue(id: string):
+    | {
+        issue: Issue;
+        fix?: FixProposal;
+        gaveUpAfter?: number;
+        attemptDiffs?: Record<number, string>;
+        candidates: Candidate[];
+        routine?: Routine;
+      }
+    | undefined {
     const issue = this.issues().find((entry) => entry.id === id);
     if (!issue) return undefined;
     const fix = this.fixes().find((entry) => entry.id === issue.fixId || entry.issueId === id);
@@ -241,7 +252,32 @@ export class AgentReader {
     const candidates = this.sessions(Infinity)
       .flatMap((session) => jsonLines<Candidate>(join(paths.session(this.root, session.id), 'candidates.jsonl')))
       .filter((candidate) => ids.has(candidate.id));
-    return { issue, fix, candidates, routine };
+    return {
+      issue,
+      fix,
+      gaveUpAfter: fix && this.gaveUpAfter(fix),
+      attemptDiffs: fix && this.attemptDiffs(fix),
+      candidates,
+      routine,
+    };
+  }
+
+  /** Each attempt's diff file that exists, by attempt number, as an artifact path. */
+  private attemptDiffs(fix: FixProposal): Record<number, string> {
+    return Object.fromEntries(
+      (fix.attempts ?? [])
+        .map((attempt) => [attempt.n, paths.fixAttemptDiff(this.root, fix.id, attempt.n)] as const)
+        .filter(([, file]) => existsSync(file))
+        .map(([n, file]) => [n, relative(this.root, file).split(sep).join('/')]),
+    );
+  }
+
+  /** The fixer's attempt count, when this fix failed and reached the limit. CI fix attempts have their own limit. */
+  private gaveUpAfter(fix: FixProposal): number | undefined {
+    const limit = this.config()?.agents.fixer.attempts;
+    const count = fixerAttempts(fix.attempts).length;
+    if (fix.status !== 'failed' || limit === undefined) return undefined;
+    return count >= limit ? count : undefined;
   }
 
   screens(): Omit<AppMap, 'screens'> & { screens: DashboardScreen[]; edges: ScreenEdge[]; entryId?: string } {
@@ -365,16 +401,21 @@ export class AgentReader {
 
   /** Each role as the config sets it, in the same form as the runtime labels. */
   private configuredAgents(): Record<AgentRole, { enabled: boolean; runtime: string }> | undefined {
+    const config = this.config();
+    if (!config) return undefined;
+    return Object.fromEntries(
+      roles.map((role) => {
+        const { enabled, use } = config.agents[role];
+        const runtime = use.runtime === 'cli' ? `cli:${use.command.split(/\s+/)[0]}` : `model:${use.via}/${use.model}`;
+        return [role, { enabled, runtime }];
+      }),
+    ) as Record<AgentRole, { enabled: boolean; runtime: string }>;
+  }
+
+  /** Undefined when the project has no config, unless the dashboard was given one. */
+  private config(): BugpatrolConfig | undefined {
     try {
-      const config = loadConfig(this.root, {}, this.configFile);
-      return Object.fromEntries(
-        roles.map((role) => {
-          const { enabled, use } = config.agents[role];
-          const runtime =
-            use.runtime === 'cli' ? `cli:${use.command.split(/\s+/)[0]}` : `model:${use.via}/${use.model}`;
-          return [role, { enabled, runtime }];
-        }),
-      ) as Record<AgentRole, { enabled: boolean; runtime: string }>;
+      return loadConfig(this.root, {}, this.configFile);
     } catch (error) {
       if (this.configFile) throw error;
       return undefined;

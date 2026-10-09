@@ -211,8 +211,49 @@ export function writeAgentFixture(root: string): void {
     startedAt: at(22),
     endedAt: at(8),
     costUsd: 0.014,
+    // The first attempt failed verify; the rerun repaired it, and a retest judged the rerun.
+    attempts: [
+      {
+        n: 1,
+        kind: 'first',
+        outcome: 'verify-failed',
+        reason: 'Widen the account name column.',
+        diffStat: 'src/settings.css | 1 +',
+        verifyOutput: 'FAIL src/settings.test.ts\n  expected 120px, got 96px',
+        costUsd: 0.006,
+        startedAt: at(22),
+        endedAt: at(18),
+      },
+      {
+        n: 2,
+        kind: 'rerun',
+        outcome: 'proposed',
+        reason: 'Give the account name enough room.',
+        diffStat: 'src/settings.css | 2 +-',
+        costUsd: 0.008,
+        startedAt: at(16),
+        endedAt: at(8),
+      },
+    ],
+    retests: [
+      {
+        attempt: 1,
+        fixAttempt: 2,
+        outcome: 'unclear',
+        reason: 'The settings screen did not finish loading.',
+        before: screens[1]!.lastScreenshot,
+        after: screens[1]!.lastScreenshot,
+        at: at(6),
+      },
+    ],
   };
   save('fixes/fix-settings.json', fix);
+  mkdirSync(join(dir, 'fixes', 'fix-settings'), { recursive: true });
+  writeFileSync(
+    join(dir, 'fixes', 'fix-settings', 'attempt-1.diff'),
+    'diff --git a/src/settings.css b/src/settings.css\n+  min-width: 96px;\n',
+  );
+  writeFileSync(join(dir, 'fixes', 'fix-settings', 'attempt-2.diff'), `${fix.diff}\n`);
   const routines: Routine[] = ['open-home', 'open-settings'].map((id) => ({
     version: 1,
     id,

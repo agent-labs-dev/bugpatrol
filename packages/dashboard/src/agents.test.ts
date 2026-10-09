@@ -254,6 +254,48 @@ describe('AgentReader', () => {
     expect(billing?.openIssues).toBe(1);
   });
 
+  it('says when the fixer gave up on an issue, counting only non-CI attempts', () => {
+    writeAgentFixture(root);
+    writeFileSync(
+      join(root, '.bugpatrol', 'bugpatrol.yml'),
+      [
+        'version: 1',
+        'app:',
+        '  connect: { url: "http://localhost:3000" }',
+        'agents:',
+        '  fixer: { attempts: 2 }',
+        '',
+      ].join('\n'),
+    );
+    const file = join(root, '.bugpatrol', 'runs', 'fixes', 'fix-settings.json');
+    const fix = JSON.parse(readFileSync(file, 'utf8'));
+    const attempt = (n: number, kind: string) => ({ n, kind, outcome: 'verify-failed', startedAt: 'now' });
+    const gaveUpAfter = (attempts: unknown[], status = 'failed') => {
+      writeFileSync(file, JSON.stringify({ ...fix, status, attempts }));
+      return new AgentReader(root).issue('iss-settings')?.gaveUpAfter;
+    };
+    expect(gaveUpAfter([attempt(1, 'first')])).toBeUndefined();
+    expect(gaveUpAfter([attempt(1, 'first'), attempt(2, 'rerun')])).toBe(2);
+    // The limit was lowered after the fact: the page counts the attempts made, not the limit.
+    expect(gaveUpAfter([attempt(1, 'first'), attempt(2, 'rerun'), attempt(3, 'refix')])).toBe(3);
+    expect(gaveUpAfter([attempt(1, 'first'), attempt(2, 'rerun')], 'proposed')).toBeUndefined();
+    expect(gaveUpAfter([attempt(1, 'first'), attempt(2, 'ci')])).toBeUndefined();
+  });
+
+  it('links each fix attempt to its diff file, when the fixer wrote one', () => {
+    writeAgentFixture(root);
+    const file = join(root, '.bugpatrol', 'runs', 'fixes', 'fix-settings.json');
+    const fix = JSON.parse(readFileSync(file, 'utf8'));
+    const attempts = [1, 2].map((n) => ({ n, kind: n === 1 ? 'first' : 'rerun', startedAt: 'now' }));
+    writeFileSync(file, JSON.stringify({ ...fix, attempts }));
+    rmSync(join(root, '.bugpatrol', 'runs', 'fixes', 'fix-settings'), { recursive: true, force: true });
+    mkdirSync(join(root, '.bugpatrol', 'runs', 'fixes', 'fix-settings'), { recursive: true });
+    writeFileSync(join(root, '.bugpatrol', 'runs', 'fixes', 'fix-settings', 'attempt-1.diff'), 'diff --git a/x b/x');
+    expect(new AgentReader(root).issue('iss-settings')?.attemptDiffs).toEqual({
+      1: '.bugpatrol/runs/fixes/fix-settings/attempt-1.diff',
+    });
+  });
+
   it('passes GitHub state into issue rows and the overview', () => {
     writeAgentFixture(root);
     const reader = new AgentReader(root);

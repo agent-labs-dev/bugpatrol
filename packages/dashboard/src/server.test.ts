@@ -51,6 +51,18 @@ describe('resolveArtifactPath', () => {
     }
   });
 
+  it('serves the diff of a fix attempt', () => {
+    mkdirSync(join(root, '.bugpatrol', 'runs', 'fixes', 'fix_a'), { recursive: true });
+    writeFileSync(join(root, '.bugpatrol', 'runs', 'fixes', 'fix_a', 'attempt-1.diff'), 'diff --git a/x b/x');
+    expect(resolveArtifactPath(root, '.bugpatrol/runs/fixes/fix_a/attempt-1.diff')).toBeDefined();
+  });
+
+  it('rejects a diff outside .bugpatrol', () => {
+    writeFileSync(join(outside, 'secret.diff'), 'diff');
+    expect(resolveArtifactPath(root, join(outside, 'secret.diff'))).toBeUndefined();
+    expect(resolveArtifactPath(root, `.bugpatrol/../../${outside.split('/').pop()}/secret.diff`)).toBeUndefined();
+  });
+
   it('rejects a non-artifact extension even inside .bugpatrol', () => {
     expect(resolveArtifactPath(root, '.bugpatrol/notes.txt')).toBeUndefined();
   });

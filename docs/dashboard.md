@@ -31,7 +31,7 @@ The cost on the dashboard counts only the API calls that Bugpatrol makes: the ag
 ## Pages
 
 - **Overview**: what each agent does now and what it spent, the issues that need a human, the live screen, and the screens found so far.
-- **Issues**: each issue with its screenshots and steps, the judge's reason, the fix with its diff, the retest with before and after screenshots, and the PR or issue on GitHub with its state.
+- **Issues**: each issue with its screenshots and steps, the judge's reason, the fix with its diff, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so.
 - **Reviews**: each pull request that `bugpatrol review` reviewed, with its head and base commits. A review page lists each claim with its verdict, the evidence source, the reason, and what Bugpatrol saw on the base build and on the pull request build. The problems that the pull request introduced follow, with base and head screenshots.
 - **Activity**: each session as a timeline, one line for each action.
 - **Screens**: a graph shows how screens connect. Switch to the grid to see each latest screenshot.
@@ -47,7 +47,8 @@ The dashboard shows the files that the agents write. You can also read them dire
 | Path | What it holds |
 | --- | --- |
 | `.bugpatrol/runs/issues/<id>.json` | One issue: title, severity, status, the judge's report and reason, and the evidence |
-| `.bugpatrol/runs/fixes/<id>.json` | One fix: branch, diff, retests, and PR |
+| `.bugpatrol/runs/fixes/<id>.json` | One fix record: branch, diff, fix attempts, retests, and PR |
+| `.bugpatrol/runs/fixes/<id>/attempt-<n>.diff` | The full diff of one fix attempt |
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session: its actions and screenshots |
 | `.bugpatrol/appmap.json` | The screens and how they connect. Committed |
 | `.bugpatrol/routines/` | The learned routines and the issue repros. Committed |

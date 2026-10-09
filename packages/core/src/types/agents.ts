@@ -588,8 +588,12 @@ export type PrReview = {
    * No `guide`: the app had none. Absent on a review from before this field.
    */
   files?: { config: string; guide?: string };
-  /** The explorer's own account of what it tested. */
+  /** The explorer's own account of what it tested, as text. A review that ran no explorer says why here. */
   tested?: string;
+  /** The explorer's account as short lines: what it tested, and what it did not reach and why. */
+  coverage?: { tested: string[]; untested: { what: string; why: string }[] };
+  /** The limit that stopped the explorer before it finished, with its value. */
+  cutShort?: { by: 'max-steps' | 'budget' | 'timeout'; limit: number };
   /** The claim check. Absent when the claim check was off. */
   claims?: ClaimFinding[];
   /** The check run of the claim check. Absent when blocking is off. */

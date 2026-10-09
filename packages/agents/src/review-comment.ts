@@ -5,14 +5,21 @@ import type {
   ClaimEvidence,
   ClaimFinding,
   ClaimSource,
+  ClaimVerdict,
   PrReview,
   ReviewFinding,
   ReviewVerdict,
 } from '@bugpatrol/core';
 import { assertionWords } from './replay.js';
 
-/** Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token. */
-export const REVIEW_MARKER = '<!-- bugpatrol:review -->';
+/**
+ * Finds the reviews of Bugpatrol again, whatever account posted them: a person's gh login, or a CI token.
+ * A named review (`agents.review.name`) has its own marker, so two reviews of one pull request never replace each other.
+ */
+export function reviewMarker(name?: string): string {
+  return name ? `<!-- bugpatrol:review:${name} -->` : '<!-- bugpatrol:review -->';
+}
+export const REVIEW_MARKER = reviewMarker();
 /** A review that a later one replaced. */
 export const SUPERSEDED_MARKER = '<!-- bugpatrol:superseded -->';
 
@@ -22,9 +29,14 @@ export const short = (commit: string) => commit.slice(0, 7);
 /** Where a replay that failed stopped, counting the steps from 1. */
 export const stoppedAt = (replay?: { failedStep?: number }) => `stopped at step ${(replay?.failedStep ?? 0) + 1}`;
 
-function details(summary: string, lines: string[]): string[] {
-  return lines.length ? [`<details><summary>${summary}</summary>\n\n${lines.join('\n')}\n\n</details>`] : [];
+function details(summary: string, lines: string[], open = false): string[] {
+  return lines.length
+    ? [`<details${open ? ' open' : ''}><summary>${summary}</summary>\n\n${lines.join('\n')}\n\n</details>`]
+    : [];
 }
+
+/** Text for one cell of a Markdown table. */
+const cell = (text: string) => text.replaceAll('|', '\\|').replace(/\s*\n\s*/g, ' ');
 
 /**
  * Puts the line number of the new file before each line of a unified diff,
@@ -134,9 +146,7 @@ function claimLines(
   if (!claims) return [];
   const head = `\`${short(review.head)}\``;
   const base = `\`${short(review.base)}\``;
-  const tested = claims.filter((finding) => finding.verdict !== 'untested');
-  const untested = claims.filter((finding) => finding.verdict === 'untested');
-  const cell = (path: string | undefined, fallback: string) => image(path) ?? `_${fallback}_`;
+  const shot = (path: string | undefined, fallback: string) => image(path) ?? `_${fallback}_`;
   const stopped = (finding: ClaimFinding, build: 'head' | 'base') => {
     const replay = finding[build];
     return replay && !replay.ok ? `The replay ${stoppedAt(replay)}.` : 'No screenshot.';
@@ -150,7 +160,7 @@ function claimLines(
     const video = recording && url(recording.file);
     const label = recording?.file.endsWith('.cast') ? 'Terminal recording' : 'Full video';
     return (
-      cell(recording?.gif ?? finding[build]?.shots.at(-1), stopped(finding, build)) +
+      shot(recording?.gif ?? finding[build]?.shots.at(-1), stopped(finding, build)) +
       (video
         ? `<br><a href="${video}">${label}</a>`
         : recording
@@ -194,8 +204,7 @@ function claimLines(
     const replayed = Boolean(finding.head);
     const steps = finding.steps ?? [];
     return [
-      `#### ${finding.claim.text}`,
-      `\`${finding.verdict}\` · From ${sourceWords(finding.claim.source)}.` +
+      `From ${sourceWords(finding.claim.source)}.` +
         (finding.evidence
           ? ` Evidence: ${finding.evidence === 'explored' && replayed ? judgedReplay : evidenceWords[finding.evidence]}.`
           : ''),
@@ -222,7 +231,7 @@ function claimLines(
                     `| Step | Base ${base} | This pull request ${head} |\n| --- | --- | --- |`,
                     ...['Start', ...steps].map(
                       (step, index) =>
-                        `| ${index ? `${index}. ${step}` : step} | ${cell(finding.base?.shots[index], '-')} | ${cell(finding.head?.shots[index], '-')} |`,
+                        `| ${index ? `${index}. ${step}` : step} | ${shot(finding.base?.shots[index], '-')} | ${shot(finding.head?.shots[index], '-')} |`,
                     ),
                   ],
             ),
@@ -230,20 +239,53 @@ function claimLines(
         : []),
     ].join('\n\n');
   };
-  const item = (finding: ClaimFinding) =>
-    `- **${finding.claim.text}**<br><sub>From ${sourceWords(finding.claim.source)}. ${finding.reason}</sub>`;
+  if (!claims.length) return ['#### Claims (0)', 'Bugpatrol found no claim in the pull request.'];
+  const order: ClaimVerdict[] = ['not-proven', 'partly-proven', 'proven', 'untested'];
+  const sorted = [...claims].sort((a, b) => order.indexOf(a.verdict) - order.indexOf(b.verdict));
+  const counts = (['proven', 'partly-proven', 'not-proven', 'untested'] as const)
+    .map((verdict) => [verdict, claims.filter((finding) => finding.verdict === verdict).length] as const)
+    .filter(([, count]) => count)
+    .map(([verdict, count]) => `${count} ${verdictWords[verdict].toLowerCase()}`);
+  const evidence = (finding: ClaimFinding) =>
+    finding.evidence === 'explored' && finding.head
+      ? 'replay, judged'
+      : finding.evidence
+        ? evidenceLabel[finding.evidence]
+        : '';
   return [
-    `#### What this pull request says it does (${claims.length})`,
-    claims.length
-      ? `Bugpatrol compared this pull request (${head}) with its base (${base} on \`${review.baseRef}\`).`
-      : 'Bugpatrol found no claim in the pull request.',
-    ...tested.map(section),
-    ...(untested.length
-      ? [`#### Claims that Bugpatrol could not test (${untested.length})`, untested.map(item).join('\n')]
-      : []),
-    '#### Problems that this pull request introduces',
+    `#### Claims (${claims.length}): ${counts.join(' · ')}`,
+    '| Claim | Verdict | Evidence |\n| --- | --- | --- |\n' +
+      sorted
+        .map((finding) =>
+          finding.verdict === 'untested'
+            ? `| ${cell(finding.claim.text)} | Untested: ${cell(finding.reason)} | |`
+            : `| ${cell(finding.claim.text)} | ${verdictWords[finding.verdict]} | ${evidence(finding)} |`,
+        )
+        .join('\n'),
+    ...sorted
+      .filter((finding) => finding.verdict !== 'untested')
+      .flatMap((finding) =>
+        details(
+          `${verdictWords[finding.verdict]}: ${finding.claim.text}`,
+          [section(finding)],
+          finding.verdict !== 'proven',
+        ),
+      ),
   ];
 }
+
+const verdictWords: Record<ClaimVerdict, string> = {
+  proven: 'Proven',
+  'partly-proven': 'Partly proven',
+  'not-proven': 'Not proven',
+  untested: 'Untested',
+};
+const evidenceLabel: Record<ClaimEvidence, string> = {
+  replay: 'replay',
+  assertion: 'exact check',
+  explored: 'explored',
+  bench: 'benchmark',
+};
 
 export type RenderedReview = {
   body: string;
@@ -263,6 +305,7 @@ export function renderReview(
   review: PrReview,
   imageUrl: (path: string) => string | undefined,
   inDiff: (file: string, line: number) => boolean,
+  name?: string,
 ): RenderedReview {
   const of = (verdict: ReviewVerdict) =>
     review.findings
@@ -283,50 +326,84 @@ export function renderReview(
       heading,
       `**${finding.severity}**${finding.screenId ? ` · screen \`${finding.screenId}\`` : ''}`,
       finding.reason,
-      `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
-        `| ${image(finding.base) ?? `_${finding.baseNote ?? 'No screenshot.'}_`} | ${image(finding.head) ?? '_No screenshot._'} |`,
-      ...details(
-        'Steps',
-        finding.steps.map((step, number) => `${number + 1}. ${step}`),
-      ),
+      ...shots(finding),
     ].join('\n\n');
-  const line = (finding: ReviewFinding) => `- **${finding.title}** (${finding.severity}): ${finding.reason}`;
-  const where =
-    located.length === 0
-      ? []
-      : located.length === introduced.length
-        ? ['Each one is a comment on the changed line that causes it.']
-        : [
-            `${located.length} of them ${located.length === 1 ? 'is a comment on the changed line that causes it' : 'are comments on the changed lines that cause them'}. The others are below.`,
-          ];
+  const shots = (finding: ReviewFinding) => [
+    `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
+      `| ${image(finding.base) ?? `_${finding.baseNote ?? 'No screenshot.'}_`} | ${image(finding.head) ?? '_No screenshot._'} |`,
+    ...details(
+      'Steps',
+      finding.steps.map((step, number) => `${number + 1}. ${step}`),
+    ),
+  ];
+  const problem = (finding: ReviewFinding, index: number) => {
+    const where = onLine(finding)
+      ? `on \`${finding.file}:${finding.line}\` (line comment)`
+      : finding.file && finding.line
+        ? `\`${finding.file}:${finding.line}\``
+        : finding.screenId
+          ? `screen \`${finding.screenId}\``
+          : '';
+    const headline = [`**${index + 1}. ${finding.title}**`, finding.severity, where].filter(Boolean).join(' · ');
+    if (onLine(finding)) return headline;
+    return [
+      headline,
+      finding.reason,
+      ...details('Screenshots and steps', [
+        shots(finding)[0]!,
+        ...finding.steps.map((step, number) => `${number + 1}. ${step}`),
+      ]),
+    ].join('\n\n');
+  };
+  const others = [
+    ...of('pre-existing').map((finding) => [finding, `Already on \`${review.baseRef}\``] as const),
+    ...of('unclear').map((finding) => [finding, 'Could not compare'] as const),
+    ...of('not-a-bug').map((finding) => [finding, 'Not a bug'] as const),
+  ];
+  const otherCounts = [
+    [of('pre-existing').length, `already on \`${review.baseRef}\``],
+    [of('unclear').length, 'could not compare'],
+    [of('not-a-bug').length, 'not a bug'],
+  ]
+    .filter(([count]) => count)
+    .map(([count, words]) => `${count} ${words}`);
+  const coverage = review.coverage;
+  const hint = nextRunHint(review);
   const body = [
-    REVIEW_MARKER,
-    '### Bugpatrol review',
-    ...claimLines(review, image, imageUrl),
-    introduced.length
-      ? `**${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} that this pull request introduces.**`
-      : '**No problem found that this pull request introduces.**',
-    ...where,
-    review.sessions.base
-      ? `Bugpatrol ran the app from this pull request (${head}) and from its base (${base} on \`${review.baseRef}\`), and repeated the same flows on both.`
-      : `Bugpatrol ran the app from this pull request (${head}) and tested what the diff can affect.`,
-    ...(review.files && !review.files.guide
-      ? ['Bugpatrol found no app guide for this repo, so the explorer used the app without one.']
+    reviewMarker(name),
+    name ? `### Bugpatrol review: ${name}` : '### Bugpatrol review',
+    `**${introduced.length ? `${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'}` : 'No problem'} introduced** · ` +
+      `tested ${head} against \`${review.baseRef}\` ${base}`,
+    ...(hint ? [`> **Next run:** ${hint}`] : []),
+    ...(introduced.length
+      ? [`#### Problems this pull request introduces (${introduced.length})`, ...introduced.map(problem)]
       : []),
-    ...introduced
-      .filter((finding) => !onLine(finding))
-      .map((finding, index) => section(finding, `#### ${index + 1}. ${finding.title}`)),
-    ...details(`Already on \`${review.baseRef}\`, not from this pull request (${of('pre-existing').length})`, [
-      ...of('pre-existing').map(line),
-    ]),
-    ...details(`Could not compare (${of('unclear').length})`, [
-      ...of('unclear').map(
-        (finding) => `${line(finding)}${finding.baseNote ? ` Base build: ${finding.baseNote}` : ''}`,
-      ),
-    ]),
-    ...details(`Reported, then judged not a bug (${of('not-a-bug').length})`, [...of('not-a-bug').map(line)]),
-    ...details('What Bugpatrol tested', review.tested ? [review.tested] : []),
-    `<sub>Bugpatrol tested only what the diff can affect, not the whole app. This review does not block the merge.</sub>`,
+    ...claimLines(review, image, imageUrl),
+    ...(coverage
+      ? [
+          ...(coverage.tested.length ? ['#### Tested', coverage.tested.map((line) => `- ${line}`).join('\n')] : []),
+          ...(coverage.untested.length
+            ? [
+                '#### Not tested',
+                coverage.untested.map((item) => `- ${item.what}${item.why ? `: ${item.why}` : ''}`).join('\n'),
+              ]
+            : []),
+        ]
+      : review.tested
+        ? ['#### Tested', review.tested]
+        : []),
+    ...(others.length
+      ? details(`Other findings (${others.length}): ${otherCounts.join(' · ')}`, [
+          '| Finding | Severity | Verdict | Why |\n| --- | --- | --- | --- |',
+          ...others.map(
+            ([finding, verdict]) =>
+              `| ${cell(finding.title)} | ${finding.severity} | ${verdict} | ${cell(
+                `${finding.reason}${finding.verdict === 'unclear' && finding.baseNote ? ` Base build: ${finding.baseNote}` : ''}`,
+              )} |`,
+          ),
+        ])
+      : []),
+    `<sub>Updated on each push. Tests only what the diff can affect.${review.check ? '' : ' Does not block the merge.'}</sub>`,
   ].join('\n\n');
   return {
     body,
@@ -338,7 +415,29 @@ export function renderReview(
   };
 }
 
+/** The review that holds the line comments of one test. The PR comment holds the rest, and changes on each push. */
+export function lineReviewBody(count: number, comment: string, name?: string): string {
+  return [
+    reviewMarker(name),
+    `**Bugpatrol review${name ? `: ${name}` : ''}**: ${count} ${count === 1 ? 'problem' : 'problems'} on the changed lines. ` +
+      `[The full review](${comment}) is updated on each push.`,
+  ].join('\n\n');
+}
+
+/** The one change that would let the next review test more, or undefined when none would. */
+function nextRunHint(review: PrReview): string | undefined {
+  if (review.cutShort?.by === 'max-steps')
+    return `The explorer used all ${review.cutShort.limit} steps. Raise \`agents.explorer.maxSteps\`, or the Action's \`steps\` input.`;
+  if (review.cutShort?.by === 'timeout')
+    return `The explorer used its ${Math.round(review.cutShort.limit / 60_000)} minutes. Raise \`agents.explorer.timeoutMs\`.`;
+  if (review.cutShort?.by === 'budget')
+    return `The explorer spent its $${review.cutShort.limit.toFixed(2)} budget. Raise \`agents.explorer.budgetUsd\`.`;
+  if (review.files && !review.files.guide)
+    return 'Add `.bugpatrol/instructions.md`, an app guide that tells the explorer how to use the app.';
+  return undefined;
+}
+
 /** The body of a review after a later review replaced it. Its marker stays, so it is never replaced again. */
-export function supersededBody(head: string): string {
-  return `${REVIEW_MARKER}\n${SUPERSEDED_MARKER}\n_A Bugpatrol review of \`${short(head)}\` replaced this one._`;
+export function supersededBody(head: string, name?: string): string {
+  return `${reviewMarker(name)}\n${SUPERSEDED_MARKER}\n_A Bugpatrol review of \`${short(head)}\` replaced this one._`;
 }
