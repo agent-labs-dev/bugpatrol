@@ -35,7 +35,6 @@ function displayLine(line: string): string {
   }
 }
 
-/** A JSON event line with `part` text, or an `error` with a message. */
 function isStructuredEventLine(line: string): boolean {
   if (!line.trimStart().startsWith('{')) return false;
   try {
@@ -46,12 +45,6 @@ function isStructuredEventLine(line: string): boolean {
   }
 }
 
-/**
- * The text of newline-delimited JSON events with `part` text: each `text`
- * event joined, with the `<thinking>` blocks removed. Step and tool events
- * add nothing. A run that printed no text reports its error messages, so a
- * provider failure surfaces instead of a silent empty finish.
- */
 function parseStructuredEvents(lines: string[]): Parsed {
   const text: string[] = [];
   const errors: string[] = [];
@@ -79,7 +72,7 @@ function parseStructuredEvents(lines: string[]): Parsed {
   }
   const joined = text.join('\n');
   const cause = errors.join('\n');
-  return { text: joined, ...(cause ? { error: cause } : {}) };
+  return cause ? { text: joined, error: cause } : { text: joined };
 }
 
 /**
