@@ -189,6 +189,12 @@ export const appSchema = z
               .default({}),
           })
           .optional(),
+        /**
+         * Web and Electron: origins besides the app's that the explorer may
+         * `open` directly, e.g. https://accounts.example.com. Taps may still
+         * lead anywhere the app links to.
+         */
+        allowedOrigins: z.array(z.string()).default([]),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
         /** CLI: each command runs in a terminal of 80 by 24 from the app source, and is stopped after this long. */

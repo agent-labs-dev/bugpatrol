@@ -208,7 +208,10 @@ export async function replayRoutine(
 }
 
 function isTargeted(step: RoutineStep): boolean {
-  return (step.kind === 'tap' || step.kind === 'type' || step.kind === 'scroll') && Boolean(step.target);
+  return (
+    (step.kind === 'tap' || step.kind === 'type' || step.kind === 'scroll' || step.kind === 'upload') &&
+    Boolean(step.target)
+  );
 }
 
 /** Most of the expected names on screen: layouts drift, so one missing name is not a failure. */
@@ -222,7 +225,8 @@ async function endsWhereExpected(driver: Driver, expected: string[]): Promise<bo
 
 async function actWhenReady(driver: Driver, action: DriverAction, session: AgentSession, windowMs: number) {
   const retry =
-    (action.kind === 'tap' || action.kind === 'type' || action.kind === 'scroll') && Boolean(action.locator);
+    (action.kind === 'tap' || action.kind === 'type' || action.kind === 'scroll' || action.kind === 'upload') &&
+    Boolean(action.locator);
   const deadline = Date.now() + windowMs;
   let degraded = false;
   while (true) {
@@ -249,6 +253,7 @@ function toAction(step: RoutineStep, session: AgentSession): DriverAction {
   if (step.kind === 'scroll') return { kind: 'scroll', direction: step.direction, locator: step.target };
   if (step.kind === 'open') return { kind: 'open', url: session.vars.resolve(step.url) };
   if (step.kind === 'window') return { kind: 'window', match: step.match };
+  if (step.kind === 'upload') return { kind: 'upload', locator: step.target, file: step.file };
   if (step.kind === 'request')
     return {
       ...step,

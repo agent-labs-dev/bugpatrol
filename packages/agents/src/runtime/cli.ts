@@ -154,7 +154,9 @@ export class CliRuntime implements Runtime {
       const prompt = `${task.system}\n\n${task.prompt}`;
       await writeFile(promptFile, prompt);
       await writeFile(mcpFile, JSON.stringify({ mcpServers: { bugpatrol: { type: 'http', url: mcp.url } } }));
-      const workdir = task.workdir ?? process.cwd();
+      // A role with no worktree acts only through the tools, so it starts in
+      // a directory with nothing in it to read but its prompt.
+      const workdir = task.workdir ?? temp;
       const replacements = {
         prompt: promptFile,
         mcp: mcpFile,

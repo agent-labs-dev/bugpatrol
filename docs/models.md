@@ -80,16 +80,16 @@ agents:
   fixer: { use: codex }
 ```
 
-The preset gives each role the correct flags. The explorer and the judge act only through the Bugpatrol tools, which Bugpatrol gives to the CLI over MCP. The fixer edits files and runs commands in its own worktree. It uses the auto permission mode of its CLI: `--permission-mode auto` for claude and `--approve-for-me` for codex. A CLI with no auto mode skips the prompts: `--yolo` for kimi, and `--perm yolo` for pi with pi-permission-modes.
+The preset gives each role the correct flags. The explorer and the judge act only through the Bugpatrol tools, which Bugpatrol gives to the CLI over MCP. They start in an empty temporary directory, and the `claude` preset turns off the built-in Claude Code tools with `--tools ''`, so neither role can read or run anything on the host. Other CLIs keep their own tools; the empty directory is their only limit. The fixer edits files and runs commands in its own worktree. It uses the auto permission mode of its CLI: `--permission-mode auto` for claude and `--approve-for-me` for codex. A CLI with no auto mode skips the prompts: `--yolo` for kimi, and `--perm yolo` for pi with pi-permission-modes.
 
-To add flags, write the full command. A command gets the prompt on stdin and in `{prompt}` (a file). It gets the tools in `{mcp}` (an MCP config file) or `{mcpUrl}`, and the worktree in `{workdir}`:
+To add flags, write the full command. A command gets the prompt on stdin and in `{prompt}` (a file). It gets the tools in `{mcp}` (an MCP config file) or `{mcpUrl}`, and the worktree in `{workdir}` (an empty temporary directory for the explorer and the judge):
 
 ```yaml
 agents:
   judge:
     use:
       runtime: cli
-      command: claude -p --output-format json --model sonnet --mcp-config {mcp} --strict-mcp-config --allowedTools mcp__bugpatrol
+      command: claude -p --output-format json --model sonnet --tools '' --mcp-config {mcp} --strict-mcp-config --allowedTools mcp__bugpatrol
 ```
 
 Keep `--output-format json` for `claude` and `--json` for `codex`. With these flags, the CLI reports its token usage, and the dashboard shows it. Without them, the dashboard shows no tokens for that agent.
