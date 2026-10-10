@@ -86,7 +86,7 @@ function parseStructuredEvents(lines: string[]): Parsed {
         }
         continue;
       } catch {
-        /* fall through to displayLine */
+        /* a text line that starts with a brace */
       }
     }
     const shown = displayLine(line);
