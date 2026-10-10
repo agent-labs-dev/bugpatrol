@@ -5,6 +5,8 @@ import { MODEL_KEYS } from '@bugpatrol/decide';
 import type { Runtime } from '../types.js';
 import { CliRuntime } from './cli.js';
 import { ModelRuntime } from './model.js';
+import { detectOpencodeMajor, opencodePreset } from './opencode.js';
+import { commandProgram } from './program.js';
 
 /** Selects the configured execution loop without changing the role's tool contract. */
 export function createRuntime(use: RoleRuntime, opts: { fetch?: typeof fetch } = {}): Runtime {
@@ -13,15 +15,9 @@ export function createRuntime(use: RoleRuntime, opts: { fetch?: typeof fetch } =
 
 /** Gives status displays a stable, short label for a configured runtime. */
 export function describeRuntime(use: RoleRuntime): string {
-  return use.runtime === 'model' ? `model:${use.via}/${use.model}` : `cli:${commandProgram(use.command) ?? 'shell'}`;
-}
-
-/** The first word of a shell command that names a program, past any `NAME=value`. */
-export function commandProgram(command: string): string | undefined {
-  return command
-    .trim()
-    .split(/\s+/)
-    .find((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+  if (use.runtime === 'model') return `model:${use.via}/${use.model}`;
+  const program = use.command.includes('{opencode}') ? 'opencode' : commandProgram(use.command);
+  return `cli:${program ?? 'shell'}`;
 }
 
 export function onPath(program: string, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -54,10 +50,15 @@ export function runtimeProblem(
     if (use.via === 'custom' && !use.endpoint) return `The ${role} uses a custom model, but it has no endpoint.`;
     return undefined;
   }
-  const program = commandProgram(use.command);
+  const command = use.command.replaceAll(
+    '{opencode}',
+    opencodePreset(role === 'fixer' ? 'fixer' : 'tools', detectOpencodeMajor()),
+  );
+  const program = commandProgram(command);
   if (program && !onPath(program, env))
     return `The ${role} runs \`${program}\`, but it is not on PATH. Install it, or set agents.${role}.use.`;
   return undefined;
 }
 
+export { commandProgram } from './program.js';
 export { CliRuntime, ModelRuntime };

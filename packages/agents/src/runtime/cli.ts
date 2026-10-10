@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { addUsage, formatUsage, type RoleRuntime, type TokenUsage, usageFrom } from '@bugpatrol/core';
 import { serveTools } from '../mcp-server.js';
 import type { EventSink, RoleOutcome, RoleTask, Runtime } from '../types.js';
-import { commandProgram } from './index.js';
 import { firstLine } from './model.js';
+import { detectOpencodeMajor, opencodePreset } from './opencode.js';
+import { commandProgram } from './program.js';
 
 type CliUse = Extract<RoleRuntime, { runtime: 'cli' }>;
 
@@ -15,6 +16,9 @@ function quote(value: string): string {
 }
 
 type Parsed = { text: string; tokens?: TokenUsage; model?: string; error?: string };
+
+/** Which CLI wrote the stream, when known. Only opencode gets its events parsed. */
+export type CliFlavor = 'opencode' | undefined;
 
 function startsLikeJson(line: string): boolean {
   return line.trimStart().startsWith('{');
@@ -46,16 +50,6 @@ function displayLine(line: string): string {
   }
 }
 
-function isStructuredEventLine(line: string): boolean {
-  if (!startsLikeJson(line)) return false;
-  try {
-    const event = JSON.parse(line) as { type?: string; part?: { type?: unknown }; error?: { message?: unknown } };
-    return typeof event.part?.type === 'string' || (event.type === 'error' && typeof event.error?.message === 'string');
-  } catch {
-    return false;
-  }
-}
-
 function parseStructuredEvents(lines: string[]): Parsed {
   const text: string[] = [];
   const errors: string[] = [];
@@ -72,7 +66,7 @@ function parseStructuredEvents(lines: string[]): Parsed {
             tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
             cost?: number;
           };
-          error?: { message?: string };
+          error?: { name?: string; message?: string; data?: { message?: string } };
         };
         if (event.type === 'text' && typeof event.part?.text === 'string') {
           const cleaned = event.part.text.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/g, '').trim();
@@ -80,14 +74,15 @@ function parseStructuredEvents(lines: string[]): Parsed {
         } else if (event.type === 'step_finish' && event.part?.tokens) {
           const t = event.part.tokens;
           tokens = addUsage(tokens, {
-            input: (t.input ?? 0) + (t.reasoning ?? 0),
-            output: t.output ?? 0,
+            input: t.input ?? 0,
+            output: (t.output ?? 0) + (t.reasoning ?? 0),
             cacheRead: t.cache?.read ?? 0,
             cacheWrite: t.cache?.write ?? 0,
           });
           costUsd += event.part.cost ?? 0;
-        } else if (event.type === 'error' && typeof event.error?.message === 'string') {
-          errors.push(event.error.message);
+        } else if (event.type === 'error' && event.error) {
+          const message = event.error.message ?? event.error.data?.message ?? event.error.name;
+          if (message) errors.push(message);
         }
         continue;
       } catch {
@@ -110,7 +105,7 @@ function parseStructuredEvents(lines: string[]): Parsed {
  * on each `turn.completed`. `opencode run --format json` prints one event on
  * each line, with the text on each `text` event. Plain text has no usage.
  */
-export function parseCliOutput(stdout: string): Parsed {
+export function parseCliOutput(stdout: string, flavor: CliFlavor): Parsed {
   const trimmed = stdout.trim();
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
@@ -137,7 +132,7 @@ export function parseCliOutput(stdout: string): Parsed {
   let events = 0;
   const text: string[] = [];
   const lines = trimmed.split('\n');
-  if (lines.some(isStructuredEventLine)) return parseStructuredEvents(lines);
+  if (flavor === 'opencode') return parseStructuredEvents(lines);
   for (const line of lines) {
     if (startsLikeJson(line)) {
       try {
@@ -157,9 +152,12 @@ export function parseCliOutput(stdout: string): Parsed {
 /** A CLI gets the same tools over local MCP and a prompt on stdin and disk. */
 export class CliRuntime implements Runtime {
   readonly label: string;
+  private readonly flavor: CliFlavor;
 
   constructor(private readonly use: CliUse) {
-    this.label = `cli:${commandProgram(use.command) ?? 'shell'}`;
+    const program = use.command.includes('{opencode}') ? 'opencode' : commandProgram(use.command);
+    this.label = `cli:${program ?? 'shell'}`;
+    this.flavor = program === 'opencode' ? 'opencode' : undefined;
   }
 
   async run(task: RoleTask, emit: EventSink): Promise<RoleOutcome> {
@@ -234,7 +232,9 @@ export class CliRuntime implements Runtime {
         mcpUrl: mcp.url,
         workdir,
       };
-      const command = this.use.command.replace(/\{(prompt|mcp|mcpUrl|workdir)\}/g, (_, name: string) => {
+      const role = task.role === 'fixer' ? 'fixer' : 'tools';
+      const withOpencode = this.use.command.replaceAll('{opencode}', opencodePreset(role, detectOpencodeMajor()));
+      const command = withOpencode.replace(/\{(prompt|mcp|mcpUrl|workdir)\}/g, (_, name: string) => {
         return quote(replacements[name as keyof typeof replacements]);
       });
       const child = spawn('/bin/sh', ['-c', command], {
@@ -280,7 +280,7 @@ export class CliRuntime implements Runtime {
       if (pending.trim()) {
         emit({ kind: 'thought', summary: pending.trim().slice(0, 300) });
       }
-      const parsed = parseCliOutput(stdout);
+      const parsed = parseCliOutput(stdout, this.flavor);
       if (parsed.tokens) {
         const model = parsed.model ?? this.label;
         emit({

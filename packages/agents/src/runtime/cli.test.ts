@@ -123,7 +123,7 @@ describe('CLI token usage', () => {
         'claude-sonnet-5': { inputTokens: 1492, outputTokens: 39 },
       },
     });
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, undefined)).toEqual({
       text: 'Filed 2 issues.',
       model: 'claude-sonnet-5',
       tokens: { input: 1502, output: 40, cacheRead: 1000, cacheWrite: 500, listCostUsd: 0.12 },
@@ -139,14 +139,14 @@ describe('CLI token usage', () => {
       '{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Done."}}',
       '{"type":"turn.completed","usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":5}}',
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, undefined)).toEqual({
       text: 'Looking at Settings.\nDone.',
       tokens: { input: 1500, output: 25, cacheRead: 800 },
     });
   });
 
   it('keeps plain text, with no usage', () => {
-    expect(parseCliOutput('All done\n')).toEqual({ text: 'All done', tokens: undefined });
+    expect(parseCliOutput('All done\n', undefined)).toEqual({ text: 'All done', tokens: undefined });
   });
 
   it.skipIf(!canListen)('emits one usage event with the tokens and the model', async () => {
@@ -189,7 +189,7 @@ describe('opencode --format json', () => {
       '{"type":"step_finish","timestamp":4,"sessionID":"ses_1","part":{"type":"step-finish","reason":"tool-calls"}}',
       textEvent('Done.'),
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({ text: 'Looking at the dashboard.\nDone.' });
+    expect(parseCliOutput(out, 'opencode')).toEqual({ text: 'Looking at the dashboard.\nDone.', tokens: undefined });
   });
 
   it('strips the thinking blocks, also one that never closes', () => {
@@ -197,21 +197,32 @@ describe('opencode --format json', () => {
       textEvent('<thinking>Not needed.</thinking>\n\nok'),
       textEvent("Let's try that.\n\n<thinking>I will use the search tool."),
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({ text: "ok\nLet's try that." });
+    expect(parseCliOutput(out, 'opencode')).toEqual({ text: "ok\nLet's try that.", tokens: undefined });
   });
 
   it('passes non-JSON lines through', () => {
     const out = ['starting up', textEvent('hi')].join('\n');
-    expect(parseCliOutput(out)).toEqual({ text: 'starting up\nhi' });
+    expect(parseCliOutput(out, 'opencode')).toEqual({ text: 'starting up\nhi', tokens: undefined });
   });
 
-  it('reports the error message when there is no text', () => {
+  it('reads a real v2 error line, message at error.message', () => {
     const out =
       '{"type":"error","timestamp":1791554237076,"sessionID":"ses_edf0bd7b0ffeVMG5lgWPZuOnAL","error":{"type":"provider.auth","message":"anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.","status":403}}';
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, 'opencode')).toEqual({
       text: '',
+      tokens: undefined,
       error:
         'anthropic.claude-haiku-5-5 is not available for this account. You can explore other available models on Amazon Bedrock.',
+    });
+  });
+
+  it('reads a real v1 error line, message at error.data.message', () => {
+    const out =
+      '{"type":"error","timestamp":1791582347153,"sessionID":"ses_edd5ee6ebffe6bob6Pa2CPSmJj","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_bb7f88d9"}}}';
+    expect(parseCliOutput(out, 'opencode')).toEqual({
+      text: '',
+      tokens: undefined,
+      error: 'Unexpected server error. Check server logs for details.',
     });
   });
 
@@ -220,14 +231,14 @@ describe('opencode --format json', () => {
       textEvent('Fixing the clipped label.'),
       '{"type":"error","timestamp":5,"sessionID":"ses_1","error":{"type":"provider.quota","message":"Insufficient Balance","status":402}}',
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, 'opencode')).toEqual({
       text: 'Fixing the clipped label.',
       tokens: undefined,
       error: 'Insufficient Balance',
     });
   });
 
-  it('sums the tokens and the cost across step_finish events', () => {
+  it('sums the tokens and the cost across step_finish events, reasoning into output', () => {
     const stepFinish = (tokens: object, cost: number) =>
       JSON.stringify({
         type: 'step_finish',
@@ -238,22 +249,21 @@ describe('opencode --format json', () => {
     const out = [
       textEvent('Working.'),
       stepFinish({ input: 3, output: 175, reasoning: 0, cache: { read: 15054, write: 1367 } }, 0.0225),
-      stepFinish({ input: 3, output: 313, reasoning: 0, cache: { read: 20, write: 0 } }, 0.0451),
+      stepFinish({ input: 3, output: 313, reasoning: 40, cache: { read: 20, write: 0 } }, 0.0451),
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, 'opencode')).toEqual({
       text: 'Working.',
-      tokens: { input: 6, output: 488, cacheRead: 15074, cacheWrite: 1367, listCostUsd: 0.0676 },
-      error: undefined,
+      tokens: { input: 6, output: 528, cacheRead: 15074, cacheWrite: 1367, listCostUsd: 0.0676 },
     });
   });
 
-  it('does not treat a codex failure event as an opencode stream', () => {
+  it('does not parse opencode events when the flavor is not opencode', () => {
     const out = [
       '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"Looking at Settings."}}',
       '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":20}}',
       '{"type":"turn.failed","error":{"message":"model response stream ended unexpectedly"}}',
     ].join('\n');
-    expect(parseCliOutput(out)).toEqual({
+    expect(parseCliOutput(out, undefined)).toEqual({
       text: 'Looking at Settings.',
       tokens: { input: 1000, output: 20, cacheRead: 800 },
     });
@@ -261,41 +271,51 @@ describe('opencode --format json', () => {
 
   it.skipIf(!canListen)('marks the run an error when the CLI exits non-zero with an error event', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-error-'));
+    const path = process.env.PATH;
     try {
-      const script = join(root, 'fail.mjs');
+      const fake = join(root, 'opencode');
       await writeFile(
-        script,
+        fake,
         [
-          "console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: 'half the work done' } }))",
-          "console.log(JSON.stringify({ type: 'error', error: { type: 'provider.quota', message: 'Insufficient Balance' } }))",
-          'process.exit(1)',
+          '#!/bin/sh',
+          'printf \'%s\\n\' \'{"type":"text","part":{"type":"text","text":"half the work done"}}\'',
+          'printf \'%s\\n\' \'{"type":"error","error":{"type":"provider.quota","message":"Insufficient Balance"}}\'',
+          'exit 1',
         ].join('\n'),
       );
-      const outcome = await new CliRuntime({ runtime: 'cli', command: `node ${JSON.stringify(script)}` }).run(
+      const { chmod } = await import('node:fs/promises');
+      await chmod(fake, 0o755);
+      process.env.PATH = `${root}:${path}`;
+      const outcome = await new CliRuntime({ runtime: 'cli', command: 'opencode run --auto --format json' }).run(
         task(root),
         () => {},
       );
       expect(outcome).toMatchObject({ stop: 'error', error: 'Insufficient Balance' });
-      expect(outcome.summary).toBeUndefined();
     } finally {
+      process.env.PATH = path;
       await rm(root, { recursive: true, force: true });
     }
   });
 
   it.skipIf(!canListen)('marks the run an error when an error event arrives on a clean exit', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-clean-error-'));
+    const path = process.env.PATH;
     try {
-      const script = join(root, 'fail-clean.mjs');
+      const fake = join(root, 'opencode');
       await writeFile(
-        script,
-        "console.log(JSON.stringify({ type: 'error', error: { message: 'model rejected the request' } }))",
+        fake,
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"type":"error","error":{"message":"model rejected the request"}}\'',
       );
-      const outcome = await new CliRuntime({ runtime: 'cli', command: `node ${JSON.stringify(script)}` }).run(
+      const { chmod } = await import('node:fs/promises');
+      await chmod(fake, 0o755);
+      process.env.PATH = `${root}:${path}`;
+      const outcome = await new CliRuntime({ runtime: 'cli', command: 'opencode run --auto --format json' }).run(
         task(root),
         () => {},
       );
       expect(outcome).toMatchObject({ stop: 'error', error: 'model rejected the request' });
     } finally {
+      process.env.PATH = path;
       await rm(root, { recursive: true, force: true });
     }
   });

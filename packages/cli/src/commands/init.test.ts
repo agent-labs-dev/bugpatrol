@@ -219,17 +219,9 @@ describe('renderConfig', () => {
     const config = parseConfig(
       parse(renderConfig(answers({ providers: { explorer: 'opencode', judge: 'opencode', fixer: 'opencode' } }))),
     );
-    expect(config.agents.explorer.use).toMatchObject({
-      runtime: 'cli',
-      command: expect.stringContaining('OPENCODE_CONFIG_CONTENT='),
-    });
-    expect(config.agents.explorer.use).toMatchObject({
-      command: expect.stringContaining('opencode run --standalone --auto --format json'),
-    });
-    expect(config.agents.fixer.use).toMatchObject({
-      runtime: 'cli',
-      command: 'opencode run --standalone --auto --format json',
-    });
+    expect(config.agents.explorer.use).toMatchObject({ runtime: 'cli', command: '{opencode}' });
+    expect(config.agents.judge.use).toMatchObject({ runtime: 'cli', command: '{opencode}' });
+    expect(config.agents.fixer.use).toMatchObject({ runtime: 'cli', command: '{opencode}' });
     expect(config.agents.fixer.enabled).toBe(false);
   });
 

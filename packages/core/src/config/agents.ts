@@ -33,11 +33,14 @@ const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
     tools: `kimi --quiet --mcp-config '{"mcpServers":{"bugpatrol":{"url":"'{mcpUrl}'"}}}'`,
     fixer: 'kimi --quiet --yolo',
   },
-  // opencode reads extra config from the environment: the inline config adds
-  // the Bugpatrol MCP server and denies every other tool.
+  // opencode ships two released lines with different flags and config shapes.
+  // The `{opencode}` placeholder resolves to the installed line at spawn time
+  // (packages/agents/src/runtime/opencode.ts). v1: no --standalone, config
+  // keyed under mcp, permission map. v2: --standalone, mcp.servers, ordered
+  // permissions list.
   opencode: {
-    tools: `OPENCODE_CONFIG_CONTENT='{"mcp":{"servers":{"bugpatrol":{"type":"remote","url":"'{mcpUrl}'","oauth":false}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"bugpatrol_*","resource":"*","effect":"allow"},{"action":"execute","resource":"*","effect":"allow"}]}' opencode run --standalone --auto --format json`,
-    fixer: 'opencode run --standalone --auto --format json',
+    tools: '{opencode}',
+    fixer: '{opencode}',
   },
   // pi has no MCP of its own: `--mcp-config` comes from the pi-mcp-adapter
   // extension (`pi install npm:pi-mcp-adapter`).
