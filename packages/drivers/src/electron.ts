@@ -5,8 +5,11 @@ import { WebDriver } from './web.js';
 export class ElectronDriver extends WebDriver {
   override readonly platform = 'electron' as const;
 
-  constructor(private readonly cdpUrl: string) {
-    super({ url: '', viewport: { width: 1280, height: 800 } });
+  constructor(
+    private readonly cdpUrl: string,
+    allowedOrigins: string[] = [],
+  ) {
+    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins });
   }
 
   override async connect(): Promise<void> {
@@ -16,6 +19,7 @@ export class ElectronDriver extends WebDriver {
       throw new Error('Electron CDP connection has no context');
     }
     this.page = await this.choosePage();
+    this.home = new URL(this.page.url());
     for (const page of this.context.pages()) {
       this.watch(page);
     }

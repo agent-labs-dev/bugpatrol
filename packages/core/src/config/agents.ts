@@ -3,7 +3,8 @@ import type { AgentRole } from '../types/agents.js';
 /**
  * Local agent CLIs that can run a role (ADR 0005). A preset is the command a
  * role needs: the explorer and the judge act only through the Bugpatrol MCP
- * tools, so their command loads `{mcp}` and pre-approves those tools. The
+ * tools, so their command loads `{mcp}`, pre-approves those tools, and, where
+ * the CLI allows it, turns its own file and shell tools off. The
  * fixer edits files and runs the repo's tests in its worktree, so its command
  * uses the CLI's auto permission mode, or skips the prompts when the CLI has
  * no auto mode.
@@ -16,7 +17,8 @@ export type CliAgent = (typeof CLI_AGENTS)[number];
 
 const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
   claude: {
-    tools: 'claude -p --output-format json --mcp-config {mcp} --strict-mcp-config --allowedTools mcp__bugpatrol',
+    tools:
+      "claude -p --output-format json --tools '' --mcp-config {mcp} --strict-mcp-config --allowedTools mcp__bugpatrol",
     fixer: 'claude -p --output-format json --permission-mode auto',
   },
   // `-c` parses its value as TOML and keeps a bare URL as a string.

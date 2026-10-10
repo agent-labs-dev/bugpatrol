@@ -64,6 +64,13 @@ export type Locator = {
 };
 
 /**
+ * A file Bugpatrol makes for an upload, the same bytes on every run, so an
+ * upload replays like any other step.
+ */
+export const SAMPLE_FILES = ['image', 'pdf', 'text'] as const;
+export type SampleFile = (typeof SAMPLE_FILES)[number];
+
+/**
  * One replayable action. `value` may hold `{{NAME}}` placeholders; they are
  * resolved when the step runs and never stored resolved.
  */
@@ -76,6 +83,8 @@ export type RoutineStep = (
   | { kind: 'open'; url: string }
   | { kind: 'wait'; ms: number }
   | { kind: 'window'; match: string }
+  /** Web and Electron: attach a sample file to a file input, or to the control that opens the file picker. */
+  | { kind: 'upload'; target: Locator; file: SampleFile }
   | {
       kind: 'request';
       method: HttpMethod;

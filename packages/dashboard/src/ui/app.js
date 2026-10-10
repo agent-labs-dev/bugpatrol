@@ -1006,6 +1006,7 @@ function stepWords(step) {
   if (step.kind === 'open') return `Open ${step.url}`;
   if (step.kind === 'wait') return `Wait ${step.ms} ms`;
   if (step.kind === 'window') return `Switch to window "${step.match}"`;
+  if (step.kind === 'upload') return `Upload a sample ${step.file} file to "${target}"`;
   return step.kind === 'back' ? 'Go back' : step.kind;
 }
 

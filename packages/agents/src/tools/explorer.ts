@@ -16,6 +16,7 @@ import {
   type Locator,
   type Routine,
   type RoutineStep,
+  SAMPLE_FILES,
   type ScreenTransition,
   shortHash,
 } from '@bugpatrol/core';
@@ -47,6 +48,7 @@ function elementLine(element: UiElement): string {
   const flags = [
     element.value !== undefined ? `value=${JSON.stringify(element.value)}` : '',
     element.focused ? 'focused' : '',
+    element.expanded === undefined ? '' : element.expanded ? 'expanded' : 'collapsed',
     element.enabled ? '' : 'disabled',
   ]
     .filter(Boolean)
@@ -71,6 +73,7 @@ export function errorLines(observation: Observation): string[] {
   return [
     ...lines('Console errors', unique(observation.consoleErrors)),
     ...lines('Failed requests', unique(observation.networkErrors)),
+    ...lines('Dialogs (Bugpatrol accepts each one)', unique(observation.dialogs)),
   ];
 }
 
@@ -159,13 +162,15 @@ function transition(session: AgentSession, to: string): ScreenTransition | undef
         ? `open ${last.url}`
         : last.kind === 'window'
           ? `window ${last.match}`
-          : last.kind === 'back'
-            ? 'back'
-            : last.kind === 'press'
-              ? `press ${last.key}`
-              : last.kind === 'type'
-                ? (last.target?.name ?? 'submit')
-                : last.kind;
+          : last.kind === 'upload'
+            ? `upload ${last.file}`
+            : last.kind === 'back'
+              ? 'back'
+              : last.kind === 'press'
+                ? `press ${last.key}`
+                : last.kind === 'type'
+                  ? (last.target?.name ?? 'submit')
+                  : last.kind;
   const via = (session.vars.redact(label) as string).slice(0, 60);
   return { to, kind, via, steps: actions.length, count: 1, lastSeenAt: new Date().toISOString() };
 }
@@ -228,6 +233,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `Waited ${Math.round(action.ms / 1000)}s`;
     case 'window':
       return `Switched to the "${action.match}" window`;
+    case 'upload':
+      return `Uploaded a sample ${action.file} file to ${named(action.ref)}`;
     case 'request':
       return `${action.method} ${session.vars.redact(action.url)}`;
     case 'run':
@@ -395,6 +402,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'press') return `press:${step.key}`;
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
+  if (step.kind === 'upload') return `upload:${locatorSignature(step.target)}:${step.file}`;
   if (step.kind === 'request' || step.kind === 'run') return JSON.stringify(step);
   return step.kind;
 }
@@ -801,6 +809,18 @@ export function explorerTools(
       },
     },
   ];
+  if (session.driver?.platform === 'web' || session.driver?.platform === 'electron') {
+    tools.push({
+      name: 'upload',
+      description:
+        'Attach a sample file, the same one on every run, to a file input or to the button or label that opens the file picker.',
+      inputSchema: schema({ ref: string, file: { type: 'string', enum: [...SAMPLE_FILES] } }, ['ref', 'file']),
+      run(input) {
+        const file = z.enum(SAMPLE_FILES).parse(input.file);
+        return act(session, { kind: 'upload', ref: arg(input, 'ref'), file });
+      },
+    });
+  }
   if (
     session.driver?.platform === 'web' ||
     session.driver?.platform === 'electron' ||

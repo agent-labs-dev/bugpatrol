@@ -29,6 +29,7 @@ app:
   setup: []                     # commands: { run, cwd, capture, background, readyWhen, timeoutMs }
   teardown: []
   connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { timeoutMs: 60000 }
+  # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins `open` may go to
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
 

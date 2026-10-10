@@ -2,6 +2,7 @@ import { sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
+import { sampleFile } from './samples.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
 
@@ -9,7 +10,26 @@ export type WebOptions = {
   url: string;
   viewport: { width: number; height: number };
   headless?: boolean;
+  /** Origins besides the app's own that `open` may go to, e.g. a sign-in provider. */
+  allowedOrigins?: string[];
 };
+
+/**
+ * Whether the explorer may `open` this URL: the app's own origin, or one the
+ * config allows. A `file:` or other opaque-origin app (Electron) may open
+ * pages in its own directory. Every other scheme (`file:`, `data:`,
+ * `javascript:`, `chrome:`) is refused, so `open` cannot read the host.
+ */
+export function openAllowed(url: URL, home: URL, allowedOrigins: string[] = []): boolean {
+  if (url.protocol === 'http:' || url.protocol === 'https:') {
+    return (
+      url.origin === home.origin ||
+      allowedOrigins.some((origin) => URL.canParse(origin) && new URL(origin).origin === url.origin)
+    );
+  }
+  if (home.origin !== 'null' || url.protocol !== home.protocol || url.host !== home.host) return false;
+  return url.pathname.startsWith(home.pathname.slice(0, home.pathname.lastIndexOf('/') + 1));
+}
 
 type TargetResult = { degraded: boolean; element?: UiElement };
 
@@ -19,9 +39,12 @@ export class WebDriver implements Driver {
   protected browser?: Browser;
   protected context?: BrowserContext;
   protected page?: Page;
+  /** The app's first page, for the `open` check. */
+  protected home?: URL;
   protected lastObservation?: Observation;
   private readonly errors = new Map<Page, string[]>();
   private readonly failures = new Map<Page, string[]>();
+  private readonly dialogs = new Map<Page, string[]>();
   private readonly watched = new WeakSet<Page>();
   private recording?: { cdp: CDPSession; page: Page; frames: Frame[] };
 
@@ -39,6 +62,7 @@ export class WebDriver implements Driver {
     this.context.on('page', (page) => this.watch(page));
     this.page = await this.context.newPage();
     this.watch(this.page);
+    this.home = new URL(this.options.url);
     await this.page.goto(this.options.url);
   }
 
@@ -73,6 +97,16 @@ export class WebDriver implements Driver {
       if (response.status() >= 400 && ['fetch', 'xhr', 'document'].includes(type)) {
         add(`${response.request().method()} ${response.url()} → ${response.status()}`);
       }
+    });
+    const dialogs: string[] = [];
+    this.dialogs.set(page, dialogs);
+    // Unhandled, Playwright dismisses a dialog, so whatever waits on a
+    // confirm never runs and looks broken. Accept it, the same way every
+    // run, and say so in the next observation.
+    page.on('dialog', (dialog) => {
+      const message = dialog.message().replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (dialogs.length < 20) dialogs.push(`${dialog.type()} ${JSON.stringify(message)}: accepted`);
+      dialog.accept(dialog.type() === 'prompt' ? dialog.defaultValue() : undefined).catch(() => {});
     });
     page.on('requestfailed', (request) => {
       const reason = request.failure()?.errorText ?? 'failed';
@@ -116,6 +150,7 @@ export class WebDriver implements Driver {
       volatileRegions: [],
       consoleErrors: errors.splice(0),
       networkErrors: (this.failures.get(page) ?? []).splice(0),
+      dialogs: (this.dialogs.get(page) ?? []).splice(0),
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;
@@ -185,6 +220,44 @@ export class WebDriver implements Driver {
     return result;
   }
 
+  /**
+   * A file input takes the file directly. Anything else is the control that
+   * opens the picker, often a styled button or label over a hidden input:
+   * click it and answer the picker.
+   */
+  private async upload(page: Page, action: Extract<DriverAction, { kind: 'upload' }>): Promise<TargetResult> {
+    const target = action.ref ?? action.locator;
+    if (!target) {
+      throw new Error('Upload needs a target');
+    }
+    const resolved = await resolveTarget(page, target, this.lastObservation);
+    const file = sampleFile(action.file);
+    const isInput = resolved.locator
+      ? await resolved.locator.evaluate((element) => element instanceof HTMLInputElement && element.type === 'file')
+      : false;
+    if (isInput) {
+      await resolved.locator!.setInputFiles(file);
+    } else {
+      const chooser = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => undefined);
+      if (resolved.locator) await resolved.locator.click();
+      else await page.mouse.click(resolved.point!.x, resolved.point!.y);
+      const opened = await chooser;
+      if (!opened) throw new Error('No file picker opened; target the file input or the control that opens it');
+      await opened.setFiles(file);
+    }
+    return { degraded: resolved.degraded, element: resolved.element };
+  }
+
+  private open(page: Page, action: Extract<DriverAction, { kind: 'open' }>) {
+    const url = new URL(action.url, page.url());
+    if (!this.home || !openAllowed(url, this.home, this.options.allowedOrigins)) {
+      throw new Error(
+        `Not opened: ${url.protocol}//${url.host} is not the app. Add the origin to app.connect.allowedOrigins to allow it`,
+      );
+    }
+    return page.goto(url.href);
+  }
+
   private async switchWindow(action: Extract<DriverAction, { kind: 'window' }>): Promise<void> {
     const match = action.match.toLowerCase();
     const pages = this.context!.pages();
@@ -227,7 +300,10 @@ export class WebDriver implements Driver {
           await page.goBack();
           break;
         case 'open':
-          await page.goto(action.url);
+          await this.open(page, action);
+          break;
+        case 'upload':
+          result = await this.upload(page, action);
           break;
         case 'wait':
           await page.waitForTimeout(action.ms);

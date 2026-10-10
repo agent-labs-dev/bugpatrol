@@ -132,6 +132,7 @@ export class FakeDriver implements Driver {
       return { ok: true, step: { kind: 'open', url: action.url } };
     }
     if (action.kind === 'window') return { ok: true, step: { kind: 'window', match: action.match } };
+    if (action.kind === 'upload') return { ok: false, error: 'Uploads are supported on web and Electron only' };
     if (action.kind === 'wait') return { ok: true, step: { kind: 'wait', ms: action.ms } };
     if (action.kind === 'press') return { ok: true, step: { kind: 'press', key: action.key } };
     return { ok: true, step: { kind: 'back' } };

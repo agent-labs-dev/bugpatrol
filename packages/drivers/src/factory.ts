@@ -55,13 +55,14 @@ export function createDriver(
     return new WebDriver({
       url: vars(url),
       viewport: { width: viewport.width, height: viewport.height },
+      allowedOrigins: connect.allowedOrigins.map(vars),
     });
   }
   if (platform === 'electron') {
     if (!connect.cdp) {
       throw new ConfigError('Electron driver requires app.connect.cdp');
     }
-    return new ElectronDriver(vars(connect.cdp));
+    return new ElectronDriver(vars(connect.cdp), connect.allowedOrigins.map(vars));
   }
   if (!connect.appId) {
     throw new ConfigError(`${platform} driver requires app.connect.appId`);

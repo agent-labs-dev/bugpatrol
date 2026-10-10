@@ -1,4 +1,4 @@
-import type { HttpMethod, Locator, Platform, RoutineStep } from '@bugpatrol/core';
+import type { HttpMethod, Locator, Platform, RoutineStep, SampleFile } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 
 /**
@@ -23,6 +23,8 @@ export type UiElement = {
   enabled: boolean;
   focused?: boolean;
   checked?: boolean;
+  /** Disclosures: a `<summary>` or a control with `aria-expanded`. */
+  expanded?: boolean;
 };
 
 export type Observation = {
@@ -46,6 +48,12 @@ export type Observation = {
   consoleErrors: string[];
   /** Web and Electron: failed requests since the previous observation, e.g. `GET /api/me → 500`. */
   networkErrors?: string[];
+  /**
+   * Web and Electron: native dialogs (`alert`, `confirm`, `prompt`) since the
+   * previous observation. The driver accepts each one, so they never show on
+   * a screenshot; this is how the explorer learns that one opened.
+   */
+  dialogs?: string[];
   at: string;
   /** API only: sanitized response evidence, also rendered in the screenshot. */
   http?: { method: HttpMethod; status: number; body: string; contentType: string | null };
@@ -70,6 +78,7 @@ export type DriverAction =
   | { kind: 'open'; url: string }
   | { kind: 'wait'; ms: number }
   | { kind: 'window'; match: string }
+  | { kind: 'upload'; ref?: string; locator?: Locator; file: SampleFile }
   | {
       kind: 'request';
       method: HttpMethod;

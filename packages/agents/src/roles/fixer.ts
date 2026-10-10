@@ -625,6 +625,8 @@ export function stepWords(step: RoutineStep): string {
   if (step.kind === 'press') return `Press ${step.key}`;
   if (step.kind === 'open') return `Open ${step.url}`;
   if (step.kind === 'window') return `Switch to window ${step.match}`;
+  if (step.kind === 'upload')
+    return `Upload a sample ${step.file} file to ${step.target.name ?? step.target.testId ?? step.target.text ?? step.target.selector ?? 'target'}`;
   if (step.kind === 'wait') return `Wait ${step.ms} ms`;
   if (step.kind === 'request') return `${step.method} ${step.url}`;
   if (step.kind === 'run')

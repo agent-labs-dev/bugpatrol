@@ -22,6 +22,8 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
       'h5',
       'h6',
       'label',
+      'summary',
+      '[aria-expanded]',
     ].join(',');
     const result: UiElement[] = [];
 
@@ -75,6 +77,7 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
         submit: 'button',
         reset: 'button',
         search: 'searchbox',
+        file: 'button',
         number: 'spinbutton',
         range: 'slider',
       };
@@ -94,7 +97,9 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
       const tabIndex = element.getAttribute('tabindex');
-      const known = element.matches('a,button,input,textarea,select,[role],[onclick],h1,h2,h3,h4,h5,h6,label');
+      const known = element.matches(
+        'a,button,input,textarea,select,[role],[onclick],h1,h2,h3,h4,h5,h6,label,summary,[aria-expanded]',
+      );
       const validTabIndex = tabIndex === null || Number(tabIndex) >= 0;
       const validEditable = element.getAttribute('contenteditable') !== 'false';
       if (!validTabIndex && !known && !element.matches('[contenteditable]')) {
@@ -118,15 +123,17 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
       const input = element as HTMLInputElement;
       const tag = element.tagName.toLowerCase();
       if (tag === 'label') {
+        // The control is listed in its place, unless the label stands in for
+        // a hidden one, as a styled label does for a file input.
         const forId = element.getAttribute('for');
-        const pointsToControl = Boolean(forId && document.getElementById(forId));
-        const containsControl = Boolean(element.querySelector('input,select,textarea'));
-        if (pointsToControl || containsControl) {
+        const control = (forId && document.getElementById(forId)) || element.querySelector('input,select,textarea');
+        if (control?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
           continue;
         }
       }
       const type = input.type?.toLowerCase();
-      const interactive = !/^h[1-6]$/.test(tag) && tag !== 'label';
+      const forControl = tag === 'label' && element.matches('label[for], label:has(input,select,textarea)');
+      const interactive = !/^h[1-6]$/.test(tag) && (tag !== 'label' || forControl);
       const role = element.getAttribute('role') || implicitRole(tag, type);
       const labelledBy = element
         .getAttribute('aria-labelledby')
@@ -175,6 +182,12 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
         focused: document.activeElement === element,
         checked:
           type === 'checkbox' || type === 'radio' ? input.checked : element.getAttribute('aria-checked') === 'true',
+        expanded:
+          tag === 'summary'
+            ? Boolean(element.parentElement instanceof HTMLDetailsElement && element.parentElement.open)
+            : element.hasAttribute('aria-expanded')
+              ? element.getAttribute('aria-expanded') === 'true'
+              : undefined,
       });
     }
     return result;
@@ -275,6 +288,11 @@ export function stepFor(action: DriverAction, element?: UiElement, fallback?: St
       return { kind: 'wait', ms: action.ms };
     case 'window':
       return { kind: 'window', match: action.match };
+    case 'upload':
+      if (!target) {
+        throw new Error('Upload needs a target');
+      }
+      return { kind: 'upload', target, file: action.file };
     case 'request':
     case 'run':
       return action;

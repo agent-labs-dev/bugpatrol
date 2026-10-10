@@ -23,7 +23,7 @@ A patrol cycle has these steps:
 
 ## The explore loop
 
-The explorer uses the app one step at a time. In each step, it looks at the screen and calls one tool. Each result also lists the console errors and the failed requests since the last step, so the explorer can report an error that the screenshot does not show. Each bug report becomes a candidate for the judge.
+The explorer uses the app one step at a time. In each step, it looks at the screen and calls one tool. Each result also lists the console errors and the failed requests since the last step, so the explorer can report an error that the screenshot does not show. On web and Electron it also lists the native dialogs (`alert`, `confirm`, `prompt`) that opened. Bugpatrol accepts each one, the same way on every run, so the action behind a confirm goes ahead in exploration and in replay. An `upload` attaches a sample image, PDF or text file that Bugpatrol makes, with the same bytes on every run. Each bug report becomes a candidate for the judge.
 
 ```mermaid
 flowchart TD
@@ -100,6 +100,8 @@ The judge writes a short summary. Bugpatrol adds the full report: the steps, the
 - A human decision (a dismissal, a closed PR) is never overwritten.
 - Secrets never reach a model or a log.
 - `app.instructions` can list what the explorer must never do.
+- The explorer and the judge start in an empty directory, and the `claude` preset turns off the built-in Claude Code tools, so they act only through the Bugpatrol tools.
+- On web and Electron, `open` goes only to the app's origin and `app.connect.allowedOrigins`; it refuses `file:`, `data:` and `javascript:` URLs.
 - A review runs the code of a pull request, so it refuses a pull request from a fork unless you add `--allow-fork`.
 
 The full design is in [ADR 0005](adr/0005-agents-drivers-and-the-patrol.md).
