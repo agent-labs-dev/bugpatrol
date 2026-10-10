@@ -50,4 +50,6 @@ export function sampleFile(file: SampleFile): FilePayload {
     case 'text':
       return { name: 'bugpatrol-sample.txt', mimeType: 'text/plain', buffer: Buffer.from('Bugpatrol sample file\n') };
   }
+  // A routine is JSON on disk, so a hand edit can name a kind the type does not know.
+  throw new Error(`Unknown sample file "${String(file)}"; use one of image, pdf, text`);
 }
