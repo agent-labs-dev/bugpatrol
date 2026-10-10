@@ -23,7 +23,7 @@ Bugpatrol has these roles:
 
 Platforms: `web` (Playwright), `electron` (CDP), `ios` and `android` (Maestro).
 
-The explorer, the judge, and the fixer are LLM agents. Each one runs on a local agent CLI (`claude`, `codex`, `kimi`, or `pi`) or on an API key (OpenRouter, Vercel AI Gateway, OpenAI, Anthropic).
+The explorer, the judge, and the fixer are LLM agents. Each one runs on a local agent CLI (`claude`, `codex`, `kimi`, `opencode`, or `pi`) or on an API key (OpenRouter, Vercel AI Gateway, OpenAI, Anthropic).
 
 Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model. The routines (`.bugpatrol/routines/`) and the app map (`.bugpatrol/appmap.json`) are committed, so CI and a fresh clone can replay them. Bugpatrol writes them and never commits them: the user does.
 
@@ -138,6 +138,7 @@ You are an LLM agent, so use yourself as the provider for all the agents. Then t
    | Claude Code | `claude` |
    | Codex | `codex` |
    | Kimi CLI | `kimi` |
+   | opencode | `opencode` |
    | pi | `pi` (it needs `pi install npm:pi-mcp-adapter`) |
 
 2. Check that the CLI is on `PATH`, for example `command -v claude`.
@@ -281,7 +282,7 @@ Each agent's provider is in `agents.<role>.use`:
 
 | `use:` | Provider | Needs |
 | --- | --- | --- |
-| `claude`, `codex`, `kimi`, `pi` | A local agent CLI (a preset with the correct flags for the role) | The CLI on `PATH`, logged in |
+| `claude`, `codex`, `kimi`, `opencode`, `pi` | A local agent CLI (a preset with the correct flags for the role) | The CLI on `PATH`, logged in |
 | `{ runtime: model, via: openrouter, model: z-ai/glm-5.3-flash }` | OpenRouter | `OPENROUTER_API_KEY` |
 | `{ runtime: model, via: vercel, model: <id> }` | Vercel AI Gateway | `AI_GATEWAY_API_KEY` |
 | `{ runtime: model, via: openai, model: <id> }` | OpenAI | `OPENAI_API_KEY` |
@@ -383,7 +384,7 @@ agents:
     commitMessage: 'fix(app): {title}'     # match the repo's commit style and hooks: read `git log --oneline`
     retest: { prepare: npm ci }            # installs the dependencies in each new worktree
     verify: npm run typecheck && npm test  # Bugpatrol runs this after each fix
-    use: claude                            # or codex, kimi, pi
+    use: claude                            # or codex, kimi, opencode, pi
 ```
 
 - Set `prepare` to the install command of the repo's package manager, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each new worktree before the fixer starts and before each retest.
@@ -527,7 +528,7 @@ Severity, worst first: `critical`, `major`, `minor`, `cosmetic`.
 | `fixed` | The fix is verified, or the issue was closed on GitHub as completed |
 | `dismissed` | A human or GitHub closed it as not a bug. It does not come back |
 
-The `costUsd` in each `session.json` counts only the API calls that Bugpatrol makes: the `runtime: model` agents. A local agent CLI (`claude`, `codex`, `kimi`, `pi`) uses the user's own plan, and Bugpatrol does not see its cost.
+The `costUsd` in each `session.json` counts only the API calls that Bugpatrol makes: the `runtime: model` agents. A local agent CLI (`claude`, `codex`, `kimi`, `opencode`, `pi`) uses the user's own plan, and Bugpatrol does not see its cost.
 
 Each `session.json` also has `tokens` and `tokensByModel`. The Overview page shows a **Token usage** table for the last 7 days, for each agent and model. When the user asks about cost, or wants to compare models, show this table, and give the tokens per session.
 

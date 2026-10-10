@@ -12,7 +12,7 @@ import type { AgentRole } from '../types/agents.js';
  * `use: claude` in bugpatrol.yml expands to the preset for that role. A
  * `command` wins over the preset, for teams that need extra flags.
  */
-export const CLI_AGENTS = ['claude', 'codex', 'kimi', 'pi'] as const;
+export const CLI_AGENTS = ['claude', 'codex', 'kimi', 'opencode', 'pi'] as const;
 export type CliAgent = (typeof CLI_AGENTS)[number];
 
 const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
@@ -32,6 +32,15 @@ const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
   kimi: {
     tools: `kimi --quiet --mcp-config '{"mcpServers":{"bugpatrol":{"url":"'{mcpUrl}'"}}}'`,
     fixer: 'kimi --quiet --yolo',
+  },
+  // opencode ships two released lines with different flags and config shapes.
+  // The `{opencode}` placeholder resolves to the installed line at spawn time
+  // (packages/agents/src/runtime/opencode.ts). v1: no --standalone, config
+  // keyed under mcp, permission map. v2: --standalone, mcp.servers, ordered
+  // permissions list.
+  opencode: {
+    tools: '{opencode}',
+    fixer: '{opencode}',
   },
   // pi has no MCP of its own: `--mcp-config` comes from the pi-mcp-adapter
   // extension (`pi install npm:pi-mcp-adapter`).

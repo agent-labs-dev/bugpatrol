@@ -39,8 +39,8 @@ async function explore(app: Record<string, unknown> = {}) {
       return { stop: 'done', steps: 0, costUsd: 0 };
     },
   };
-  await runExplorer(session, runtime);
-  return { system: systems[0]!, logs };
+  const outcome = await runExplorer(session, runtime);
+  return { system: systems[0]!, logs, outcome };
 }
 
 describe('the explorer app guide', () => {
@@ -59,5 +59,32 @@ describe('the explorer app guide', () => {
 
   it('fails when the configured guide is missing', async () => {
     await expect(explore({ instructions: 'docs/guide.md' })).rejects.toThrow(/ENOENT/);
+  });
+
+  it('names the runtime error in the summary when the run fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-explorer-'));
+    try {
+      const record = await new Workspace(root).startSession('explorer');
+      const session = new AgentSession(
+        root,
+        parseConfig({ version: 1, app: { connect: { url: 'fake://home' } } }),
+        new Vars(),
+        record.id,
+        'explorer',
+        new FakeDriver({ home: { elements: [] } }),
+        () => {},
+      );
+      const runtime: Runtime = {
+        label: 'scripted',
+        async run() {
+          return { stop: 'error', steps: 7, costUsd: 0, error: 'Insufficient Balance (request_id: 17d40ebf)' };
+        },
+      };
+      const outcome = await runExplorer(session, runtime);
+      expect(outcome.summary).toContain('Insufficient Balance (request_id: 17d40ebf)');
+      expect(outcome.summary).toContain('7 steps');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

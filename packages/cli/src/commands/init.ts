@@ -48,7 +48,13 @@ export const KEY_PROVIDERS = {
 export type KeyProvider = keyof typeof KEY_PROVIDERS;
 export type Provider = CliAgent | KeyProvider;
 
-const CLI_LABELS: Record<CliAgent, string> = { claude: 'Claude Code', codex: 'Codex', kimi: 'Kimi CLI', pi: 'pi' };
+const CLI_LABELS: Record<CliAgent, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  kimi: 'Kimi CLI',
+  opencode: 'opencode',
+  pi: 'pi',
+};
 
 export type Detected = {
   /** Agent CLIs on PATH that can run a role. */
@@ -331,7 +337,7 @@ export function renderConfig(answers: InitAnswers): string {
     '  instructions: .bugpatrol/instructions.md   # plain English for the explorer: sign in, main flows, never-do list',
     '  secrets: []                        # env var names the explorer may use as {{NAME}}, e.g. [TEST_PASSWORD]',
     '',
-    '# Each agent runs on an LLM: a local agent CLI (claude, codex, kimi, pi) or an API key.',
+    '# Each agent runs on an LLM: a local agent CLI (claude, codex, kimi, opencode, pi) or an API key.',
     'agents:',
     '  explorer:                          # uses the app and reports what looks wrong',
     `    use: ${useLine('explorer', answers.providers.explorer, answers.piPermissionModes)}`,
@@ -522,7 +528,7 @@ export function defaultAnswers(guess: AppGuess, detected: Detected, flags: InitF
     throw new ConfigError(
       [
         'Bugpatrol needs an LLM for each agent, and it found none on this machine.',
-        'Install an agent CLI (claude, codex, kimi, or pi), or set an API key:',
+        'Install an agent CLI (claude, codex, kimi, opencode, or pi), or set an API key:',
         `  OpenRouter:        export OPENROUTER_API_KEY=...   (${KEY_PROVIDERS.openrouter.url})`,
         `  Vercel AI Gateway: export AI_GATEWAY_API_KEY=...   (${KEY_PROVIDERS.vercel.url})`,
         'Or name one: bugpatrol init --agent claude',
