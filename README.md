@@ -1,0 +1,1 @@
+Images for Bugpatrol reports. Not code; do not merge.
