@@ -226,6 +226,17 @@ describe('opencode --format json', () => {
     });
   });
 
+  it('reads a real v1 text and step_finish pair, with the thinking block stripped', () => {
+    const out = [
+      '{"type": "text", "timestamp": 1791619869981, "sessionID": "ses_edb226d01ffeFkg9XPeCpJLypW", "part": {"type": "text", "text": "<thinking>The user asked for a specific reply.</thinking>\\n\\nok", "time": {"start": 1, "end": 2}}}',
+      '{"type": "step_finish", "timestamp": 1791619869981, "sessionID": "ses_edb226d01ffeFkg9XPeCpJLypW", "part": {"type": "step-finish", "reason": "stop", "tokens": {"total": 7435, "input": 7402, "output": 33, "reasoning": 0, "cache": {"write": 0, "read": 0}}, "cost": 0.00045204}}',
+    ].join('\n');
+    expect(parseCliOutput(out, 'opencode')).toEqual({
+      text: 'ok',
+      tokens: { input: 7402, output: 33, cacheRead: 0, cacheWrite: 0, listCostUsd: 0.00045204 },
+    });
+  });
+
   it('keeps the text and the error apart when both arrive', () => {
     const out = [
       textEvent('Fixing the clipped label.'),
