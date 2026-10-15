@@ -74,6 +74,7 @@ export function errorLines(observation: Observation): string[] {
     ...lines('Console errors', unique(observation.consoleErrors)),
     ...lines('Failed requests', unique(observation.networkErrors)),
     ...lines('Dialogs (Bugpatrol accepts each one)', unique(observation.dialogs)),
+    ...lines('Left the app (Bugpatrol went back)', unique(observation.leftApp)),
   ];
 }
 

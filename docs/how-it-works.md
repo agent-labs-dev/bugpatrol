@@ -101,7 +101,7 @@ The judge writes a short summary. Bugpatrol adds the full report: the steps, the
 - Secrets never reach a model or a log.
 - `app.instructions` can list what the explorer must never do.
 - The explorer and the judge start in an empty directory, and the `claude` preset turns off the built-in Claude Code tools, so they act only through the Bugpatrol tools.
-- On web and Electron, `open` goes only to the app's origin and `app.connect.allowedOrigins`; it refuses `file:`, `data:` and `javascript:` URLs.
+- On web and Electron, the explorer stays on the app's origin and `app.connect.allowedOrigins`. `open` refuses any other URL, including `file:`, `data:` and `javascript:`. When a tap or the app's own redirect lands on another website, the driver goes back to the app and tells the explorer. A web app whose URL redirects to another website fails at the start, with both URLs in the error.
 - A review runs the code of a pull request, so it refuses a pull request from a fork unless you add `--allow-fork`.
 
 The full design is in [ADR 0005](adr/0005-agents-drivers-and-the-patrol.md).

@@ -54,6 +54,11 @@ export type Observation = {
    * a screenshot; this is how the explorer learns that one opened.
    */
   dialogs?: string[];
+  /**
+   * Web and Electron: pages outside the app that the app went to on its own
+   * since the previous observation. The driver went back into the app.
+   */
+  leftApp?: string[];
   at: string;
   /** API only: sanitized response evidence, also rendered in the screenshot. */
   http?: { method: HttpMethod; status: number; body: string; contentType: string | null };

@@ -191,8 +191,8 @@ export const appSchema = z
           .optional(),
         /**
          * Web and Electron: origins besides the app's that the explorer may
-         * `open` directly, e.g. https://accounts.example.com. Taps may still
-         * lead anywhere the app links to.
+         * be on, e.g. https://accounts.example.com. A redirect, a tap or an
+         * `open` that lands on any other website goes back to the app.
          */
         allowedOrigins: z.array(z.string()).default([]),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */

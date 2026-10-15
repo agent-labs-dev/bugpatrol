@@ -14,6 +14,7 @@ describe('web text actions', () => {
     const page = {
       locator: () => locator,
       waitForLoadState: async () => undefined,
+      url: () => 'about:blank',
       keyboard: { press: async () => undefined },
     } as unknown as Page;
     class Fixture extends WebDriver {

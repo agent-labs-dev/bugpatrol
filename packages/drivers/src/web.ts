@@ -1,4 +1,4 @@
-import { sha256 } from '@bugpatrol/core';
+import { ConfigError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
@@ -10,7 +10,7 @@ export type WebOptions = {
   url: string;
   viewport: { width: number; height: number };
   headless?: boolean;
-  /** Origins besides the app's own that `open` may go to, e.g. a sign-in provider. */
+  /** Origins besides the app's own that the explorer may be on, e.g. a sign-in provider. */
   allowedOrigins?: string[];
 };
 
@@ -39,8 +39,12 @@ export class WebDriver implements Driver {
   protected browser?: Browser;
   protected context?: BrowserContext;
   protected page?: Page;
-  /** The app's first page, for the `open` check. */
+  /** The app's first page: the origin that the explorer stays on. */
   protected home?: URL;
+  /** The last page on an allowed origin, for a page with no history to go back through. */
+  private lastInApp?: string;
+  /** Pages outside the app that `observe` went back from, for the next observation. */
+  private readonly leftApp: string[] = [];
   protected lastObservation?: Observation;
   private readonly errors = new Map<Page, string[]>();
   private readonly failures = new Map<Page, string[]>();
@@ -64,6 +68,35 @@ export class WebDriver implements Driver {
     this.watch(this.page);
     this.home = new URL(this.options.url);
     await this.page.goto(this.options.url);
+    const landed = this.offOrigin(this.page.url());
+    if (landed) {
+      throw new ConfigError(
+        `app.connect.url is ${this.options.url}, but it redirected to ${landed.href}. Set app.connect.url to the address to test, or add ${landed.origin} to app.connect.allowedOrigins`,
+      );
+    }
+    this.lastInApp = this.page.url();
+  }
+
+  /** The page's URL when it is a website that the explorer may not be on, else undefined. */
+  private offOrigin(location: string): URL | undefined {
+    if (!URL.canParse(location)) return undefined;
+    const url = new URL(location);
+    // about:blank, chrome-error: and the like are the browser's own pages, not another site.
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    return this.home && openAllowed(url, this.home, this.options.allowedOrigins) ? undefined : url;
+  }
+
+  /** Goes back into the app when the page left it, and returns where it went. */
+  private async stayInApp(page: Page): Promise<URL | undefined> {
+    const left = this.offOrigin(page.url());
+    if (!left) {
+      this.lastInApp = page.url();
+      return undefined;
+    }
+    // Back, not a new load, so the history stays the app's own and `back` cannot land outside it again.
+    await page.goBack().catch(() => null);
+    if (this.offOrigin(page.url())) await page.goto(this.lastInApp ?? this.home!.href);
+    return left;
   }
 
   protected activePage(): Page {
@@ -119,6 +152,8 @@ export class WebDriver implements Driver {
 
   async observe(): Promise<Observation> {
     const page = this.activePage();
+    const left = await this.stayInApp(page);
+    if (left && this.leftApp.length < 20) this.leftApp.push(left.href);
     const context = this.context!;
     for (const candidate of context.pages()) {
       this.watch(candidate);
@@ -151,6 +186,7 @@ export class WebDriver implements Driver {
       consoleErrors: errors.splice(0),
       networkErrors: (this.failures.get(page) ?? []).splice(0),
       dialogs: (this.dialogs.get(page) ?? []).splice(0),
+      leftApp: this.leftApp.splice(0),
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;
@@ -273,6 +309,12 @@ export class WebDriver implements Driver {
     if (!chosen) {
       throw new Error(`Window not found: ${action.match}`);
     }
+    const outside = this.offOrigin(chosen.candidate.url());
+    if (outside) {
+      throw new Error(
+        `Not switched: ${outside.origin} is not the app. Add the origin to app.connect.allowedOrigins to allow it`,
+      );
+    }
     this.page = chosen.candidate;
     await this.page.bringToFront();
   }
@@ -315,6 +357,14 @@ export class WebDriver implements Driver {
       await this.activePage()
         .waitForLoadState('domcontentloaded', { timeout: 5000 })
         .catch(() => {});
+      const left = await this.stayInApp(this.activePage());
+      if (left) {
+        return {
+          ok: false,
+          retryable: false,
+          error: `Left the app for ${left.href} and went back. Add ${left.origin} to app.connect.allowedOrigins to allow it`,
+        };
+      }
       const fallback = 'locator' in action ? action.locator : undefined;
       return {
         ok: true,
