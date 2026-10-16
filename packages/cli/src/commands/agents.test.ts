@@ -40,6 +40,22 @@ describe('agent command flags', () => {
     expect(parseAgentFlags('judge', ['--session', 'a', 'b', '--session', 'c'])).toEqual({ session: ['a', 'b', 'c'] });
     expect(parseAgentFlags('fix', ['--issue', 'x', 'y'])).toEqual({ issue: ['x', 'y'] });
     expect(parseAgentFlags('retest', ['--issue', 'x'])).toEqual({ issue: ['x'] });
+    expect(
+      parseAgentFlags('retest', ['--issue', 'x', '--pr', 'https://github.com/o/r/pull/9', '--allow-fork']),
+    ).toEqual({
+      issue: ['x'],
+      pr: 9,
+      allowFork: true,
+    });
+    expect(parseAgentFlags('retest', ['--issue', 'x', '--branch', 'claude/fix', '--summary', 'Fix the menu'])).toEqual({
+      issue: ['x'],
+      branch: 'claude/fix',
+      summary: 'Fix the menu',
+    });
+    expect(parseAgentFlags('retest', ['--issue', 'x', '--worktree', '../wt'])).toEqual({
+      issue: ['x'],
+      worktree: '../wt',
+    });
     expect(parseAgentFlags('patrol', ['--once'])).toEqual({ once: true });
     expect(parseAgentFlags('replay', ['enter-app'])).toEqual({ id: 'enter-app' });
     expect(parseAgentFlags('review', ['12', '--dry-run', '--steps', '40'])).toEqual({
@@ -63,5 +79,8 @@ describe('agent command flags', () => {
     expect(() => parseAgentFlags('review', ['--dry-run'])).toThrow(/pull request number or URL/);
     expect(() => parseAgentFlags('review', ['12', '--goal', 'x'])).toThrow(/Unknown flag/);
     expect(() => parseAgentFlags('explore', ['--claims'])).toThrow(/Unknown flag/);
+    expect(() => parseAgentFlags('retest', ['--issue', 'x', '--pr', '1', '--branch', 'b'])).toThrow(/one of/);
+    expect(() => parseAgentFlags('retest', ['--issue', 'x', '--pr', 'abc'])).toThrow(/pull request number or URL/);
+    expect(() => parseAgentFlags('retest', ['--issue', 'x', '--allow-fork'])).toThrow(/need --worktree/);
   });
 });

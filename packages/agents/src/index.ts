@@ -9,6 +9,7 @@ export * from './replay.js';
 export * from './report.js';
 export * from './roles/ci.js';
 export * from './roles/explorer.js';
+export * from './roles/external-fix.js';
 export * from './roles/fixer.js';
 export * from './roles/judge.js';
 export * from './roles/promote.js';

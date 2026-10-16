@@ -262,6 +262,7 @@ export async function runFixer(
     fixes
       .filter(
         (fix) =>
+          !fix.external &&
           ['proposed', 'retesting'].includes(fix.status) &&
           fix.retests?.at(-1)?.outcome === 'not-fixed' &&
           judgedRetests(fix.retests).length < config.retest.attempts,

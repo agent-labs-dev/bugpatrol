@@ -109,7 +109,11 @@ export async function watchCi(
   }
   const workspace = new Workspace(root);
   const fixes = (await workspace.listFixes()).filter(
-    (fix) => fix.pr && (fix.pr.state ?? 'open') === 'open' && (!deps.issueIds || deps.issueIds.includes(fix.issueId)),
+    (fix) =>
+      !fix.external &&
+      fix.pr &&
+      (fix.pr.state ?? 'open') === 'open' &&
+      (!deps.issueIds || deps.issueIds.includes(fix.issueId)),
   );
   if (!fixes.length) return { problems };
   const { repo } = await resolveRepo(gh, config, resolve(root, config.app.source));

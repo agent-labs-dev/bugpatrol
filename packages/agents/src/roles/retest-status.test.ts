@@ -41,6 +41,16 @@ describe('applyRetest', () => {
     expect(item.status).toBe('proposed');
   });
 
+  it('never sends an external fix back to the fixer', () => {
+    const item = {
+      ...fix(),
+      runtime: 'external',
+      external: { kind: 'pr' as const, ref: 'https://github.com/o/r/pull/9' },
+    };
+    applyRetest(config, item, retest('not-fixed'));
+    expect(item.status).toBe('proposed');
+  });
+
   it('marks a fix verified when the judge says fixed', () => {
     const item = fix();
     applyRetest(config, item, retest('fixed'));

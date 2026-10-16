@@ -87,7 +87,9 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const items: Item[] = (await workspace.listIssues()).flatMap((issue): Item[] => {
     if (deps.issueIds && !deps.issueIds.includes(issue.id)) return [];
     if (issue.status === 'dismissed' || issue.publishSkipped || issue.fixRejected) return [];
-    const fix = fixes.get(issue.id);
+    // Bugpatrol opens no PR for an external fix; for publish, the issue has no fix of its own.
+    const found = fixes.get(issue.id);
+    const fix = found?.external ? undefined : found;
     if (fix?.status === 'rejected') return [];
     if (fix && !fix.pr && publishable(fix)) return [{ kind: 'pr' as const, issue, fix }];
     if (
