@@ -371,6 +371,12 @@ export function ciAttempts(attempts: FixAttempt[] = []): FixAttempt[] {
   return attempts.filter((attempt) => attempt.kind === 'ci');
 }
 
+/**
+ * Where a fix that Bugpatrol did not write came from: a checkout on this
+ * machine, a branch, or a pull request (its URL).
+ */
+export type ExternalFixSource = { kind: 'worktree' | 'branch' | 'pr'; ref: string };
+
 export type FixProposal = {
   version: 1;
   id: string;
@@ -394,6 +400,11 @@ export type FixProposal = {
   endedAt?: string;
   costUsd?: number;
   retests?: Retest[];
+  /**
+   * Set when someone else wrote the fix (for example Claude Code). Bugpatrol
+   * only retests it: the fixer, publish, and CI steps never change it.
+   */
+  external?: ExternalFixSource;
   /** Every fix attempt, oldest first. The fields above describe the current proposal. */
   attempts?: FixAttempt[];
   pr?: {

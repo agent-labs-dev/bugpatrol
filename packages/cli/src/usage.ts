@@ -21,7 +21,7 @@ Agents
   bugpatrol explore [--goal "..."] [--steps N]
   bugpatrol judge [--session <id>...]
   bugpatrol fix [--issue <id>...]
-  bugpatrol retest --issue <id>
+  bugpatrol retest --issue <id> [--pr <n> | --branch <ref> | --worktree <path>]
   bugpatrol review <pr> [--dry-run] [--force] [--claims] [--steps N]
   bugpatrol promote <pr> <claim>...       keep proven claim routines of a merged PR as routines
   bugpatrol publish [--issue <id>] [--dry-run]
@@ -96,8 +96,17 @@ export const COMMAND_HELP: Record<string, string> = {
   Needs agents.fixer.enabled: true.
   --issue <id>    fix this issue only. You can give the flag more than one time.
 `,
-  retest: `bugpatrol retest --issue <id>
+  retest: `bugpatrol retest --issue <id> [--pr <n> | --branch <ref> | --worktree <path>] [--summary "..."] [--allow-fork]
   Start the app from the fix worktree, repeat the flow, and let the judge compare before and after.
+  With no source flag, retest the fix that the Bugpatrol fixer wrote.
+  With a source flag, retest a fix that someone else wrote, for example with Claude Code. It becomes the fix
+  of the issue: the patrol rechecks it on main after it merges, and closes the issue when the bug is gone.
+  Bugpatrol never rewrites, pushes to, or opens a PR for an external fix.
+  --pr <n>            the number or the URL of the pull request. Needs a logged-in gh CLI.
+  --branch <ref>      a branch or commit, local or on origin
+  --worktree <path>   a checkout on this machine, as it is now (uncommitted changes too)
+  --summary "..."     what the fix changes, for the judge (default: the PR title or the commit subject)
+  --allow-fork        retest a pull request from a fork: its code runs on this machine, with the secrets of the app
 `,
   review: `bugpatrol review <pr> [--dry-run] [--force] [--allow-fork] [--claims] [--steps N]
   Review one pull request in the running app. The explorer tests what the diff can affect on the pull request

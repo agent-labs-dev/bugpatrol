@@ -92,7 +92,7 @@ export async function cleanWorktrees(
 }
 
 async function deleteBranch(fix: FixProposal, onLog?: (message: string) => void): Promise<void> {
-  if (!fix.branch) return;
+  if (!fix.branch || fix.external) return;
   try {
     await git(fix.repo, 'show-ref', '--verify', '--quiet', `refs/heads/${fix.branch}`);
   } catch {

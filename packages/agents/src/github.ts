@@ -170,7 +170,7 @@ export async function syncGitHub(
     if (transition) {
       changed.add(fix.id);
       const issue = issues.get(fix.issueId);
-      if (state === 'closed') {
+      if (state === 'closed' && !fix.external) {
         fix.status = 'rejected';
         if (issue) {
           issue.fixRejected = { pr: pr.number, url: pr.url, at: fix.pr.stateAt ?? now };
