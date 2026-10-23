@@ -40,8 +40,11 @@ jobs:
             dir: examples/review-smoke-dashboard
           - app: cli
             dir: examples/review-smoke-cli
-    # A pull request from a fork gets no secrets, so the review could not run.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # A pull request from a fork gets no secrets, and one from Dependabot gets
+    # only the Dependabot secrets, so the review could not run on either.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # The explorer alone may use its 20 minutes; the base build and the judge come after.
     timeout-minutes: 45
