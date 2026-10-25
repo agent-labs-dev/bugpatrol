@@ -10,6 +10,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol judge [--session <id>]` | Judge the recent explorer sessions that have new candidates (or the sessions that you name) |
 | `bugpatrol fix [--issue <id>]` | Fix the worst open issues, then retest each fix |
 | `bugpatrol retest --issue <id>` | Retest one fix in the app, from its worktree |
+| `bugpatrol retest --issue <id> --pr <n>` (or `--branch <ref>`, `--worktree <path>`) | Retest a fix that someone else wrote, for example with Claude Code. Bugpatrol only judges it: it never rewrites, pushes to, or opens a PR for it. After the fix merges, the patrol rechecks it on main and closes the issue |
 | `bugpatrol review <pr> [--dry-run] [--force] [--claims] [--steps N]` | Review one pull request in the running app, and post a GitHub review of what it introduces. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol promote <pr> <claim>...` | Keep the routine of each proven claim of a merged pull request as `.bugpatrol/routines/pr-<pr>-<claim>.json`. Commit it, and the patrol replays it. It refuses a pull request that is not merged, a review of another commit than the one that merged, and a claim that is not proven. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol publish [--issue <id>] [--dry-run]` | Open PRs and issues on GitHub, or write them to local files. Refer to [GitHub](github.md) |

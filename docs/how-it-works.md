@@ -17,7 +17,7 @@ A patrol cycle has these steps:
 3. The **explorer** enters the app (with the `enter-app` routine when it can), records screens, and reports problems. With each screen, it also gets the console errors and the failed requests of the app.
 4. The **judge** looks at each finding with its screenshot. It files an issue, adds the finding to an issue that is already open, or dismisses it with a reason.
 5. **Teardown** stops the app.
-6. The **fixer** fixes the worst issues. Each fix gets a **retest**: Bugpatrol starts the app from the fix worktree, the explorer repeats the flow on each affected screen, and the judge compares before and after.
+6. The **fixer** fixes the worst issues. Each fix gets a **retest**: Bugpatrol starts the app from the fix worktree, the explorer repeats the flow on each affected screen, and the judge compares before and after. A fix written outside Bugpatrol, for example with Claude Code, gets the same retest with `bugpatrol retest --issue <id> --pr <n>` (or `--branch`, `--worktree`); Bugpatrol only judges it, and never rewrites it or opens a PR for it.
 7. The judge **publishes**. A verified fix becomes a PR. A major bug with no fix becomes an issue. The judge skips an item that a Bugpatrol PR or issue on GitHub already covers.
 8. Bugpatrol watches the **CI** checks of each PR. When a check fails, the fixer fixes it and pushes a new commit, until the checks are green.
 

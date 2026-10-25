@@ -3,7 +3,9 @@ import { join, resolve } from 'node:path';
 import {
   AgentSession,
   applyRetest,
+  attachExternalFix,
   createRuntime,
+  type ExternalFixTarget,
   pendingCandidates,
   replayRoutine,
   retestFix,
@@ -49,6 +51,8 @@ async function logUsage(workspace: Workspace, sessionId: string, log: (line: str
 /** Rejects ambiguous agent flags before an app or agent runtime starts. */
 export function parseAgentFlags(command: string, args: string[]): AgentFlags {
   const flags: AgentFlags = {};
+  // A number, or the URL of the pull request.
+  const prNumber = (value: string | undefined) => Number(/^(?:.*\/pull\/)?(\d+)\/?$/.exec(value ?? '')?.[1]);
   if (command === 'replay') {
     if (args.length !== 1 || args[0]?.startsWith('-')) {
       throw new ConfigError('replay needs one routine id');
@@ -57,8 +61,7 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
   }
   if (command === 'review') {
     const [target, ...rest] = args;
-    // A number, or the URL of the pull request.
-    const number = Number(/^(?:.*\/pull\/)?(\d+)\/?$/.exec(target ?? '')?.[1]);
+    const number = prNumber(target);
     if (!Number.isInteger(number) || number < 1) {
       throw new ConfigError('review needs a pull request number or URL');
     }
@@ -70,7 +73,7 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
     review: ['--steps'],
     judge: ['--session'],
     fix: ['--issue'],
-    retest: ['--issue'],
+    retest: ['--issue', '--worktree', '--branch', '--pr', '--summary'],
     publish: ['--issue'],
     ci: ['--issue'],
     patrol: [],
@@ -88,6 +91,10 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
     }
     if ((command === 'publish' || command === 'review') && flag === '--dry-run') {
       flags.dryRun = true;
+      continue;
+    }
+    if (command === 'retest' && flag === '--allow-fork') {
+      flags.allowFork = true;
       continue;
     }
     if (command === 'review' && (flag === '--force' || flag === '--allow-fork' || flag === '--claims')) {
@@ -108,6 +115,14 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
         ids.push(args[++index]!);
       }
       flags[key] = [...((flags[key] as string[]) ?? []), ...ids];
+    } else if (flag === '--pr') {
+      const number = prNumber(value);
+      if (!Number.isInteger(number) || number < 1) {
+        throw new ConfigError('--pr needs a pull request number or URL');
+      }
+      flags.pr = number;
+    } else if (flag === '--worktree' || flag === '--branch' || flag === '--summary') {
+      flags[flag.slice(2)] = value;
     } else if (flag === '--steps') {
       const number = Number(value);
       if (!Number.isInteger(number) || number < 1) {
@@ -117,6 +132,16 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
     } else {
       flags.goal = value;
     }
+  }
+  if (command === 'retest' && ['worktree', 'branch', 'pr'].filter((key) => key in flags).length > 1) {
+    throw new ConfigError('retest takes one of --worktree, --branch, or --pr');
+  }
+  if (
+    command === 'retest' &&
+    (flags.summary || flags.allowFork) &&
+    !('pr' in flags || 'branch' in flags || 'worktree' in flags)
+  ) {
+    throw new ConfigError('--summary and --allow-fork need --worktree, --branch, or --pr');
   }
   return flags;
 }
@@ -316,9 +341,26 @@ export async function runAgentCommand(
   if (command === 'retest') {
     const ids = flags.issue as string[] | undefined;
     if (ids?.length !== 1) throw new ConfigError('retest needs --issue <id>');
+    const target: ExternalFixTarget | undefined =
+      typeof flags.worktree === 'string'
+        ? { kind: 'worktree', path: flags.worktree }
+        : typeof flags.branch === 'string'
+          ? { kind: 'branch', ref: flags.branch }
+          : typeof flags.pr === 'number'
+            ? { kind: 'pr', number: flags.pr, allowFork: Boolean(flags.allowFork) }
+            : undefined;
+    if (target) {
+      const attached = await attachExternalFix(root, config, ids[0]!, target, {
+        summary: flags.summary as string | undefined,
+      });
+      log(`Retesting the external fix ${attached.external!.ref} at ${attached.commit?.slice(0, 12)}`);
+    }
     const issue = await workspace.readIssue(ids[0]!);
     const fix = issue?.fixId ? await workspace.readFix(issue.fixId) : undefined;
-    if (!issue || !fix) throw new ConfigError(`No existing fix for ${ids[0]}`);
+    if (!issue || !fix)
+      throw new ConfigError(
+        `No existing fix for ${ids[0]}. To retest a fix made outside Bugpatrol, add --pr, --branch, or --worktree.`,
+      );
     const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, { onLog: log });
     applyRetest(config, fix, result);
     await workspace.saveFix(fix);

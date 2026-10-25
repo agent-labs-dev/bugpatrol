@@ -318,12 +318,13 @@ function needsRetest(fix: FixProposal): boolean {
  * against `retest.attempts`: a retest that stopped on an error keeps the fix
  * in 'retesting', so the next cycle tries again. An unclear verdict also
  * retests the same change while retests are left; a not-fixed verdict gets a
- * refix while fix attempts are left too.
+ * refix while fix attempts are left too, unless the fix is external.
  */
 export function applyRetest(config: BugpatrolConfig, fix: FixProposal, result: Retest): void {
   fix.retests = [...(fix.retests ?? []), result];
   const retestsLeft = judgedRetests(fix.retests).length < config.agents.fixer.retest.attempts;
-  const refixLeft = fixerAttempts(fix.attempts).length < config.agents.fixer.attempts;
+  // Bugpatrol never rewrites a fix it did not write, so a not-fixed external fix waits for its author.
+  const refixLeft = !fix.external && fixerAttempts(fix.attempts).length < config.agents.fixer.attempts;
   if (result.outcome === 'fixed') fix.status = 'verified';
   else if (result.outcome === 'error') fix.status = 'retesting';
   else if (result.outcome === 'not-fixed' && retestsLeft && refixLeft) fix.status = 'retesting';
@@ -380,7 +381,9 @@ export async function recheckMerged(
     const issue = await workspace.readIssue(fix.issueId);
     if (!issue || !['new', 'filed', 'fixing', 'fix-proposed'].includes(issue.status)) continue;
     const branch = await defaultBranch(fix.repo);
-    if (!(fix.pr?.state ? fix.pr.state === 'merged' : await (deps.isMerged?.(fix) ?? merged(fix, branch)))) continue;
+    // GitHub sync only follows Bugpatrol's labeled PRs, so the stored state of an external PR goes stale.
+    const known = fix.pr?.state && (!fix.external || fix.pr.state === 'merged');
+    if (!(known ? fix.pr?.state === 'merged' : await (deps.isMerged?.(fix) ?? merged(fix, branch)))) continue;
     const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, deps, { build: 'main' });
     fix.retests = [...(fix.retests ?? []), result];
     await workspace.saveFix(fix);
