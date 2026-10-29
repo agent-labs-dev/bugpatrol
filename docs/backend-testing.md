@@ -51,9 +51,15 @@ such as no credentials, a bad body, a missing id, the data of another user,
 and a second delete. Bugpatrol checks each response against the spec: the
 status, the content type, and the body schema.
 
+For a missing id, Bugpatrol changes a known id and keeps its shape: the
+prefix, the length, and the character classes. Without a known id, the made-up
+id can have a wrong format, so a declared 400 or 422 also passes.
+
 Bugpatrol sends each failed case a second time. Only a failure that repeats
 blocks: `bugpatrol sweep` then exits 1. A failure that does not repeat goes to
-the judge as a candidate that does not block. A run stops at
+the judge as a candidate that does not block. When the user `other` gets a 2xx
+for the data of `self`, the finding also does not block. The data can be shared
+with all users, so the judge decides. A run stops at
 `agents.sweep.maxRequests`, and the next run continues from that case.
 
 The patrol runs the sweep first in each explorer session of an api app. Then
@@ -104,6 +110,9 @@ The second user enables the cross-user cases: the user `other` requests the
 data of `self`, and the API must refuse it. Without `other`, Bugpatrol blocks
 these cases. Without a credential header, Bugpatrol blocks the no-auth cases
 too.
+
+A path parameter with the name of a credential header gets the value of that
+header. For example, `X-Workspace-Id` fills `{workspace_id}`.
 
 Write each token as a `${NAME}` placeholder. The name must be in `app.secrets`,
 or a setup step must capture it. A setup step can get a short-lived token, for
