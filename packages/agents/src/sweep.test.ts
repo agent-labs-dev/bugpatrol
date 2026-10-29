@@ -1,13 +1,21 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
-import { buildContract, type Contract, loadSpec, type OpenApiDoc, sweepCases } from '@bugpatrol/contract';
+import {
+  buildContract,
+  type Contract,
+  loadSpec,
+  type OpenApiDoc,
+  requestPolicy,
+  sweepCases,
+} from '@bugpatrol/contract';
 import { type CoverageCell, parseConfig } from '@bugpatrol/core';
-import { createDriver } from '@bugpatrol/drivers';
+import { apiCredentials, createDriver } from '@bugpatrol/drivers';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentSession } from './session.js';
-import { runSweep, type SweepBudget } from './sweep.js';
+import { planSweep, runSweep, type SweepBudget } from './sweep.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
@@ -71,7 +79,7 @@ async function sweeper(
   const vars = new Vars();
   const driver = createDriver(config, (value) => value, undefined, root, contract);
   const workspace = new Workspace(root);
-  const cases = sweepCases(contract, { credentials: options.other ? ['self', 'other'] : ['self'] });
+  const cases = sweepCases(contract, { credentials: apiCredentials(config.app.connect, (value) => value) });
   const run = async (budget: Partial<SweepBudget> = {}, before?: (session: AgentSession) => void) => {
     const record = await workspace.startSession('explorer');
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
@@ -270,4 +278,111 @@ describe('runSweep', () => {
     const two = await (await sweeper()).run();
     expect(strip(two.result.cells)).toEqual(strip(one.result.cells));
   }, 60_000);
+
+  it('a 2xx for the user other goes to the judge, and a header value fills a path parameter', async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      const path = request.url ?? '';
+      seen.push(path);
+      const send = (status: number, body: unknown) =>
+        response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+      if (path === '/themes') return send(200, [{ id: 'thm_1a2b' }]);
+      // A theme is public: each user reads it.
+      if (path === '/themes/thm_1a2b') return send(200, { id: 'thm_1a2b' });
+      if (path === `/workspaces/${request.headers['x-workspace-id']}`) return send(200, { id: 'ws' });
+      send(404, {});
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    cleanups.push(() => new Promise((done) => server.close(() => done())));
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-sweep-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const json = (schema: unknown) => ({ description: 'ok', content: { 'application/json': { schema } } });
+    const param = (name: string) => [{ name, in: 'path', required: true, schema: { type: 'string' } }];
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/themes': { get: { responses: { '200': json({ type: 'array', items: { properties: { id: {} } } }) } } },
+        '/themes/{theme_id}': {
+          get: { parameters: param('theme_id'), responses: { '200': json({}), '404': json({}) } },
+        },
+        '/workspaces/{workspace_id}': {
+          get: { parameters: param('workspace_id'), responses: { '200': json({}), '404': json({}) } },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const config = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        connect: {
+          url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+          perMinute: 60_000,
+          credentials: {
+            self: { headers: { Authorization: 'Bearer a', 'X-Workspace-Id': '{{WORKSPACE_ID}}' } },
+            other: { headers: { Authorization: 'Bearer b', 'X-Workspace-Id': 'ws-b' } },
+          },
+        },
+      },
+    });
+    const vars = new Vars();
+    // A setup step captured the workspace of self, so it is a secret.
+    vars.set('WORKSPACE_ID', 'ws-secret-7');
+    const contract = buildContract(doc, config.app.connect);
+    const driver = createDriver(
+      config,
+      vars.resolve.bind(vars),
+      (value) => vars.redact(value) as string,
+      root,
+      contract,
+    );
+    const workspace = new Workspace(root);
+    const record = await workspace.startSession('explorer');
+    const session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
+    const cases = sweepCases(contract, { credentials: apiCredentials(config.app.connect, (value) => value) });
+    const result = await runSweep(session, cases, BUDGET);
+
+    expect(result.findings.map(({ key, repeats, blocking }) => ({ key, repeats, blocking }))).toEqual([
+      { key: 'GET /themes/{theme_id} other-user', repeats: true, blocking: false },
+    ]);
+    const [candidate] = await workspace.readCandidates(record.id);
+    expect(candidate).toMatchObject({ blocking: false, route: { to: 'judge' } });
+    expect(candidate!.route!.reason).toContain('shared');
+    // The missing ids keep the shape of the known ids.
+    expect(seen).toContain('/themes/thm_ffff');
+    expect(seen).toContain('/workspaces/ws-zzzzzz-9');
+    // The header value fills the path, and the evidence hides it.
+    expect(seen).toContain('/workspaces/ws-secret-7');
+    const ok = result.cells.find((cell) => cell.endpoint === 'GET /workspaces/{workspace_id}' && cell.case === 'ok');
+    expect(ok).toMatchObject({ status: 200, ok: true });
+    const exchange = await readFile(join(root, ok!.exchange!), 'utf8');
+    expect(JSON.parse(exchange).request.path).toBe('/workspaces/{{WORKSPACE_ID}}');
+    expect(exchange).not.toContain('ws-secret-7');
+  }, 30_000);
+
+  it('skips a denied case with the policy reason, also when it has no known id', () => {
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/admin/things/{thing_id}': {
+          delete: {
+            parameters: [{ name: 'thing_id', in: 'path', required: true, schema: { type: 'string' } }],
+            responses: { '204': { description: 'gone' } },
+          },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const { connect } = parseConfig({
+      version: 1,
+      app: { platform: 'api', connect: { url: 'http://127.0.0.1:1', deny: ['/admin/**'] } },
+    }).app;
+    const contract = buildContract(doc, connect);
+    const cases = sweepCases(contract, { credentials: {} });
+    expect(cases.every((item) => item.blocked?.startsWith('no known thing_id'))).toBe(true);
+    const plan = planSweep(cases, requestPolicy(contract, { ...connect, url: connect.url! }));
+    expect(plan.blocked).toEqual([]);
+    expect(plan.skipped).toEqual([
+      { key: 'DELETE /admin/things/{thing_id} ok', reason: 'app.connect.deny has /admin/**' },
+      { key: 'DELETE /admin/things/{thing_id} repeat-delete', reason: 'app.connect.deny has /admin/**' },
+    ]);
+  });
 });

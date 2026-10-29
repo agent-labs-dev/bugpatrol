@@ -157,7 +157,8 @@ export type Assertion =
   | { kind: 'exit-code'; value: number }
   | { kind: 'output-includes'; value: string }
   | { kind: 'output-excludes'; value: string }
-  | { kind: 'status'; value: number }
+  /** The status, or with a list, one of its statuses. */
+  | { kind: 'status'; value: number | number[] }
   | { kind: 'body-includes'; value: string }
   | { kind: 'body-excludes'; value: string }
   /**

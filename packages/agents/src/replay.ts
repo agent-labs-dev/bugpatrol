@@ -57,7 +57,8 @@ export function checkAssertions(
   return assertions.flatMap((assertion): AssertionResult[] => {
     if (assertion.kind === 'exit-code' || assertion.kind === 'status') {
       const code = assertion.kind === 'status' ? http?.status : terminal?.exitCode;
-      return [{ assertion, ok: code === assertion.value, actual: code === undefined ? 'none' : String(code) }];
+      const ok = code !== undefined && [assertion.value].flat().includes(code);
+      return [{ assertion, ok, actual: code === undefined ? 'none' : String(code) }];
     }
     if (
       assertion.kind === 'output-includes' ||
@@ -141,7 +142,7 @@ export function assertionWords(result: Pick<AssertionResult, 'assertion' | 'actu
   if (failed && actual === 'none' && assertion.kind !== 'contract') return 'no response came';
   switch (assertion.kind) {
     case 'status':
-      return failed ? `the status is ${actual}` : `The status is ${assertion.value}`;
+      return failed ? `the status is ${actual}` : `The status is ${[assertion.value].flat().join(' or ')}`;
     case 'contract': {
       if (failed && actual === 'none') return 'no response came';
       if (!assertion.check)

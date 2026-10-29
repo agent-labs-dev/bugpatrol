@@ -18,7 +18,7 @@ import {
   ExitCode,
   type ExitCodeValue,
 } from '@bugpatrol/core';
-import { ApiDriver, apiCredentials, createDriver, credentialSets } from '@bugpatrol/drivers';
+import { ApiDriver, apiCredentials, createDriver } from '@bugpatrol/drivers';
 
 type SweepFlags = { json: boolean; dryRun: boolean; maxRequests?: number };
 
@@ -64,8 +64,8 @@ export async function runSweepCommand(
     if (!url) throw new ConfigError('bugpatrol sweep needs app.connect.url');
     const contract = await loadContract(root, { ...connect, url }, resolveConfig);
     const policy = requestPolicy(contract, { ...connect, url: resolveConfig(url) });
-    // Only the header names count, and setup did not run to capture the values.
-    const credentials = credentialSets(apiCredentials(connect, (value) => value));
+    // Setup did not run, so the headers keep their placeholders.
+    const credentials = apiCredentials(connect, (value) => value);
     const plan = planSweep(sweepCases(contract, { credentials }), policy, await workspace.readCoverage());
     printPlan(plan, budget.maxRequests, flags.json, log);
     return ExitCode.Clean;
@@ -93,11 +93,12 @@ export async function runSweepCommand(
     await driver.connect();
     const record = await workspace.startSession('explorer');
     session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
-    const cases = sweepCases(driver.policy.contract, { credentials: driver.credentialSets });
+    const credentials = apiCredentials(config.app.connect, (value) => value);
+    const cases = sweepCases(driver.policy.contract, { credentials });
     const result = await runSweep(session, cases, budget);
-    const blocking = result.findings.filter((finding) => finding.repeats && !finding.dismissed).length;
+    const blocking = result.findings.filter((finding) => finding.blocking && !finding.dismissed).length;
     await workspace.endSession(record.id, {
-      summary: `Sweep: ${result.requests} request(s), ${result.findings.length} finding(s), ${blocking} that repeat`,
+      summary: `Sweep: ${result.requests} request(s), ${result.findings.length} finding(s), ${blocking} that block`,
     });
     await session.idle();
     if (flags.json) log(JSON.stringify(result, null, 2));
@@ -171,11 +172,16 @@ function printResult(
     log([endpoint.padEnd(width), ...row].join('  '));
   }
   if (result.findings.length) log('\nFindings:');
-  for (const finding of result.findings)
-    log(
-      `${finding.dismissed ? 'known ' : finding.repeats ? 'BLOCKS' : 'flaky '}  ${finding.summary}` +
-        `${finding.dismissed ? ' (dismissed before)' : finding.repeats ? '' : ' (did not repeat)'}`,
-    );
+  for (const finding of result.findings) {
+    const [label, note] = finding.dismissed
+      ? ['known ', ' (dismissed before)']
+      : finding.blocking
+        ? ['BLOCKS', '']
+        : finding.repeats
+          ? ['judge ', ' (the data can be shared: the judge decides)']
+          : ['flaky ', ' (did not repeat)'];
+    log(`${label}  ${finding.summary}${note}`);
+  }
   for (const item of result.skipped) log(`skipped  ${item.key}: ${item.reason}`);
   log(
     `\n${result.requests} request(s), ${result.cells.length} cell(s) written, ${result.remaining} case(s) left for the next run` +

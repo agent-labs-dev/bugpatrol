@@ -2,6 +2,7 @@ export {
   type CaseVerdict,
   caseKey,
   coverageCells,
+  missingId,
   type SweepCase,
   type SweepCaseId,
   type SweepOptions,

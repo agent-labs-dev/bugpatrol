@@ -3,7 +3,7 @@ import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
-import { ApiDriver, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
@@ -258,7 +258,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
                   if (!interrupted && driver instanceof ApiDriver) {
                     const sweep = await runSweep(
                       session,
-                      sweepCases(driver.policy.contract, { credentials: driver.credentialSets }),
+                      sweepCases(driver.policy.contract, {
+                        credentials: apiCredentials(config.app.connect, (value) => value),
+                      }),
                       config.agents.sweep,
                     );
                     options.onLog?.(

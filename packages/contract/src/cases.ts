@@ -22,10 +22,13 @@ export type SweepCaseId = Exclude<CaseId, `declared:${number}`>;
 export type SweepCase = { endpoint: Endpoint; case: SweepCaseId; steps: RoutineStep[]; blocked?: string };
 
 /**
- * `credentials`: the sets that send at least one header. With none, a
- * no-auth case would send the same request as the ok case, so it is blocked.
+ * `credentials`: the headers of each credential set as the config writes
+ * them, before a placeholder is resolved. A set without a header does not
+ * count. With no set, a no-auth case would send the same request as the ok
+ * case, so it is blocked. A path parameter with the name of a header takes
+ * the value of that header (rule 5).
  */
-export type SweepOptions = { credentials: Exclude<CredentialSet, 'none'>[] };
+export type SweepOptions = { credentials: Partial<Record<Exclude<CredentialSet, 'none'>, Record<string, string>>> };
 
 /** The key of a case in the coverage file and the sweep cursor. */
 export const caseKey = (endpoint: Endpoint['key'], id: CaseId) => `${endpoint} ${id}`;
@@ -91,12 +94,13 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
   const { doc } = contract;
   const declared = new Set([...contract.errors.statuses, ...contract.endpoints.flatMap((e) => codes(doc, e))]);
   const negative = !specLacksErrors(contract) || contract.errors.statuses.length > 0;
+  const sets = (['self', 'other'] as const).filter((set) => Object.keys(options.credentials[set] ?? {}).length);
   const cases: SweepCase[] = [];
   for (const endpoint of contract.endpoints) {
     const own = new Set([...contract.errors.statuses, ...codes(doc, endpoint)]);
     const expected = (kind: keyof typeof EXPECTED) =>
       EXPECTED[kind].find((code) => own.has(code)) ?? EXPECTED[kind].find((code) => declared.has(code));
-    const plan = new Plan(contract, endpoint);
+    const plan = new Plan(contract, endpoint, options.credentials);
     const add = (id: SweepCaseId, steps: Built<RoutineStep[]>) =>
       cases.push(
         isBlocked(steps) ? { endpoint, case: id, steps: [], blocked: steps.blocked } : { endpoint, case: id, steps },
@@ -109,7 +113,7 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
     if (negative && noAuth && plan.needsAuth())
       add(
         'no-auth',
-        !options.credentials.length
+        !sets.length
           ? { blocked: 'no credentials configured' }
           : isBlocked(base)
             ? base
@@ -127,14 +131,19 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
 
     if (negative && last && expected('missing-id')) {
       const missing = plan.missing(last);
-      add('missing-id', isBlocked(missing) ? missing : [plan.request(missing, { assert: checks(404) })]);
+      if (isBlocked(missing)) add('missing-id', missing);
+      else {
+        // Rule 1b: a made-up id can have a wrong format, so a declared 400 or 422 also passes.
+        const statuses = missing.madeUp ? [404, ...[400, 422].filter((code) => declared.has(code))] : 404;
+        add('missing-id', [...missing.setup, plan.request(missing, { assert: checks(statuses) })]);
+      }
     }
 
     const otherUser = expected('other-user');
     if (negative && last && otherUser && endpoint.method === 'GET')
       add(
         'other-user',
-        !options.credentials.includes('other')
+        !sets.includes('other')
           ? { blocked: 'other-user needs a second credential set' }
           : isBlocked(base)
             ? base
@@ -142,7 +151,7 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
                 ...base.setup,
                 // Setup: the ok case checks this request, so a bug in it gives one finding, not one for each case.
                 plan.request(base, {}),
-                plan.request(base, { as: 'other', assert: checks(otherUser) }),
+                plan.request(plan.asOther(base), { as: 'other', assert: checks(otherUser) }),
               ],
       );
 
@@ -178,7 +187,7 @@ export function specLacksErrors(contract: Contract): boolean {
 }
 
 const CONTRACT: Assertion = { kind: 'contract' };
-const checks = (status: number): Assertion[] => [CONTRACT, { kind: 'status', value: status }];
+const checks = (status: number | number[]): Assertion[] => [CONTRACT, { kind: 'status', value: status }];
 
 /** The parts of one request. Path values are already encoded, or a `{{RESPONSE_*}}` placeholder. */
 type Parts = {
@@ -186,6 +195,8 @@ type Parts = {
   query: Record<string, string>;
   body?: { text: string; type: string };
   setup: RoutineStep[];
+  /** The last path value is made up, not built from a known id (rule 1b). */
+  madeUp?: true;
 };
 
 type Param = { name: string; in: string; required?: boolean; schema?: unknown; example?: unknown; examples?: unknown };
@@ -199,6 +210,7 @@ class Plan {
   constructor(
     private readonly contract: Contract,
     private readonly endpoint: Endpoint,
+    private readonly credentials: SweepOptions['credentials'],
   ) {
     this.operation = operationOf(contract.doc, endpoint);
     this.params = parameters(contract.doc, endpoint);
@@ -210,13 +222,13 @@ class Plan {
     const setup: RoutineStep[] = [];
     const path: Record<string, string> = {};
     for (const name of this.pathNames) {
-      const known = explicit(this.contract.doc, this.param('path', name));
+      const known = this.known(name);
       if (known !== undefined) {
-        path[name] = encodeURIComponent(known);
+        path[name] = known;
         continue;
       }
       if (name !== this.pathNames.at(-1)) return { blocked: `no known ${name}: the spec has no example` };
-      const made = producer(this.contract, this.endpoint, name);
+      const made = producer(this.contract, this.endpoint, name, path);
       if (isBlocked(made)) return made;
       setup.push(made.step);
       path[name] = made.value;
@@ -246,21 +258,43 @@ class Plan {
     return out;
   }
 
-  /** The request with an id that does not exist in place of the last path parameter. No setup runs. */
+  /**
+   * The request with an id that does not exist in place of the last path
+   * parameter (rule 1a). A number or a uuid has a fixed missing value. Else
+   * the id comes from a known id, through `missingId`: an example in the
+   * spec, a credential header, or a list or create in a setup step. Without
+   * a known id, the id is made up.
+   */
   missing(name: string): Built<Parts> {
     const path: Record<string, string> = {};
     for (const other of this.pathNames) {
       if (other === name) continue;
-      const known = explicit(this.contract.doc, this.param('path', other));
+      const known = this.known(other);
       if (known === undefined) return { blocked: `no known ${other}: the spec has no example` };
-      path[other] = encodeURIComponent(known);
+      path[other] = known;
     }
-    path[name] = encodeURIComponent(missingValue(this.contract.doc, this.param('path', name)?.schema));
     const query = this.query();
     if (isBlocked(query)) return query;
     const body = this.body();
     if (isBlocked(body)) return body;
-    return { path, query, ...(body ? { body } : {}), setup: [] };
+    const parts = { path, query, ...(body ? { body } : {}) };
+    const fixed = fixedMissing(this.contract.doc, this.param('path', name)?.schema);
+    if (fixed !== undefined) return { ...parts, path: { ...path, [name]: fixed }, setup: [] };
+    const known = this.known(name);
+    if (known !== undefined) return { ...parts, path: { ...path, [name]: missingOf(known) }, setup: [] };
+    const made = producer(this.contract, this.endpoint, name, path);
+    if (!isBlocked(made)) return { ...parts, path: { ...path, [name]: missingOf(made.value) }, setup: [made.step] };
+    return { ...parts, path: { ...path, [name]: 'bugpatrol-missing' }, setup: [], madeUp: true };
+  }
+
+  /** The request as the user `other`: each path parameter but the last takes the header value of that user. */
+  asOther(base: Parts): Parts {
+    const path = { ...base.path };
+    for (const name of this.pathNames.slice(0, -1)) {
+      const value = headerValue(this.credentials.other, name);
+      if (value !== undefined) path[name] = value;
+    }
+    return { ...base, path };
   }
 
   /** The spec security, not its scheme (T3): an operation with a required security requirement. */
@@ -275,6 +309,12 @@ class Plan {
 
   request(parts: Parts, step: { as?: CredentialSet; assert?: Assertion[] }): RoutineStep {
     return request(this.endpoint, parts, step);
+  }
+
+  /** The encoded value of a path parameter: an example in the spec, else the header of `self` with its name. */
+  private known(name: string): string | undefined {
+    const given = explicit(this.contract.doc, this.param('path', name));
+    return given === undefined ? headerValue(this.credentials.self, name) : encodeURIComponent(given);
   }
 
   private param(place: string, name: string): Param | undefined {
@@ -320,7 +360,12 @@ function request(
  * the collection above it for a read, a create for a write. A DELETE never
  * deletes a listed resource, only one that it made.
  */
-function producer(contract: Contract, endpoint: Endpoint, name: string): Built<{ step: RoutineStep; value: string }> {
+function producer(
+  contract: Contract,
+  endpoint: Endpoint,
+  name: string,
+  known: Record<string, string>,
+): Built<{ step: RoutineStep; value: string }> {
   const segments = endpoint.template.split('/');
   const collection = segments.slice(0, segments.indexOf(`{${name}}`)).join('/') || '/';
   const list = endpoint.method === 'DELETE' ? [] : [find(contract, 'GET', collection)];
@@ -330,11 +375,12 @@ function producer(contract: Contract, endpoint: Endpoint, name: string): Built<{
   for (const source of reads ? [...list, create] : [create, ...list]) {
     if (!source) continue;
     const pointer = idPointer(contract.doc, successSchema(contract.doc, source), name);
-    if (!pointer || source.template.includes('{')) continue;
+    const params = [...source.template.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1]!);
+    if (!pointer || params.some((param) => known[param] === undefined)) continue;
     const body = minimalBody(contract.doc, operationOf(contract.doc, source));
     if (isBlocked(body)) continue;
     return {
-      step: request(source, { path: {}, query: {}, ...(body ? { body } : {}) }, { capture: { [capture]: pointer } }),
+      step: request(source, { path: known, query: {}, ...(body ? { body } : {}) }, { capture: { [capture]: pointer } }),
       value: `{{${capture}}}`,
     };
   }
@@ -533,15 +579,70 @@ function badValue(doc: OpenApiDoc, raw: unknown): string | undefined {
   return undefined;
 }
 
-/** An id that does not exist: in range for a number, a fixed uuid, else a fixed text. */
-function missingValue(doc: OpenApiDoc, raw: unknown): string {
+const MISSING_UUID = 'ffffffff-ffff-4fff-bfff-ffffffffffff';
+const MISSING_NUMBER = '2147483647';
+
+/** An id that does not exist for a number or a uuid schema: the maximum number in range, or a fixed uuid. */
+function fixedMissing(doc: OpenApiDoc, raw: unknown): string | undefined {
   const schema = deref(doc, raw);
-  if (!isObject(schema)) return 'bugpatrol-missing';
+  if (!isObject(schema)) return undefined;
   const types = Array.isArray(schema.type) ? schema.type : [schema.type];
   if (types.includes('integer') || types.includes('number'))
-    return String(typeof schema.maximum === 'number' ? schema.maximum : 2_147_483_647);
-  if (schema.format === 'uuid') return 'ffffffff-ffff-4fff-bfff-ffffffffffff';
-  return 'bugpatrol-missing';
+    return typeof schema.maximum === 'number' ? String(schema.maximum) : MISSING_NUMBER;
+  if (schema.format === 'uuid') return MISSING_UUID;
+  return undefined;
+}
+
+/**
+ * Rule 1a: an id of the same shape as the known id `value`, which very
+ * likely does not exist, the same on each run.
+ * - A uuid becomes a fixed uuid.
+ * - Only digits: 2147483647 for fewer than 10 digits, else the same count of 9.
+ * - Else the separators (not a letter or a digit) stay. A first run of
+ *   letters before a separator stays too: it is a type prefix such as
+ *   `thrd_`. In each other run, digits become 9s, lowercase hex becomes fs,
+ *   and uppercase hex becomes Fs. In a mixed run, each digit becomes 9, each
+ *   lowercase letter z, and each uppercase letter Z.
+ */
+export function missingId(value: string): string {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return MISSING_UUID;
+  if (/^\d+$/.test(value)) return value.length < 10 ? MISSING_NUMBER : '9'.repeat(value.length);
+  const runs = value.split(/([^A-Za-z0-9]+)/);
+  return runs
+    .map((run, index) => {
+      if (index % 2 || (index === 0 && runs.length > 1 && /^[A-Za-z]+$/.test(run))) return run;
+      if (/^\d+$/.test(run)) return '9'.repeat(run.length);
+      if (/^[0-9a-f]+$/.test(run)) return 'f'.repeat(run.length);
+      if (/^[0-9A-F]+$/.test(run)) return 'F'.repeat(run.length);
+      return run.replace(/\d/g, '9').replace(/[a-z]/g, 'z').replace(/[A-Z]/g, 'Z');
+    })
+    .join('');
+}
+
+/**
+ * The missing id of an encoded path value. A placeholder becomes
+ * `{{NAME|missing}}`, so the value that it resolves to goes through
+ * `missingId` when the request is sent.
+ */
+function missingOf(value: string): string {
+  const name = /^\{\{([A-Za-z_][A-Za-z_0-9]*)\}\}$/.exec(value)?.[1];
+  return name ? `{{${name}|missing}}` : encodeURIComponent(missingId(decodeURIComponent(value)));
+}
+
+/**
+ * Rule 5: the encoded value of the header of a credential set whose name
+ * matches a path parameter. Case, a leading `x-`, and `-` against `_` do
+ * not count, so `X-Workspace-Id` matches `workspace_id`. A placeholder stays,
+ * so the request resolves it and the evidence redacts it. A header that
+ * mixes a placeholder and text does not count.
+ */
+function headerValue(headers: Record<string, string> | undefined, name: string): string | undefined {
+  const key = (text: string) => text.toLowerCase().replace(/^x-/, '').replaceAll('-', '_');
+  const value = Object.entries(headers ?? {}).find(([header]) => key(header) === key(name))?.[1];
+  if (value === undefined) return undefined;
+  const placeholder = /^(?:\{\{([A-Za-z_][A-Za-z_0-9]*)\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\})$/.exec(value);
+  if (placeholder) return `{{${placeholder[1] ?? placeholder[2]}}}`;
+  return /\{\{|\$\{/.test(value) ? undefined : encodeURIComponent(value);
 }
 
 /** A value that the spec gives for a parameter. Only such a value, or a known id, fills a path parameter. */

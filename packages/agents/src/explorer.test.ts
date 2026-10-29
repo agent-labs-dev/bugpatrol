@@ -169,9 +169,9 @@ describe('the api explorer', () => {
   it('a report on a named case has the key of the sweep failure of that case', async () => {
     const f = await apiExplorer();
     closers.push(f.fixture.close);
-    const missing = sweepCases(f.contract, { credentials: ['self', 'other'] }).filter(
-      (item) => caseKey(item.endpoint.key, item.case) === 'GET /items/{id} missing-id',
-    );
+    const missing = sweepCases(f.contract, {
+      credentials: { self: { authorization: 'a' }, other: { authorization: 'b' } },
+    }).filter((item) => caseKey(item.endpoint.key, item.case) === 'GET /items/{id} missing-id');
     await runSweep(f.session, missing, { maxRequests: 10, timeoutMs: 10_000 });
     const sent = await f.run('request', { method: 'GET', url: '/items/2147483647', case: 'missing-id' });
     expect(sent.text).toContain('HTTP 404');

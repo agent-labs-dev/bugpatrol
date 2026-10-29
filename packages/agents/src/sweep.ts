@@ -35,8 +35,14 @@ export type SweepFinding = {
   failed: string[];
   summary: string;
   status?: number;
-  /** The failure came back on a second replay. Only such a failure blocks (ADR 0007). */
+  /** The failure came back on a second replay. Only such a failure can block (ADR 0007). */
   repeats: boolean;
+  /**
+   * The finding blocks: it repeats, and it is not a 2xx of the user `other`
+   * (rule 2). A black-box test cannot tell a leak from a resource that all
+   * users may read, so the judge decides that one.
+   */
+  blocking: boolean;
   /** The judge dismissed this fingerprint before, so the finding does not block. */
   dismissed?: true;
 };
@@ -71,7 +77,8 @@ export const specDigest = (contract: Contract) => shortHash(JSON.stringify(contr
  * The order of the cases: the rest of the current pass first, so a run
  * resumes where the last one stopped. A new pass starts with the cells whose
  * `at` is oldest, and cells that never ran come first, so no endpoint
- * starves. A case that the policy refuses is skipped.
+ * starves. A case that the policy refuses is skipped, also when it is
+ * blocked: the policy verdict comes first.
  */
 export function planSweep(cases: SweepCase[], policy: RequestPolicy, coverage?: CoverageFile): SweepPlan {
   const digest = specDigest(policy.contract);
@@ -79,14 +86,12 @@ export function planSweep(cases: SweepCase[], policy: RequestPolicy, coverage?: 
   const skipped: SweepPlan['skipped'] = [];
   const blocked: SweepCase[] = [];
   for (const item of cases) {
-    if (item.blocked) {
-      blocked.push(item);
-      continue;
-    }
-    const refused = item.steps
-      .map((step) => (step.kind === 'request' ? policy.check(step.method, step.url) : undefined))
-      .find((verdict) => verdict && !verdict.ok);
+    const refused = [
+      policy.check(item.endpoint.method, item.endpoint.template),
+      ...item.steps.flatMap((step) => (step.kind === 'request' ? [policy.check(step.method, step.url)] : [])),
+    ].find((verdict) => !verdict.ok);
     if (refused && !refused.ok) skipped.push({ key: keyOf(item), reason: refused.reason });
+    else if (item.blocked) blocked.push(item);
     else runnable.set(keyOf(item), item);
   }
   const cells = coverage?.cells ?? {};
@@ -215,6 +220,7 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
     next.splice(next.indexOf(key), 1);
     if (ids.length) {
       const words = first.results.filter((r) => !r.ok).map((r) => assertionWords(r, true));
+      const shared = item.case === 'other-user' && first.status !== undefined && first.status < 300;
       const finding: SweepFinding = {
         key,
         endpoint: item.endpoint.key,
@@ -223,15 +229,19 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
         summary: `${key}: ${[...new Set(words)].join('; ')}`,
         ...(first.status === undefined ? {} : { status: first.status }),
         repeats,
+        blocking: repeats && !shared,
       };
       findings.push(finding);
       const capture = first.failing?.capture;
       if (capture?.kind === 'http' && capture.exchange)
         await propose(session, finding, capture.exchange, item, {
-          blocking: repeats,
-          reason: repeats
-            ? 'The sweep failure repeats on a second replay'
-            : `The sweep failure does not repeat: ${differs}`,
+          blocking: finding.blocking,
+          reason: !repeats
+            ? `The sweep failure does not repeat: ${differs}`
+            : shared
+              ? `The user other got ${first.status} for a resource of the user self. ` +
+                'The resource can be shared with all users, so the judge decides if this is a leak'
+              : 'The sweep failure repeats on a second replay',
         });
     }
     await save();
@@ -246,6 +256,7 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
       failed: ['spec:no-errors'],
       summary: 'The spec declares no error status other than 422 on at least 90% of its operations',
       repeats: false,
+      blocking: false,
     };
     findings.push(finding);
     if (errorExchange)
