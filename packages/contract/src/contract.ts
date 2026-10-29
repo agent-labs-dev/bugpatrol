@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
 import type { AppConfig, Endpoint, EndpointKey, HttpMethod } from '@bugpatrol/core';
-import { HTTP_METHODS } from '@bugpatrol/core';
-import { isObject, type OpenApiDoc, type OpenApiOperation } from './load.js';
+import { HTTP_METHODS, paths } from '@bugpatrol/core';
+import { isObject, loadInventory, loadSpec, type OpenApiDoc, type OpenApiOperation, specSource } from './load.js';
 import { matcher } from './match.js';
 
 export type SkipReason = 'x-bugpatrol-skip' | 'event-stream';
@@ -17,6 +18,26 @@ export type Contract = {
   /** The endpoint of a request, from its method and its path or URL. */
   match(method: string, url: string): Endpoint | undefined;
 };
+
+/**
+ * The contract of a project: from `app.connect.spec`, or else from its
+ * endpoint inventory. `resolve` fills the placeholders of `spec` and `url`.
+ * A project with neither has a contract without endpoints, so only reads go
+ * out. A caller that needs endpoints checks for that.
+ */
+export async function loadContract(
+  root: string,
+  connect: Pick<AppConfig['connect'], 'spec' | 'url' | 'errors'>,
+  resolve: (value: string) => string,
+): Promise<Contract> {
+  const inventory = paths.endpointInventory(root);
+  const doc = connect.spec
+    ? await loadSpec(specSource(resolve(connect.spec), { root, url: connect.url && resolve(connect.url) }))
+    : existsSync(inventory)
+      ? await loadInventory(inventory)
+      : { openapi: '3.1.0', paths: {} };
+  return buildContract(doc, connect);
+}
 
 export function buildContract(doc: OpenApiDoc, connect: Pick<AppConfig['connect'], 'errors'>): Contract {
   const endpoints: Endpoint[] = [];

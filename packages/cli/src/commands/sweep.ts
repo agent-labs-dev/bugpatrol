@@ -9,8 +9,15 @@ import {
   Vars,
   Workspace,
 } from '@bugpatrol/agents';
-import { buildContract, projectDoc, requestPolicy, sweepCases } from '@bugpatrol/contract';
-import { type BugpatrolConfig, ConfigError, type CoverageFile, ExitCode, type ExitCodeValue } from '@bugpatrol/core';
+import { loadContract, requestPolicy, sweepCases } from '@bugpatrol/contract';
+import {
+  type BugpatrolConfig,
+  ConfigError,
+  type CoverageFile,
+  compareCaseIds,
+  ExitCode,
+  type ExitCodeValue,
+} from '@bugpatrol/core';
 import { ApiDriver, apiCredentials, createDriver, credentialSets } from '@bugpatrol/drivers';
 
 type SweepFlags = { json: boolean; dryRun: boolean; maxRequests?: number };
@@ -51,15 +58,13 @@ export async function runSweepCommand(
   const budget = { ...config.agents.sweep, ...(flags.maxRequests ? { maxRequests: flags.maxRequests } : {}) };
   if (flags.dryRun) {
     const vars = new Vars(config.app.secrets);
+    const resolveConfig = vars.resolveConfig.bind(vars);
     const { connect } = config.app;
     const url = connect.url ?? config.run?.url;
     if (!url) throw new ConfigError('bugpatrol sweep needs app.connect.url');
-    const doc = await projectDoc(root, {
-      spec: connect.spec && vars.resolveConfig(connect.spec),
-      url: vars.resolveConfig(url),
-    });
-    const contract = buildContract(doc ?? { openapi: '3.1.0', paths: {} }, connect);
-    const policy = requestPolicy(contract, { ...connect, url: vars.resolveConfig(url) });
+    const contract = await loadContract(root, { ...connect, url }, resolveConfig);
+    const policy = requestPolicy(contract, { ...connect, url: resolveConfig(url) });
+    // Only the header names count, and setup did not run to capture the values.
     const credentials = credentialSets(apiCredentials(connect, (value) => value));
     const plan = planSweep(sweepCases(contract, { credentials }), policy, await workspace.readCoverage());
     printPlan(plan, budget.maxRequests, flags.json, log);
@@ -145,9 +150,6 @@ function printPlan(plan: SweepPlan, maxRequests: number, json: boolean, log: (li
   );
 }
 
-/** The columns of the table, after the `declared:<code>` ones of `ok`. */
-const CASES = ['ok', 'declared', 'no-auth', 'invalid-input', 'missing-id', 'other-user', 'repeat-delete'];
-
 /** The endpoint × case table of the whole coverage: the status, `!` for a failure, `-` for a blocked case. */
 function printResult(
   result: SweepResult,
@@ -156,8 +158,7 @@ function printResult(
   log: (line: string) => void,
 ): void {
   const cells = Object.values(coverage?.cells ?? {});
-  const order = (id: string) => `${CASES.indexOf(id.startsWith('declared:') ? 'declared' : id)}${id}`;
-  const cases = [...new Set(cells.map((cell) => cell.case))].sort((a, b) => order(a).localeCompare(order(b)));
+  const cases = [...new Set(cells.map((cell) => cell.case))].sort(compareCaseIds);
   const endpoints = [...new Set(cells.map((cell) => cell.endpoint))];
   const width = Math.max(8, ...endpoints.map((endpoint) => endpoint.length));
   log([''.padEnd(width), ...cases.map((id) => id.padEnd(14))].join('  '));

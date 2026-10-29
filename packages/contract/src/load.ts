@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ConfigError, HTTP_METHODS, type HttpMethod, InfrastructureError, paths } from '@bugpatrol/core';
+import { ConfigError, HTTP_METHODS, type HttpMethod, InfrastructureError } from '@bugpatrol/core';
 import { parse as parseYaml } from 'yaml';
 
 /** An OpenAPI 3 operation. Only the keys Bugpatrol reads are typed. */
@@ -41,19 +40,6 @@ export function specSource(spec: string, base: { root: string; url?: string }): 
   if (!spec.startsWith('/')) return { file: resolve(base.root, spec) };
   if (!base.url) throw new ConfigError(`app.connect.spec ${spec} is a path on connect.url, and connect.url is not set`);
   return { url: `${base.url.replace(/\/+$/, '')}${spec}` };
-}
-
-/**
- * The doc of a project: `app.connect.spec`, or else its endpoint inventory.
- * Undefined when the project has neither.
- */
-export async function projectDoc(
-  root: string,
-  connect: { spec?: string; url?: string },
-): Promise<OpenApiDoc | undefined> {
-  if (connect.spec) return loadSpec(specSource(connect.spec, { root, url: connect.url }));
-  const inventory = paths.endpointInventory(root);
-  return existsSync(inventory) ? loadInventory(inventory) : undefined;
 }
 
 export async function loadSpec(src: SpecSource, options: LoadSpecOptions = {}): Promise<OpenApiDoc> {

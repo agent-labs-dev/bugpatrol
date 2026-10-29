@@ -1,4 +1,4 @@
-import { type CoverageFile, HTTP_METHODS } from '@bugpatrol/core';
+import { type CoverageFile, compareCaseIds, HTTP_METHODS } from '@bugpatrol/core';
 
 type CellState = 'pass' | 'fail' | 'blocked' | 'skip' | 'untested';
 
@@ -30,8 +30,6 @@ export type CoverageMatrix = {
   remaining: number;
 };
 
-const CASES = ['ok', 'declared', 'no-auth', 'invalid-input', 'missing-id', 'other-user', 'repeat-delete'];
-
 export function coverageMatrix(coverage: CoverageFile): CoverageMatrix {
   const next = coverage.cursor?.next ?? [];
   const skipped = coverage.skipped ?? {};
@@ -49,8 +47,7 @@ export function coverageMatrix(coverage: CoverageFile): CoverageMatrix {
   for (const key of next) cells[key] ??= { state: 'untested' };
 
   const keys = Object.keys(cells).map(split);
-  const order = (id: string) => CASES.indexOf(id.startsWith('declared:') ? 'declared' : id);
-  const cases = [...new Set(keys.map((key) => key.case))].sort((a, b) => order(a) - order(b) || a.localeCompare(b));
+  const cases = [...new Set(keys.map((key) => key.case))].sort(compareCaseIds);
   const method = (endpoint: string) => HTTP_METHODS.indexOf(endpoint.split(' ')[0] as (typeof HTTP_METHODS)[number]);
   const endpoints = [...new Set(keys.map((key) => key.endpoint))].sort(
     (a, b) => a.slice(a.indexOf(' ')).localeCompare(b.slice(b.indexOf(' '))) || method(a) - method(b),

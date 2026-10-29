@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
-import { Workspace } from '@bugpatrol/agents';
-import { buildContract, loadSpec, projectDoc, requestPolicy } from '@bugpatrol/contract';
+import { pathToFileURL } from 'node:url';
+import { Vars, Workspace } from '@bugpatrol/agents';
+import { loadContract, requestPolicy } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError, type Endpoint } from '@bugpatrol/core';
 
 /**
@@ -24,12 +25,18 @@ export async function runEndpointsCommand(
   const unknown = args.filter((arg, index) => arg !== '--json' && index !== specAt && index !== specAt + 1);
   if (unknown.length) throw new ConfigError(`Unknown argument for bugpatrol endpoints: ${unknown.join(' ')}`);
 
-  const doc = spec
-    ? await loadSpec(/^https?:\/\//i.test(spec) ? { url: spec } : { file: resolve(spec) })
-    : await configuredDoc(root, config);
-  const contract = buildContract(doc, config?.app.connect ?? {});
-  const url = config?.app.connect.url ?? config?.run?.url;
-  const policy = config && url ? requestPolicy(contract, { ...config.app.connect, url }) : undefined;
+  if (!spec && !config)
+    throw new ConfigError('bugpatrol endpoints needs --spec, or a project with .bugpatrol/bugpatrol.yml');
+  const vars = new Vars(config?.app.secrets);
+  const resolveConfig = vars.resolveConfig.bind(vars);
+  const connect = config?.app.connect;
+  const url = connect?.url ?? config?.run?.url;
+  // A --spec that is not a URL is a file from the working directory.
+  const given = spec && (/^[a-z][a-z\d+.-]*:/i.test(spec) ? spec : pathToFileURL(resolve(spec)).href);
+  const contract = await loadContract(root, { ...connect, url, ...(given ? { spec: given } : {}) }, resolveConfig);
+  if (!given && !contract.endpoints.length && !contract.skipped.length)
+    throw new ConfigError('No endpoints: set app.connect.spec, commit .bugpatrol/endpoints.yml, or pass --spec');
+  const policy = connect && url ? requestPolicy(contract, { ...connect, url: resolveConfig(url) }) : undefined;
   const access = (endpoint: Endpoint): string | undefined => {
     const verdict = policy?.check(endpoint.method, endpoint.template);
     if (!verdict) return undefined;
@@ -59,12 +66,4 @@ export async function runEndpointsCommand(
     log([endpoint.key, endpoint.operationId, access(endpoint)].filter(Boolean).join('  '));
   for (const item of contract.skipped) log(`${item.key}  skipped: ${item.reason}`);
   log(`\n${contract.endpoints.length} endpoint(s), ${contract.skipped.length} skipped.`);
-}
-
-async function configuredDoc(root: string, config?: BugpatrolConfig) {
-  if (!config) throw new ConfigError('bugpatrol endpoints needs --spec, or a project with .bugpatrol/bugpatrol.yml');
-  const { connect } = config.app;
-  const doc = await projectDoc(root, { spec: connect.spec, url: connect.url ?? config.run?.url });
-  if (!doc) throw new ConfigError('Set app.connect.spec, commit .bugpatrol/endpoints.yml, or pass --spec');
-  return doc;
 }

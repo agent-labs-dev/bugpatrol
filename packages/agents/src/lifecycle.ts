@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import { buildContract, type Contract, projectDoc } from '@bugpatrol/contract';
+import { type Contract, loadContract } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
 import type { Vars } from './vars.js';
 
@@ -121,14 +121,8 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
     for (const command of app.setup) {
       await run(command, 'Setup');
     }
-    if (app.platform === 'api') {
-      const { spec, url } = app.connect;
-      const doc = await projectDoc(opts.root, {
-        spec: spec && opts.vars.resolve(spec),
-        url: url && opts.vars.resolve(url),
-      });
-      contract = buildContract(doc ?? { openapi: '3.1.0', paths: {} }, app.connect);
-    }
+    if (app.platform === 'api')
+      contract = await loadContract(opts.root, app.connect, opts.vars.resolve.bind(opts.vars));
   } catch (error) {
     // A setup that fails halfway may already hold resources (a test run, an
     // identity). Teardown undoes what it can before the error goes up.

@@ -4,6 +4,7 @@ import {
   type Assertion,
   assertionId,
   type BugCheck,
+  CASE_IDS,
   type Candidate,
   type Evidence,
   fingerprint,
@@ -26,13 +27,11 @@ import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
 
 /** The cases that an explorer request can cover. A no-auth request needs no credentials, which the tool never drops. */
-const REQUEST_CASES = [
-  'ok',
-  'invalid-input',
-  'missing-id',
-  'other-user',
-  'repeat-delete',
-] as const satisfies SweepCaseId[];
+type RequestCase = Exclude<SweepCaseId, 'no-auth'>;
+const REQUEST_CASES = CASE_IDS.filter((id): id is RequestCase => id !== 'declared' && id !== 'no-auth') as [
+  RequestCase,
+  ...RequestCase[],
+];
 
 /** The judge rules of map section 3, by name. An api bug report can name the one that it breaks. */
 export const API_RULES = [

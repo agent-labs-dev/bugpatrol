@@ -1,5 +1,5 @@
 import type { RequestPolicy } from '@bugpatrol/contract';
-import { formatHttpExchange, type HttpExchange, type HttpMethod } from '@bugpatrol/core';
+import { formatHttpExchange, type HttpExchange, type HttpMethod, resolvePointer } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { z } from 'zod';
 import type { Pacer } from './api-pacer.js';
@@ -39,13 +39,9 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
   const parsed: unknown = JSON.parse(body);
   return Object.fromEntries(
     Object.entries(pointers).map(([name, pointer]) => {
-      let value = parsed;
-      for (const part of pointer.split('/').slice(1)) {
-        const key = part.replaceAll('~1', '/').replaceAll('~0', '~');
-        if (typeof value !== 'object' || value === null || !Object.hasOwn(value, key))
-          throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
-        value = (value as Record<string, unknown>)[key];
-      }
+      const found = resolvePointer(parsed, pointer);
+      if (!found) throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
+      const { value } = found;
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
       return [name, String(value)];

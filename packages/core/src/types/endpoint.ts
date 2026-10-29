@@ -31,18 +31,31 @@ export type Endpoint = {
 };
 
 /**
+ * The cases of the sweep, in the order of the matrix columns. `declared`
+ * stands for each `declared:<code>` case.
+ */
+export const CASE_IDS = [
+  'ok',
+  'declared',
+  'no-auth',
+  'invalid-input',
+  'missing-id',
+  'other-user',
+  'repeat-delete',
+] as const;
+
+/**
  * One case of the sweep on an endpoint (decision 6). `declared:<code>` is a
  * declared error status that a case got. The other kinds are requests that
  * the sweep builds from the spec.
  */
-export type CaseId =
-  | 'ok'
-  | `declared:${number}`
-  | 'no-auth'
-  | 'invalid-input'
-  | 'missing-id'
-  | 'other-user'
-  | 'repeat-delete';
+export type CaseId = Exclude<(typeof CASE_IDS)[number], 'declared'> | `declared:${number}`;
+
+/** Sorts case ids in the order of `CASE_IDS`, and `declared:<code>` cases by code. */
+export function compareCaseIds(a: string, b: string): number {
+  const order = (id: string) => (CASE_IDS as readonly string[]).indexOf(id.startsWith('declared:') ? 'declared' : id);
+  return order(a) - order(b) || a.localeCompare(b);
+}
 
 /** The result of one case on one endpoint, from the last sweep that ran it. */
 export type CoverageCell = {

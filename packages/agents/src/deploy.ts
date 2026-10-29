@@ -1,4 +1,4 @@
-import type { AppConfig, BugpatrolConfig } from '@bugpatrol/core';
+import { type AppConfig, type BugpatrolConfig, resolvePointer } from '@bugpatrol/core';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
@@ -21,15 +21,14 @@ export function externalBackend(app: AppConfig): boolean {
  * array, and an array at the end gives each of its elements.
  */
 function pointerValues(value: unknown, pointer: string): unknown[] {
-  let values = [value];
-  for (const raw of pointer.split('/').slice(1)) {
-    const segment = raw.replace(/~1/g, '/').replace(/~0/g, '~');
-    values = values.flatMap((item) => {
-      if (segment === '*') return Array.isArray(item) ? item : [];
-      if (item === null || typeof item !== 'object') return [];
-      return segment in item ? [(item as Record<string, unknown>)[segment]] : [];
-    });
-  }
+  const [first = '', ...rest] = pointer.split(/\/\*(?=\/|$)/);
+  const at = (item: unknown, part: string) => {
+    const found = resolvePointer(item, part);
+    return found ? [found.value] : [];
+  };
+  let values = at(value, first);
+  for (const part of rest)
+    values = values.flatMap((item) => (Array.isArray(item) ? item.flatMap((element) => at(element, part)) : []));
   return values.flatMap((item) => (Array.isArray(item) ? item : [item]));
 }
 

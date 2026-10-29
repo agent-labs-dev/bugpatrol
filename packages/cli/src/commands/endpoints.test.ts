@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Workspace } from '@bugpatrol/agents';
 import { parseConfig, paths } from '@bugpatrol/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -66,6 +67,23 @@ describe('bugpatrol endpoints', () => {
       skipped: [{ key: 'POST /notify', reason: 'x-bugpatrol-skip' }],
     });
     await expect(readFile(paths.appMap(root))).rejects.toThrow(/ENOENT/);
+  });
+
+  it('reads --spec as a file: URL, and resolves placeholders in app.connect.spec', async () => {
+    await runEndpointsCommand(['--spec', pathToFileURL(join(root, 'openapi.json')).href], root, log);
+    expect(lines.at(-1)).toBe('\n1 endpoint(s), 1 skipped.');
+    process.env.BUGPATROL_TEST_SPEC = 'openapi.json';
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { platform: 'api', connect: { url: 'http://127.0.0.1:9', spec: '${BUGPATROL_TEST_SPEC}' } },
+      });
+      lines = [];
+      await runEndpointsCommand([], root, log, config);
+      expect(lines.at(-1)).toBe('\n1 endpoint(s), 1 skipped.');
+    } finally {
+      delete process.env.BUGPATROL_TEST_SPEC;
+    }
   });
 
   it('reads the endpoint inventory when there is no spec', async () => {
