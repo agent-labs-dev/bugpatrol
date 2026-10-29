@@ -1,5 +1,6 @@
 import {
   type AssertionResult,
+  assertionId,
   type BenchBuild,
   type ClaimBench,
   type ClaimEvidence,
@@ -182,8 +183,8 @@ function claimLines(
       `| Check | Base ${base} | This pull request ${head} |\n| --- | --- | --- |\n` +
         results
           .map(
-            (item, index) =>
-              `| ${cellText(assertionWords(item))} | ${cellText(result(finding.base?.assertions?.[index]))} | ${cellText(result(item))} |`,
+            (item) =>
+              `| ${cellText(assertionWords(item))} | ${cellText(result(finding.base?.assertions?.find((other) => assertionId(other.assertion) === assertionId(item.assertion))))} | ${cellText(result(item))} |`,
           )
           .join('\n'),
     ];

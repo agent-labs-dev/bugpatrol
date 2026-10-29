@@ -310,16 +310,15 @@ describe('API driver against the fixture API', () => {
     expect(leaks).toBe(0);
   });
 
-  it('reports server failures once as failed requests, and client errors never', async () => {
+  it('reports a request with no answer once as a failed request, and a status never', async () => {
     await driver.observe();
     await driver.act({ kind: 'request', method: 'GET', url: '/items/2' });
     expect((await driver.observe()).networkErrors).toEqual([]);
     expect((await driver.act({ kind: 'request', method: 'GET', url: '/items/0' })).ok).toBe(true);
     await driver.act({ kind: 'request', method: 'GET', url: '/search' });
     const failed = (await driver.observe()).networkErrors ?? [];
-    expect(failed).toHaveLength(2);
-    expect(failed[0]).toMatch(/^GET http:\/\/127\.0\.0\.1:\d+\/items\/0 → 500$/);
-    expect(failed[1]).toMatch(/\/search → TimeoutError$/);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatch(/^GET http:\/\/127\.0\.0\.1:\d+\/search → TimeoutError$/);
     expect((await driver.observe()).networkErrors).toEqual([]);
   });
 

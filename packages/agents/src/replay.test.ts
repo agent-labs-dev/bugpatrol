@@ -1,10 +1,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseConfig, type Routine } from '@bugpatrol/core';
-import type { DriverAction } from '@bugpatrol/drivers';
+import { fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
+import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
+import { type Assertion, parseConfig, type Routine } from '@bugpatrol/core';
+import { ApiDriver, type DriverAction, type Observation, Pacer } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { replayRoutine, replaySteps } from './replay.js';
+import { checkAssertions, replayRoutine, replaySteps } from './replay.js';
 import { AgentSession } from './session.js';
 import { FakeDriver, type FakeScreen } from './testing/fake-driver.js';
 import { Vars } from './vars.js';
@@ -159,5 +161,105 @@ describe('replay control boundaries', () => {
     expect(
       await replaySteps(session, [{ kind: 'tap', target: { name: 'Open settings', role: 'button' } }]),
     ).toMatchObject({ ok: false, error: expect.stringContaining('Human takeover') });
+  });
+});
+
+describe('step assertions', () => {
+  it('a step assertion fails on step 2 of 3', async () => {
+    const fixture = await startFixtureApi({ perSecond: 1000 });
+    const vars = new Vars();
+    const driver = new ApiDriver({
+      url: fixture.url,
+      headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+      policy: requestPolicy(buildContract(await loadSpec({ file: fixtureSpecPath }), {}), {
+        url: fixture.url,
+        methods: ['GET'],
+        deny: [],
+        disposable: false,
+      }),
+      pacer: new Pacer({ perMinute: 60_000 }),
+      timeoutMs: 2000,
+      redact: (value) => vars.redact(value) as string,
+    });
+    try {
+      const api = parseConfig({
+        version: 1,
+        app: { platform: 'api', connect: { url: fixture.url, spec: '/openapi.json' } },
+      });
+      const workspace = new Workspace(root);
+      const record = await workspace.startSession('explorer');
+      const session = new AgentSession(root, api, vars, record.id, 'explorer', driver);
+      const contract: Assertion[] = [{ kind: 'contract' }];
+      await workspace.saveRoutine({
+        ...routine(),
+        id: 'list-items',
+        platform: 'api',
+        steps: [
+          { kind: 'request', method: 'GET', url: '/items/1', assert: contract },
+          { kind: 'request', method: 'GET', url: '/items', assert: contract },
+          { kind: 'request', method: 'GET', url: '/health' },
+        ],
+      });
+      // No contract is passed in, so the replay reads the one that the driver gates on.
+      const result = await replayRoutine(session, 'list-items');
+      expect(result).toMatchObject({ ok: false, failedStep: 1 });
+      expect(result.error).toMatch(/^The checks failed: the body does not match the schema: .*\(internal_note\)/);
+      expect(fixture.hits().map((hit) => hit.path)).toEqual(['/items/1', '/items']);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it('schema check runs before redaction', () => {
+    const contract = buildContract(
+      {
+        openapi: '3.1.0',
+        paths: {},
+        components: {
+          schemas: { Session: { type: 'object', required: ['token'], properties: { token: { type: 'number' } } } },
+        },
+      },
+      {},
+    );
+    const screen: Observation = {
+      platform: 'api',
+      location: 'http://127.0.0.1/session',
+      capture: {
+        kind: 'http',
+        exchange: {
+          request: { method: 'GET', path: '/session', headers: {} },
+          response: {
+            status: 200,
+            headers: {},
+            contentType: 'application/json',
+            body: '{"token": "[redacted]"}',
+            bytes: 11,
+          },
+          latencyMs: 1,
+          at: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      viewport: { width: 0, height: 0, scale: 1 },
+      elements: [],
+      volatileRegions: [],
+      consoleErrors: [],
+      at: '2026-01-01T00:00:00.000Z',
+    };
+    const raw = {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      text: '{"token":5}',
+      json: { token: 5 },
+    };
+    const assertions: Assertion[] = [
+      { kind: 'schema', ref: '#/components/schemas/Session' },
+      { kind: 'pointer', pointer: '/token', equals: 5 },
+    ];
+    expect(checkAssertions(assertions, screen, { raw, contract }).map((result) => result.ok)).toEqual([true, true]);
+    // A result shows only what the redacted exchange shows.
+    expect(checkAssertions([{ kind: 'pointer', pointer: '/token', equals: 6 }], screen, { raw })[0]).toMatchObject({
+      ok: false,
+      actual: '"[redacted]"',
+    });
   });
 });

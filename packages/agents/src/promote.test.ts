@@ -117,10 +117,11 @@ describe('promoteClaims', () => {
 
   it('keeps the exact checks, the same-behavior flag and the bug check of the claim routine', async () => {
     const dir = join(paths.reviewDir(root, 7), 'routines');
+    const steps = flow('claim-1').steps;
     const checked: Routine = {
       ...flow('claim-1'),
       platform: 'cli',
-      assert: [{ kind: 'exit-code', value: 0 }],
+      steps: [steps[0]!, { ...steps[1]!, assert: [{ kind: 'exit-code', value: 0 }] }],
       same: true,
       bug: { shows: 'Save failed' },
     };
@@ -128,7 +129,7 @@ describe('promoteClaims', () => {
     await promoteClaims(root, config, 7, ['claim-1'], { gh: ghWith('MERGED') });
     expect(await workspace.readRoutine('pr-7-claim-1')).toMatchObject({
       platform: 'cli',
-      assert: [{ kind: 'exit-code', value: 0 }],
+      steps: checked.steps,
       same: true,
       bug: { shows: 'Save failed' },
     });

@@ -1,3 +1,4 @@
+export * from './assertion.js';
 export * from './baseline-store.js';
 export * from './config/agents.js';
 export * from './config/load.js';

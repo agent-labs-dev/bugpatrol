@@ -83,9 +83,9 @@ export class ApiDriver implements Driver {
   private exchange?: HttpExchange;
   private raw?: RawResponse;
   /**
-   * Requests the server failed, reported once on the next observation in the
-   * web driver's `METHOD url → status` form. A 4xx is the API answering
-   * correctly; a 5xx or no answer at all is the server's own failure.
+   * Requests with no answer at all, reported once on the next observation in
+   * the web driver's `METHOD url → error` form. A status is an answer: the
+   * `contract:no-5xx` check owns the verdict on a 5xx.
    */
   private serverFailures: string[] = [];
   /** The terminal that a recording of requests plays in: wide enough for indented JSON. */
@@ -152,7 +152,6 @@ export class ApiDriver implements Driver {
           return { ok: false, retryable: true, error: 'rate-limited' };
         }
       }
-      if (response.status >= 500) this.serverFailed(`${action.method} ${url.href} → ${response.status}`);
       const received = await read(response);
       const all: Record<string, string> = {};
       received.headers.forEach((value, name) => {

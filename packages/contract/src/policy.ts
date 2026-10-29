@@ -9,6 +9,8 @@ export type PolicyVerdict =
 
 /** What Bugpatrol may request. Only the api driver enforces it. */
 export type RequestPolicy = {
+  /** The contract that the policy gates on. The contract checks of a replay read it too. */
+  contract: Contract;
   /** Decision 4: the target is loopback, or the config says it is disposable. */
   writesAllowed: boolean;
   /** The write gate and `app.connect.methods` together (Q4). */
@@ -44,6 +46,7 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
   const match = matcher<Endpoint | (typeof skipped)[number]>([...contract.endpoints, ...skipped]);
 
   return {
+    contract,
     writesAllowed,
     allowedMethods,
     check(method, url) {

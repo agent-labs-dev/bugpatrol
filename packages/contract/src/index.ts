@@ -1,3 +1,4 @@
+export { type ContractResponse, checkContract, checkSchema } from './check.js';
 export { buildContract, type Contract, type ErrorContract, type SkipReason } from './contract.js';
 export {
   type LoadSpecOptions,

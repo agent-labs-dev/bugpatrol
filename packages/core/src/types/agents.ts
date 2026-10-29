@@ -97,7 +97,11 @@ export type RoutineStep = (
     }
   /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
   | { kind: 'run'; command: string; input?: string }
-) & { at?: string };
+) & {
+  at?: string;
+  /** Exact checks on the result of this step. A routine replay fails at the first step whose checks fail. */
+  assert?: Assertion[];
+};
 
 export type Routine = {
   version: 1;
@@ -129,8 +133,6 @@ export type Routine = {
   expect?: { elements: string[] };
   /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
   bug?: BugCheck;
-  /** Claim routines only: exact checks on the last command or response, after the steps ran. */
-  assert?: Assertion[];
   /**
    * Claim routines only: the claim says that the pull request keeps a
    * behavior, so each command or request must give the same output on both
@@ -140,9 +142,11 @@ export type Routine = {
 };
 
 /**
- * An exact check at the end of a routine: on the last command of a CLI app,
- * its exit code or a text in its output, or on the last response of an API,
- * its status or a text in its body.
+ * An exact check on the result of one step: on a command of a CLI app, its
+ * exit code or a text in its output, or on a response of an API, its status,
+ * a text in its body, a JSON value, a header, or its conformance to the spec.
+ * The API kinds other than `status` and the body texts read the response
+ * before redaction.
  */
 export type Assertion =
   | { kind: 'exit-code'; value: number }
@@ -150,7 +154,23 @@ export type Assertion =
   | { kind: 'output-excludes'; value: string }
   | { kind: 'status'; value: number }
   | { kind: 'body-includes'; value: string }
-  | { kind: 'body-excludes'; value: string };
+  | { kind: 'body-excludes'; value: string }
+  /**
+   * The response conforms to the operation that the request matches: a
+   * declared status, a body that the strict schema accepts, a declared
+   * content type, and no 5xx. One check gives one result for each part, and
+   * each result names its part in `check`.
+   */
+  | { kind: 'contract'; check?: ContractCheck }
+  /** The JSON value at an RFC 6901 pointer equals `equals`, or with no `equals`, exists. */
+  | { kind: 'pointer'; pointer: string; equals?: unknown }
+  | { kind: 'pointer'; pointer: string; exists: true }
+  /** The header is present, and its value matches the regular expression `matches`. */
+  | { kind: 'header'; name: string; matches: string }
+  /** The JSON body conforms to the strict schema at `ref`, a pointer into the spec such as `#/components/schemas/Item`. */
+  | { kind: 'schema'; ref: string };
+
+export type ContractCheck = 'status' | 'schema' | 'content-type' | 'no-5xx';
 
 /** One assertion after one replay. `actual` is what the command or the API gave, when the check is on a value. */
 export type AssertionResult = { assertion: Assertion; ok: boolean; actual?: string };
