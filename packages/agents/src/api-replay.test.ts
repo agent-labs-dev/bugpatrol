@@ -1,9 +1,8 @@
-import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseConfig } from '@bugpatrol/core';
+import { startFixtureApi } from '@bugpatrol/api-fixture';
+import { parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { ApiDriver } from '@bugpatrol/drivers';
 import { expect, it } from 'vitest';
 import { replaySteps } from './replay.js';
@@ -11,72 +10,65 @@ import { AgentSession } from './session.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
-it.each(['string', 'numeric'])(
-  'replays fresh %s ids without rewriting literal request data',
-  async (kind) => {
-    let id = 0;
-    const reads: string[] = [];
-    const limits: number[] = [];
-    const server = createServer(async (request, response) => {
-      response.setHeader('content-type', 'application/json');
-      if (request.method === 'POST') {
-        const chunks = [];
-        for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        limits.push(JSON.parse(Buffer.concat(chunks).toString()).limit);
-        response.end(JSON.stringify({ result: { id: kind === 'numeric' ? ++id : `entity-${++id}` }, parent: 1 }));
-      } else {
-        reads.push(request.url!);
-        response.end(JSON.stringify({ result: { id: request.url!.slice(1) } }));
-      }
+it('replays fresh string and numeric ids without rewriting literal request data', async () => {
+  const fixture = await startFixtureApi();
+  const root = await mkdtemp(join(tmpdir(), 'bugpatrol-api-replay-'));
+  const vars = new Vars();
+  const driver = new ApiDriver({
+    url: fixture.url,
+    headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+    methods: ['GET', 'POST'],
+    timeoutMs: 1000,
+    redact: (value) => vars.redact(value) as string,
+  });
+  try {
+    await driver.connect();
+    const record = await new Workspace(root).startSession('explorer');
+    const session = new AgentSession(
+      root,
+      parseConfig({ version: 1, app: { platform: 'api', connect: { url: fixture.url } } }),
+      vars,
+      record.id,
+      'explorer',
+      driver,
+    );
+    // The literal name holds the digits of the ids that the replays capture.
+    const steps: RoutineStep[] = [
+      {
+        kind: 'request',
+        method: 'POST',
+        url: '/items',
+        body: '{"name":"1034"}',
+        capture: { RESPONSE_ITEM: '/result/id' },
+      },
+      { kind: 'request', method: 'GET', url: '/items/{{RESPONSE_ITEM}}' },
+      // The one number in the fixture contract: the minimum length of an item name, 1.
+      {
+        kind: 'request',
+        method: 'GET',
+        url: '/openapi.json',
+        capture: { RESPONSE_LENGTH: '/components/schemas/ItemInput/properties/name/minLength' },
+      },
+      { kind: 'request', method: 'GET', url: '/items/{{RESPONSE_LENGTH}}' },
+    ];
+    expect((await replaySteps(session, steps)).ok).toBe(true);
+    expect((await replaySteps(session, steps)).ok).toBe(true);
+    const reads = fixture
+      .hits()
+      .filter((hit) => hit.method === 'GET' && hit.path.startsWith('/items/'))
+      .map((hit) => hit.path);
+    expect(reads).toEqual(['/items/3', '/items/1', '/items/4', '/items/1']);
+    const { capture } = await driver.observe();
+    expect(capture.kind === 'http' && JSON.parse(capture.exchange!.response!.body)).toEqual({
+      result: { id: '1', name: 'Alpha', owner: 'a', workspace: 'ws-a' },
     });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('No API port');
-    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-api-replay-'));
-    const vars = new Vars();
-    const driver = new ApiDriver({
-      url: `http://127.0.0.1:${address.port}`,
-      headers: {},
-      methods: ['GET', 'POST'],
-      timeoutMs: 1000,
-      viewport: { width: 900, height: 600 },
-      redact: (value) => vars.redact(value) as string,
-    });
-    try {
-      await driver.connect();
-      const record = await new Workspace(root).startSession('explorer');
-      const session = new AgentSession(
-        root,
-        parseConfig({ version: 1, app: { platform: 'api', connect: { url: `http://127.0.0.1:${address.port}` } } }),
-        vars,
-        record.id,
-        'explorer',
-        driver,
-      );
-      const steps = [
-        {
-          kind: 'request' as const,
-          method: 'POST' as const,
-          url: '/entities',
-          body: '{"limit":10}',
-          capture: { RESPONSE_ENTITY: '/result/id' },
-        },
-        { kind: 'request' as const, method: 'GET' as const, url: '/{{RESPONSE_ENTITY}}' },
-      ];
-      expect((await replaySteps(session, steps)).ok).toBe(true);
-      expect((await replaySteps(session, steps)).ok).toBe(true);
-      expect(reads).toEqual(kind === 'numeric' ? ['/1', '/2'] : ['/entity-1', '/entity-2']);
-      expect(limits).toEqual([10, 10]);
-      expect(JSON.parse((await driver.observe()).http!.body)).toEqual({
-        result: { id: kind === 'numeric' ? '2' : 'entity-2' },
-      });
-    } finally {
-      await driver.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(root, { recursive: true, force: true });
-    }
-  },
-  20000,
-);
+    await driver.act({ kind: 'request', method: 'GET', url: '/items' });
+    const listed = await driver.observe();
+    const items = listed.capture.kind === 'http' ? JSON.parse(listed.capture.exchange!.response!.body).result : [];
+    expect(items.map((item: { name: string }) => item.name)).toEqual(['Alpha', '1034', '1034']);
+  } finally {
+    await driver.close();
+    await fixture.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20000);

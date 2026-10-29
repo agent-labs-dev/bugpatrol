@@ -19,6 +19,7 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
+import { captureParts, readExchanges, screenshotOf } from '../evidence.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -50,7 +51,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
-import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { ClaimBudget, claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
@@ -478,9 +479,10 @@ async function captureBase(
     shot: {
       screenId: candidate.screenId,
       routineId: candidate.evidence.routineId,
-      before: candidate.evidence.screenshot,
+      before: screenshotOf(candidate.evidence.capture),
     },
     steps: candidate.evidence.steps ?? [],
+    reported: candidate.evidence.capture,
   }));
   try {
     await withBuild(ctx, 'base', pr.base, async (driver, vars) => {
@@ -561,8 +563,8 @@ async function judgeFindings(
         const index = candidates.findIndex((candidate) => candidate.id === input.id);
         const candidate = candidates[index];
         if (!candidate) return { ...response('Unknown finding id'), isError: true };
-        const head = await image(root, candidate.evidence.screenshot);
-        const base = await image(root, targets[index]!.shot.after);
+        const head = await beforeParts(root, targets[index]!);
+        const base = await captureParts(root, targets[index]!.shot.after);
         return {
           content: [
             {
@@ -685,7 +687,7 @@ async function judgeFindings(
       ...(candidate.evidence.routineId ? [`Run the routine ${candidate.evidence.routineId}`] : []),
       ...(candidate.evidence.steps ?? []).map(stepWords),
     ],
-    head: candidate.evidence.screenshot,
+    head: screenshotOf(candidate.evidence.capture),
     base: targets[index]!.shot.after,
     baseNote: baseNote(index) || undefined,
   }));
@@ -1094,9 +1096,16 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   const { root, config, repo, pr } = ctx;
   const redact = (text: string) => new Vars(config.app.secrets).redact(text) as string;
   const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
+  const shown = [
+    ...review.findings
+      .filter((finding) => finding.verdict === 'introduced')
+      .flatMap((finding) => [finding.head, finding.base]),
+    ...claimMedia(review),
+  ].filter((path): path is string => Boolean(path));
+  const exchanges = await readExchanges(root, shown);
   if (ctx.opts.dryRun) {
     const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
-    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name);
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name, exchanges);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(
       file,
@@ -1119,14 +1128,10 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   }
   const branch = config.agents.github.assetsBranch;
   const urls = new Map<string, string>();
-  const shown = [
-    ...review.findings
-      .filter((finding) => finding.verdict === 'introduced')
-      .flatMap((finding) => [finding.head, finding.base]),
-    ...claimMedia(review),
-  ].filter((path): path is string => Boolean(path));
-  if (shown.length) await ensureAssetsBranch(gh, repo, branch);
-  for (const path of new Set(shown)) {
+  // An exchange is text in the body, not an uploaded file.
+  const uploads = new Set(shown.filter((path) => !exchanges.has(path)));
+  if (uploads.size) await ensureAssetsBranch(gh, repo, branch);
+  for (const path of uploads) {
     try {
       const { size } = await stat(resolve(root, path));
       if (size > UPLOAD_LIMIT) {
@@ -1140,7 +1145,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
     }
   }
-  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name);
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name, exchanges);
   const body = limitBody(redact(rendered.body));
   const name = config.agents.review.name;
   const posted = await saveSticky(gh, repo, pr.number, reviewMarker(name), body);

@@ -42,7 +42,6 @@ export function createDriver(
       headers: Object.fromEntries(Object.entries(connect.headers).map(([name, value]) => [name, vars(value)])),
       methods: connect.methods,
       timeoutMs: connect.timeoutMs,
-      viewport: config.viewports[0]!,
       redact,
     });
   }

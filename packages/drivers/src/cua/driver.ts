@@ -142,7 +142,7 @@ export class CuaDriver implements Driver {
           ...this.options.viewer,
           owner: () => this.control.owner,
           change: (owner) => this.control.change(owner),
-          frame: () => this.control.preview(async () => (await this.capture(false)).screenshot),
+          frame: () => this.control.preview(async () => (await this.capture(false)).capture.png),
           input: (input) => this.control.human(() => this.humanInput(input)),
         });
         this.viewerUrl = this.viewer.url;
@@ -163,7 +163,7 @@ export class CuaDriver implements Driver {
       .windows.filter((window) => window.pid === this.appPid);
   }
 
-  private async capture(tree = true): Promise<Observation> {
+  private async capture(tree = true): Promise<Observation & { capture: { kind: 'image'; png: Buffer } }> {
     if (!this.target) throw new Error('No private app window');
     const result = await this.call('get_window_state', {
       pid: this.target.pid,
@@ -202,7 +202,7 @@ export class CuaDriver implements Driver {
       platform: this.platform,
       location: this.options.redact(state.window_title),
       title: this.options.redact(state.window_title),
-      screenshot,
+      capture: { kind: 'image', png: screenshot },
       viewport: { width: state.screenshot_width, height: state.screenshot_height, scale: 1 },
       elements,
       windows: [
@@ -380,7 +380,7 @@ export class CuaDriver implements Driver {
       let frames = 0;
       const deadline = Date.now() + (options.timeoutMs ?? 3000);
       while (Date.now() < deadline) {
-        const hash = sha256((await this.capture(false)).screenshot);
+        const hash = sha256((await this.capture(false)).capture.png);
         frames++;
         if (hash === previous) return { frames, stable: true };
         previous = hash;

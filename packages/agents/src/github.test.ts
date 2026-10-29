@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createIssue, createPr, ensureAssetsBranch, type Gh, listFiled, syncGitHub, uploadImage } from './github.js';
+import { buildReport } from './report.js';
 import { Workspace } from './workspace.js';
 
 let dirs: string[] = [];
@@ -75,6 +76,68 @@ describe('GitHub client', () => {
       { number: 8, url: 'https://github.com/o/r/issues/8' },
     );
     expect(body).toBe('Full report');
+  });
+  it('gives an issue body an http block for http evidence', async () => {
+    let body = '';
+    const gh: Gh = async (args) => {
+      body = await readFile(args[args.indexOf('--body-file') + 1]!, 'utf8');
+      return 'https://github.com/o/r/issues/9';
+    };
+    const issue: Issue = {
+      version: 1,
+      id: 'iss_api',
+      fingerprint: 'fp',
+      title: 'An item read fails',
+      body: 'GET /items/0 returns 500.',
+      severity: 'major',
+      status: 'new',
+      candidateIds: [],
+      evidence: {
+        capture: {
+          kind: 'http',
+          exchange: {
+            request: { method: 'GET', path: '/items/0', headers: { 'x-workspace-id': 'ws-a' } },
+            response: {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+              contentType: 'application/json',
+              body: '{"error":{"message":"Division by zero.","token":"planted-secret"}}',
+              bytes: 66,
+            },
+            latencyMs: 7,
+            at: 'now',
+          },
+        },
+      },
+      judgement: { by: 'judge', reason: 'A server error', at: 'now' },
+      occurrences: 1,
+      firstSeenAt: 'now',
+      lastSeenAt: 'now',
+    };
+    const report = buildReport({
+      kind: 'issue',
+      summary: 'Reading item 0 fails.',
+      issue,
+      candidates: [],
+      imageUrl: () => undefined,
+      redact: (text) => text.replaceAll('planted-secret', '{{TOKEN}}'),
+    });
+    await createIssue(gh, { repo: 'o/r', title: issue.title, body: report, labels: [] });
+    expect(body).toContain(
+      [
+        '```http',
+        'GET /items/0',
+        'x-workspace-id: ws-a',
+        '',
+        'HTTP 500 Internal Server Error (7 ms)',
+        'content-type: application/json',
+        '',
+        '{"error":{"message":"Division by zero.","token":"{{TOKEN}}"}}',
+        '```',
+      ].join('\n'),
+    );
+    expect(body).not.toContain('planted-secret');
+    expect(body).not.toContain('<img');
   });
   it('commits an uncommitted worktree, pushes it, and creates a PR', async () => {
     const dir = await temp();
@@ -173,7 +236,7 @@ describe('GitHub state sync', () => {
     status: 'fix-proposed',
     screenId: 'home',
     candidateIds: [],
-    evidence: {},
+    evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
     judgement: { by: 'judge', reason: 'Broken', at: 'now' },
     occurrences: 1,
     firstSeenAt: 'now',
@@ -303,7 +366,7 @@ describe('GitHub state sync', () => {
       fingerprint: 'candidate-fp',
       summary: 'Broken',
       severity: 'major',
-      evidence: {},
+      evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
       createdAt: 'now',
     });
     f.setIssues([

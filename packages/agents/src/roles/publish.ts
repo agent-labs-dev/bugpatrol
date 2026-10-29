@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   type BugpatrolConfig,
@@ -8,6 +8,7 @@ import {
   judgedRetests,
   paths,
 } from '@bugpatrol/core';
+import { captureParts, evidenceParts, isExchangeFile, screenshotOf } from '../evidence.js';
 import {
   createIssue,
   createPr,
@@ -70,15 +71,6 @@ async function candidatesFor(workspace: Workspace, issue: Issue): Promise<Candid
   return issue.candidateIds.flatMap((id) => found.get(id) ?? []);
 }
 
-async function image(root: string, path?: string) {
-  if (!path) return [];
-  try {
-    return [{ type: 'image' as const, png: await readFile(resolve(root, path)) }];
-  } catch {
-    return [];
-  }
-}
-
 export async function runPublisher(root: string, config: BugpatrolConfig, deps: Deps = {}): Promise<PublishOutcome[]> {
   if (!config.agents.github.enabled && !deps.dryRun) return [];
   const workspace = new Workspace(root);
@@ -129,8 +121,8 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const pathsFor = (item: Item, candidates: Candidate[]) =>
     new Set(
       [
-        item.issue.evidence.screenshot,
-        ...candidates.map((candidate) => candidate.evidence.screenshot),
+        screenshotOf(item.issue.evidence.capture),
+        ...candidates.map((candidate) => screenshotOf(candidate.evidence.capture)),
         ...(item.fix?.retests ?? []).flatMap((retest) => [
           retest.before,
           retest.after,
@@ -199,7 +191,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
       },
       {
         name: 'view_item',
-        description: 'Review an item and its before and after screenshots.',
+        description: 'Review an item and its before and after captures: screenshots, or HTTP exchanges for an API.',
         inputSchema: schema({ issue_id: string }, ['issue_id']),
         async run(input) {
           const item = get(String(input.issue_id));
@@ -214,7 +206,9 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
           const content: Awaited<ReturnType<Tool['run']>>['content'] = [
             { type: 'text', text: vars.redact(text) as string },
           ];
-          for (const path of [...before, ...after]) content.push(...(await image(root, path)));
+          const { capture } = item.issue.evidence;
+          if (capture.kind === 'http') content.push(...(await evidenceParts(root, capture)));
+          for (const path of [...before, ...after]) content.push(...(await captureParts(root, path)));
           return { content };
         },
       },
@@ -286,7 +280,8 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
                 await ensureLabels(gh, resolved.repo, config.agents.github.labels);
                 labelsReady = true;
               }
-              for (const path of pathsFor(item, candidates))
+              // An exchange is text in the body, not an uploaded file.
+              for (const path of [...pathsFor(item, candidates)].filter((file) => !isExchangeFile(file)))
                 urls.set(
                   path,
                   await uploadImage(

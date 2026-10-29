@@ -28,12 +28,16 @@ those ids. Captures accept JSON pointers to strings/numbers, cannot overwrite
 setup/auth variables, and cannot expose redacted credential fields. Requests cannot leave
 the configured origin and redirects are not followed, so credentials cannot
 follow a redirect to another server. Request/response bodies are bounded to
-1 MiB and a larger response fails explicitly rather than silently truncating.
+1 MiB. A larger response body is not kept: the evidence records its size and
+marks it as too large.
 
-The returned status and sanitized body are HTTP evidence. Screenshots render
-that transcript; they are not screenshots of a product UI. Remote HTML is
-displayed as text. Captured secrets and credential fields in JSON responses
-are redacted before rendering. A 401 or 403 can be correct behavior, not a bug.
+The evidence of an API is text, not a screenshot ([ADR 0008](adr/0008-api-evidence-is-text.md)).
+Each request gives an HTTP exchange: the request line, the headers that the step
+set, the status, the allowlisted response headers, the body, and the latency.
+The api driver starts no browser. The models, the issues, and the dashboard show
+the same text, and an issue shows it in an `http` block. Captured secrets,
+credential headers, and credential fields in JSON are redacted. A 401 or 403 can
+be correct behavior, not a bug.
 
 `bugpatrol init --platform api --url http://127.0.0.1:8000` creates a starter.
 

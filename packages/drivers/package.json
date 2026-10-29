@@ -29,6 +29,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@bugpatrol/api-fixture": "workspace:*",
     "@types/pngjs": "^6.0.5"
   }
 }

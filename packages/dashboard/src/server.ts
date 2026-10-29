@@ -1,8 +1,8 @@
-import { createReadStream, existsSync, type FSWatcher, realpathSync, statSync, watch } from 'node:fs';
+import { createReadStream, existsSync, type FSWatcher, readFileSync, realpathSync, statSync, watch } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, paths } from '@bugpatrol/core';
+import { formatHttpExchange, type HttpExchange, loadConfig, paths } from '@bugpatrol/core';
 import { AgentReader } from './agents.js';
 import { buildGraph } from './graph.js';
 import { ProjectReader } from './project.js';
@@ -156,6 +156,19 @@ async function handle(
     const requested = url.searchParams.get('path');
     if (!requested) return json(res, { error: 'path is required' }, 400);
     return serveArtifact(res, ctx.root, requested, req.headers.range);
+  }
+
+  // An API capture shows as text, and the one renderer of an exchange is on this side.
+  if (path === '/api/exchange') {
+    const file = resolveArtifactPath(ctx.root, url.searchParams.get('path') ?? '');
+    if (!file?.endsWith('.exchange.json')) return json(res, { error: 'not found' }, 404);
+    const exchange = JSON.parse(readFileSync(file, 'utf8')) as HttpExchange;
+    return send(
+      res,
+      200,
+      { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache' },
+      formatHttpExchange(exchange, { maxBodyChars: Number.POSITIVE_INFINITY }),
+    );
   }
 
   return serveUi(res, path);

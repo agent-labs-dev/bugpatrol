@@ -229,10 +229,15 @@ describe('AgentReader', () => {
       counts: { issuesOpen: number };
       live: { events: { kind: string }[]; screenshot: string };
     };
-    expect(overview.attention.map((issue) => issue.id)).toEqual(['iss-billing', 'iss-settings', 'iss-profile']);
+    expect(overview.attention.map((issue) => issue.id)).toEqual([
+      'iss-billing',
+      'iss-api-item',
+      'iss-settings',
+      'iss-profile',
+    ]);
     expect(overview.attention.find((issue) => issue.id === 'iss-settings')?.fix?.status).toBe('proposed');
     expect(overview.agents).toHaveLength(3);
-    expect(overview.counts.issuesOpen).toBe(3);
+    expect(overview.counts.issuesOpen).toBe(4);
     // An issue that the fixer works on stays in the list, so the list matches the count.
     const profile = join(root, '.bugpatrol', 'runs', 'issues', 'iss-profile.json');
     writeFileSync(profile, JSON.stringify({ ...JSON.parse(readFileSync(profile, 'utf8')), status: 'fixing' }));
@@ -415,6 +420,35 @@ describe.skipIf(!canBind)('agent API', () => {
     const routines = await (await fetch(`${dashboard.url}/api/routines`)).json();
     expect(routines).toHaveLength(2);
     expect(routines[0].steps).toBe(1);
+  });
+
+  it('serves an API issue and an exchange file as the text that the models read', async () => {
+    writeAgentFixture(root);
+    dashboard = await startDashboard({ root, port: 0 });
+    const { issue } = await (await fetch(`${dashboard.url}/api/issues/iss-api-item`)).json();
+    expect(issue.evidence.capture).toMatchObject({ kind: 'http', exchange: { request: { path: '/items/0' } } });
+    const text = [
+      'GET /items/0',
+      'x-workspace-id: ws-a',
+      '',
+      'HTTP 500 Internal Server Error (14 ms)',
+      'content-type: application/json',
+      'x-request-id: req-7f3a',
+      '',
+      '{',
+    ].join('\n');
+    expect(issue.evidence.capture.text.startsWith(text)).toBe(true);
+    const events = (await (await fetch(`${dashboard.url}/api/sessions/ses_live`)).json()).events;
+    const file = events.find((event: { screenshot?: string }) =>
+      event.screenshot?.endsWith('.exchange.json'),
+    ).screenshot;
+    const served = await fetch(`${dashboard.url}/api/exchange?path=${encodeURIComponent(file)}`);
+    expect(served.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect((await served.text()).startsWith(text)).toBe(true);
+    // Only an exchange file formats; a screenshot or a path outside the workspace does not.
+    const shot = `.bugpatrol/runs/sessions/ses_live/001-home.png`;
+    expect((await fetch(`${dashboard.url}/api/exchange?path=${encodeURIComponent(shot)}`)).status).toBe(404);
+    expect((await fetch(`${dashboard.url}/api/exchange?path=../../etc/passwd`)).status).toBe(404);
   });
 
   it('serves reviews and plays their recordings, with byte ranges for seeking', async () => {

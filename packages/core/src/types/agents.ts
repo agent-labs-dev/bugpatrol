@@ -1,4 +1,5 @@
 import type { Endpoint } from './endpoint.js';
+import type { Evidence } from './evidence.js';
 import type { Severity } from './finding.js';
 import type { TokenUsage } from './usage.js';
 
@@ -196,7 +197,7 @@ export type AppMapScreen = {
   firstSeenAt: string;
   lastSeenAt: string;
   visits: number;
-  /** Relative to the workspace root. */
+  /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
   lastScreenshot?: string;
   baselineKey?: string;
 };
@@ -232,9 +233,8 @@ export type Candidate = {
 };
 
 export type IssueEvidence = {
-  screenshot?: string;
-  baseline?: string;
-  diff?: string;
+  /** What the app showed: a screenshot, or for an API the exchange as text. */
+  capture: Evidence;
   /** How to get there, as routine ids and then steps. */
   routineId?: string;
   steps?: RoutineStep[];
@@ -323,7 +323,7 @@ export type Retest = {
   note?: string;
   explorerSessionId?: string;
   judgeSessionId?: string;
-  /** Workspace-relative screenshot paths, same form as Issue.evidence.screenshot. */
+  /** Workspace-relative capture files: a PNG, or the exchange JSON of an API. */
   before?: string;
   after?: string;
   shots?: RetestShot[];

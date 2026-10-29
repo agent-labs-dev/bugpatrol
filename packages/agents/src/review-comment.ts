@@ -1,14 +1,16 @@
-import type {
-  AssertionResult,
-  BenchBuild,
-  ClaimBench,
-  ClaimEvidence,
-  ClaimFinding,
-  ClaimSource,
-  ClaimVerdict,
-  PrReview,
-  ReviewFinding,
-  ReviewVerdict,
+import {
+  type AssertionResult,
+  type BenchBuild,
+  type ClaimBench,
+  type ClaimEvidence,
+  type ClaimFinding,
+  type ClaimSource,
+  type ClaimVerdict,
+  type HttpExchange,
+  httpBlock,
+  type PrReview,
+  type ReviewFinding,
+  type ReviewVerdict,
 } from '@bugpatrol/core';
 import { assertionWords } from './replay.js';
 
@@ -141,6 +143,7 @@ function claimLines(
   review: PrReview,
   image: (path?: string) => string | undefined,
   url: (path: string) => string | undefined,
+  exchanges: (base?: string, head?: string) => string[],
 ): string[] {
   const claims = review.claims;
   if (!claims) return [];
@@ -223,6 +226,7 @@ function claimLines(
         ? [
             `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
               `| ${last(finding, 'base')} | ${last(finding, 'head')} |`,
+            ...exchanges(finding.base?.shots.at(-1), finding.head?.shots.at(-1)),
             ...details(
               'Each step',
               recorded(finding)
@@ -306,6 +310,7 @@ export function renderReview(
   imageUrl: (path: string) => string | undefined,
   inDiff: (file: string, line: number) => boolean,
   name?: string,
+  exchanges: ReadonlyMap<string, HttpExchange> = new Map(),
 ): RenderedReview {
   const of = (verdict: ReviewVerdict) =>
     review.findings
@@ -318,9 +323,19 @@ export function renderReview(
   const head = `\`${short(review.head)}\``;
   const base = `\`${short(review.base)}\``;
   const image = (path?: string) => {
+    if (path && exchanges.has(path)) return '_The HTTP exchange is below._';
     const url = path && imageUrl(path);
     return url ? `<img src="${url}" width="360">` : undefined;
   };
+  /** An API capture is text, so it goes under the table as an `http` block. */
+  const exchangeBlocks = (basePath?: string, headPath?: string) =>
+    [
+      [`Base ${base}`, basePath],
+      [`This pull request ${head}`, headPath],
+    ].flatMap(([label, path]) => {
+      const exchange = path && exchanges.get(path);
+      return exchange ? [`${label}:\n\n${httpBlock(exchange)}`] : [];
+    });
   const section = (finding: ReviewFinding, heading: string) =>
     [
       heading,
@@ -331,6 +346,7 @@ export function renderReview(
   const shots = (finding: ReviewFinding) => [
     `| Base ${base} | This pull request ${head} |\n| --- | --- |\n` +
       `| ${image(finding.base) ?? `_${finding.baseNote ?? 'No screenshot.'}_`} | ${image(finding.head) ?? '_No screenshot._'} |`,
+    ...exchangeBlocks(finding.base, finding.head),
     ...details(
       'Steps',
       finding.steps.map((step, number) => `${number + 1}. ${step}`),
@@ -351,6 +367,7 @@ export function renderReview(
       finding.reason,
       ...details('Screenshots and steps', [
         shots(finding)[0]!,
+        ...exchangeBlocks(finding.base, finding.head),
         ...finding.steps.map((step, number) => `${number + 1}. ${step}`),
       ]),
     ].join('\n\n');
@@ -378,7 +395,7 @@ export function renderReview(
     ...(introduced.length
       ? [`#### Problems this pull request introduces (${introduced.length})`, ...introduced.map(problem)]
       : []),
-    ...claimLines(review, image, imageUrl),
+    ...claimLines(review, image, imageUrl, exchangeBlocks),
     ...(coverage
       ? [
           ...(coverage.tested.length ? ['#### Tested', coverage.tested.map((line) => `- ${line}`).join('\n')] : []),

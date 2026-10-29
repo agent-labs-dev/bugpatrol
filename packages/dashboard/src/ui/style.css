@@ -886,6 +886,36 @@ h1 {
   background: var(--panel-2);
   cursor: zoom-in;
 }
+/* An API capture is text: the HTTP exchange in a monospace block. */
+pre.http {
+  margin: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: 420px;
+}
+.evidence-grid .http-evidence {
+  grid-column: 1 / -1;
+}
+.http-thumb {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  font:
+    600 0.62rem / 1.1 ui-monospace,
+    monospace;
+  color: var(--muted);
+  text-align: center;
+}
+pre.http.live-shot {
+  max-height: none;
+}
 .evidence-grid figcaption {
   color: var(--muted);
   text-align: center;

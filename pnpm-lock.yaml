@@ -63,6 +63,10 @@ importers:
       zod:
         specifier: ^3.23.8
         version: 3.25.76
+    devDependencies:
+      '@bugpatrol/api-fixture':
+        specifier: workspace:*
+        version: link:../../examples/api-fixture
 
   packages/bughunters:
     dependencies:
@@ -245,6 +249,9 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@bugpatrol/api-fixture':
+        specifier: workspace:*
+        version: link:../../examples/api-fixture
       '@types/pngjs':
         specifier: ^6.0.5
         version: 6.0.5

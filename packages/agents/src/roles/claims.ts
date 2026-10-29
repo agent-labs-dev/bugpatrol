@@ -18,6 +18,7 @@ import {
   type RoutineStep,
 } from '@bugpatrol/core';
 import { castGif, type Driver, inlineGif, type Observation } from '@bugpatrol/drivers';
+import { captureParts } from '../evidence.js';
 import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
@@ -28,7 +29,6 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, type Workspace } from '../workspace.js';
 import { benchWords, type Measured, overlaps } from './benches.js';
-import { image } from './capture.js';
 import { claimJudge } from './claim-judge.js';
 import { stepWords } from './fixer.js';
 import type { ReviewContext } from './review.js';
@@ -467,10 +467,17 @@ async function replayClaims(
       const errors: string[] = [];
       let last: Observation | undefined;
       const shot = async () => {
-        const file = join(dir, `${build}-${String(shots.length).padStart(2, '0')}.png`);
+        const name = join(dir, `${build}-${String(shots.length).padStart(2, '0')}`);
         last = await current.observe();
         errors.push(...last.consoleErrors, ...(last.networkErrors ?? []));
-        await writeFile(file, last.screenshot);
+        const { capture } = last;
+        // An API before its first request has no exchange, so it has no shot.
+        if (capture.kind === 'http' && !capture.exchange) return;
+        const file = capture.kind === 'image' ? `${name}.png` : `${name}.exchange.json`;
+        await writeFile(
+          file,
+          capture.kind === 'image' ? capture.png : `${JSON.stringify(vars.redact(capture.exchange), null, 2)}\n`,
+        );
         shots.push(relative(root, file));
       };
       const what = `${claim} on ${where}`;
@@ -566,8 +573,8 @@ async function judgeClaims(
         const { claim, flow } = item;
         if (!flow) return response(`${claim.id}: ${claim.text}\n${benchWords(item.bench!)}`);
         const steps = flow.kind === 'flow' ? flow.routine.steps.length : 0;
-        const head = await image(root, item.head?.shots.at(-1));
-        const base = await image(root, item.base?.shots.at(-1));
+        const head = await captureParts(root, item.head?.shots.at(-1));
+        const base = await captureParts(root, item.base?.shots.at(-1));
         const how =
           flow.kind === 'flow'
             ? `Bugpatrol replayed the same ${steps} step(s) on both builds, with no model.`

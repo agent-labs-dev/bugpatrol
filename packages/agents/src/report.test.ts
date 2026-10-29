@@ -12,7 +12,7 @@ const issue: Issue = {
   status: 'new',
   screenId: 'home',
   candidateIds: [],
-  evidence: { screenshot: 'before1.png' },
+  evidence: { capture: { kind: 'image', screenshot: 'before1.png' } },
   judgement: { by: 'judge', reason: 'People cannot continue.', at: '2026-01-01' },
   occurrences: 2,
   firstSeenAt: '2026-01-01',
@@ -73,6 +73,23 @@ describe('buildReport', () => {
     const body = buildReport({ ...base, kind: 'issue', fix: { ...fix, status: 'declined' } });
     expect(body).toContain('## Fix attempt');
     expect(body).not.toContain('## Verified in the app');
+  });
+  it('shows an API exchange as an http block, and a retest without a screen table', () => {
+    const exchange = {
+      request: { method: 'GET' as const, path: '/items/0', headers: {} },
+      response: { status: 500, headers: {}, contentType: null, body: 'SECRET failed', bytes: 13 },
+      latencyMs: 2,
+      at: 'now',
+    };
+    const api = { ...issue, evidence: { capture: { kind: 'http' as const, exchange } } };
+    const body = buildReport({ ...base, kind: 'pr', issue: api });
+    expect(body).toContain(
+      '## Request\n\n```http\nGET /items/0\n\nHTTP 500 Internal Server Error (2 ms)\n\n{{TOKEN}} failed\n```',
+    );
+    expect(body).not.toContain('## Screenshots');
+    expect(body).toContain('✅ Fixed — Both screens work.');
+    expect(body).not.toContain('| Screen | Before | After |');
+    expect(body).not.toContain('<img');
   });
   it('cuts reports below the GitHub body limit', () => {
     const body = buildReport({ ...base, kind: 'issue', issue: { ...issue, body: 'x'.repeat(70_000) } });

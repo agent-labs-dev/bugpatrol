@@ -1,4 +1,5 @@
-import { type Candidate, type FixProposal, type Issue, judgedRetests } from '@bugpatrol/core';
+import { type Candidate, type FixProposal, httpBlock, type Issue, judgedRetests } from '@bugpatrol/core';
+import { screenshotOf } from './evidence.js';
 
 export type ReportInput = {
   kind: 'pr' | 'issue';
@@ -17,8 +18,11 @@ export function buildReport(input: ReportInput): string {
   const image = (path?: string, width = 320) =>
     path && imageUrl(path) ? `<img src="${imageUrl(path)}" width="${width}">` : '';
   const screens = [
-    { screenId: issue.screenId, path: issue.evidence.screenshot },
-    ...input.candidates.map((candidate) => ({ screenId: candidate.screenId, path: candidate.evidence.screenshot })),
+    { screenId: issue.screenId, path: screenshotOf(issue.evidence.capture) },
+    ...input.candidates.map((candidate) => ({
+      screenId: candidate.screenId,
+      path: screenshotOf(candidate.evidence.capture),
+    })),
   ];
   const seenScreens = new Set<string>();
   const seenPaths = new Set<string>();
@@ -34,12 +38,14 @@ export function buildReport(input: ReportInput): string {
   // The judge writes the issue body with its own "## What happened" heading;
   // keep one, and put the body's other parts one level under it.
   const body = issue.body.replace(/^##\s+What happened\s*\n/i, '').replace(/^## /gm, '### ');
+  const { capture } = issue.evidence;
   const parts = [
     input.summary,
     '## What happened',
     body,
-    '## Screenshots',
-    shots.join('\n\n') || 'No screenshots available.',
+    ...(capture.kind === 'http'
+      ? ['## Request', httpBlock(capture.exchange)]
+      : ['## Screenshots', shots.join('\n\n') || 'No screenshots available.']),
   ];
   if (kind === 'pr' && fix) {
     parts.push(
@@ -63,8 +69,13 @@ export function buildReport(input: ReportInput): string {
       parts.push(
         '## Verified in the app',
         `${verdict} — ${retest.reason}`,
-        `| Screen | Before | After |\n| --- | --- | --- |\n${rows.join('\n')}`,
-        'Bugpatrol started the app from this branch, repeated the flow, and compared the screens.',
+        // An API retest has exchanges, not screens: the verdict says what they showed.
+        ...(capture.kind === 'http'
+          ? ['Bugpatrol started the app from this branch, and repeated the requests.']
+          : [
+              `| Screen | Before | After |\n| --- | --- | --- |\n${rows.join('\n')}`,
+              'Bugpatrol started the app from this branch, repeated the flow, and compared the screens.',
+            ]),
       );
     } else parts.push(`Not verified in the app: ${fix.retests?.at(-1)?.reason ?? 'retest disabled'}`);
   }

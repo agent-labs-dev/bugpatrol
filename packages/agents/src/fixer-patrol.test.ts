@@ -33,6 +33,8 @@ async function repoFixture() {
   await git(source, 'add', '-A');
   await git(source, 'commit', '-m', 'initial');
   const workspace = new Workspace(root);
+  const reported = await new FakeDriver({ home: { elements: [] } }).observe();
+  await writeFile(join(root, 'reported.png'), reported.capture.kind === 'image' ? reported.capture.png : '');
   const issue: Issue = {
     version: 1,
     id: 'iss_1',
@@ -42,7 +44,7 @@ async function repoFixture() {
     severity: 'major',
     status: 'new',
     candidateIds: [],
-    evidence: { steps: [{ kind: 'open', url: 'fake://home' }] },
+    evidence: { capture: { kind: 'image', screenshot: 'reported.png' }, steps: [{ kind: 'open', url: 'fake://home' }] },
     judgement: { by: 'judge', reason: 'visible', at: 'now' },
     occurrences: 1,
     firstSeenAt: 'now',
@@ -698,14 +700,18 @@ describe('multi-screen retest', () => {
     const driver = new FakeDriver({ usage: { elements: [] }, memories: { elements: [] } }, 'usage');
     const beforeUsage = 'before-usage.png';
     const beforeMemories = 'before-memories.png';
-    await writeFile(join(f.root, beforeUsage), (await driver.observe()).screenshot);
+    const png = async () => {
+      const { capture } = await driver.observe();
+      return capture.kind === 'image' ? capture.png : '';
+    };
+    await writeFile(join(f.root, beforeUsage), await png());
     driver.current = 'memories';
-    await writeFile(join(f.root, beforeMemories), (await driver.observe()).screenshot);
+    await writeFile(join(f.root, beforeMemories), await png());
     driver.current = 'usage';
     const record = await f.workspace.startSession('explorer');
     const issue = (await f.workspace.readIssue('iss_1'))!;
     issue.screenId = 'usage';
-    issue.evidence = { screenshot: beforeUsage };
+    issue.evidence = { capture: { kind: 'image', screenshot: beforeUsage } };
     issue.candidateIds = ['cand_usage', 'cand_memories'];
     for (const [id, screenId, screenshot] of [
       ['cand_usage', 'usage', beforeUsage],
@@ -719,7 +725,7 @@ describe('multi-screen retest', () => {
         fingerprint: id,
         summary: 'Broken',
         severity: 'major',
-        evidence: { screenshot, steps: [{ kind: 'open', url: `fake://${screenId}` }] },
+        evidence: { capture: { kind: 'image', screenshot }, steps: [{ kind: 'open', url: `fake://${screenId}` }] },
         createdAt: 'now',
       };
       await f.workspace.appendCandidate(record.id, candidate);
@@ -867,7 +873,7 @@ describe('multi-screen retest', () => {
         fingerprint: 'again',
         summary: 'Same screen',
         severity: 'major',
-        evidence: { screenshot: 'another.png' },
+        evidence: { capture: { kind: 'image', screenshot: 'another.png' } },
         createdAt: 'now',
       });
       expect(await retestTargets(f.workspace, f.issue)).toHaveLength(2);

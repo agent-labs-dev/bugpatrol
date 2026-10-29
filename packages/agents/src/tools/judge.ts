@@ -3,12 +3,14 @@ import { join, resolve } from 'node:path';
 import {
   type Candidate,
   fitLesson,
+  formatHttpExchange,
   type Issue,
   paths,
   type Routine,
   shortHash,
   type TriageFile,
 } from '@bugpatrol/core';
+import { evidenceParts } from '../evidence.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -96,15 +98,6 @@ export async function pendingCandidates(session: AgentSession, sessionIds: strin
   return pending;
 }
 
-async function image(session: AgentSession, file: string | undefined): Promise<ToolResult['content']> {
-  if (!file) return [];
-  try {
-    return [{ type: 'image', png: await readFile(resolve(session.root, file)) }];
-  } catch {
-    return [];
-  }
-}
-
 /** Pixel diffs are left out: an accepted visual change moves the baseline instead. */
 function triageEntries(
   candidates: Candidate[],
@@ -151,17 +144,22 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
     },
     {
       name: 'view_candidate',
-      description: 'Inspect a candidate and its screenshot, baseline, and diff before deciding.',
+      description:
+        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, or for an API the HTTP exchange.',
       inputSchema: schema({ id: string }, ['id']),
       async run(input) {
         const candidate = (await pendingCandidates(session, sessionIds)).find((item) => item.id === input.id);
         if (!candidate) return { ...response('Unknown or decided candidate'), isError: true };
+        const { capture, ...evidence } = candidate.evidence;
+        if (capture.kind === 'http') {
+          // The exchange is text, so the model reads it as the server sent it, in the one part.
+          const record = JSON.stringify({ ...candidate, evidence }, null, 2);
+          return response(`${record}\n\n${formatHttpExchange(capture.exchange)}`);
+        }
         return {
           content: [
             { type: 'text', text: JSON.stringify(candidate, null, 2) },
-            ...(await image(session, candidate.evidence.screenshot)),
-            ...(await image(session, candidate.evidence.baseline)),
-            ...(await image(session, candidate.evidence.diff)),
+            ...(await evidenceParts(session.root, capture)),
           ],
         };
       },
@@ -285,9 +283,10 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
         for (const candidate of candidates) {
-          if (input.update_baseline && candidate.screenId && candidate.evidence.screenshot) {
+          const { capture } = candidate.evidence;
+          if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
             await copyFile(
-              resolve(session.root, candidate.evidence.screenshot),
+              resolve(session.root, capture.screenshot),
               paths.agentBaseline(session.root, candidate.screenId),
             );
             const snapshot = join(

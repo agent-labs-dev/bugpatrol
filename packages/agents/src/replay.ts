@@ -13,7 +13,7 @@ export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; d
 export function bugMisses(check: BugCheck, screen: Observation, errors: string[]): string[] {
   const texts = [
     screen.title,
-    screen.http?.body,
+    screen.capture.kind === 'http' ? screen.capture.exchange?.response?.body : undefined,
     screen.terminal?.output,
     ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
   ].filter((text): text is string => Boolean(text));
@@ -32,7 +32,8 @@ export function bugMisses(check: BugCheck, screen: Observation, errors: string[]
  * result on each run.
  */
 export function checkAssertions(assertions: Assertion[], screen: Observation): AssertionResult[] {
-  const { terminal, http } = screen;
+  const { terminal } = screen;
+  const http = screen.capture.kind === 'http' ? screen.capture.exchange?.response : undefined;
   return assertions.map((assertion) => {
     const code = assertion.kind === 'status' ? http?.status : terminal?.exitCode;
     if (assertion.kind === 'exit-code' || assertion.kind === 'status')

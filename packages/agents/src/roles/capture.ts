@@ -1,10 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import type { RetestShot, RoutineStep } from '@bugpatrol/core';
+import { type Evidence, formatHttpExchange, type RetestShot, type RoutineStep } from '@bugpatrol/core';
+import { captureParts, evidenceParts } from '../evidence.js';
 import { type replayRoutine, replaySteps } from '../replay.js';
 import type { AgentSession } from '../session.js';
 import { explorerTools } from '../tools/explorer.js';
-import type { RoleOutcome, Runtime, Tool } from '../types.js';
+import type { RoleOutcome, Runtime, Tool, ToolContent } from '../types.js';
 import { stopOnCancellation } from './explorer.js';
 import { stepWords } from './fixer.js';
 
@@ -17,17 +16,19 @@ const schema = (properties: Record<string, unknown> = {}, required: string[] = [
 const string = { type: 'string' };
 const response = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
 
-export async function image(root: string, file?: string): Promise<{ type: 'image'; png: Buffer }[]> {
-  if (!file) return [];
-  try {
-    return [{ type: 'image', png: await readFile(resolve(root, file)) }];
-  } catch {
-    return [];
-  }
-}
+/**
+ * A flow to repeat: `steps` follow the routine. `reported` is what the issue
+ * saw there, and `shot.before` is its screenshot file. An API exchange has no
+ * file, so only `reported` holds it.
+ */
+export type CaptureTarget = { shot: RetestShot; steps: RoutineStep[]; reported?: Evidence };
 
-/** A flow to repeat: `shot.before` is the screen as it was reported, `steps` follow the routine. */
-export type CaptureTarget = { shot: RetestShot; steps: RoutineStep[] };
+/** What a model sees of a target as it was reported. */
+export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
+  return target.reported?.kind === 'http'
+    ? evidenceParts(root, target.reported)
+    : captureParts(root, target.shot.before);
+}
 
 export function targetLines(targets: CaptureTarget[]): string {
   return targets
@@ -85,9 +86,17 @@ export async function captureTargets(
         await driver.settle();
         const observation = await driver.observe();
         const screenshot = await session.capture(observation, `retest-steps-${input.target}`);
+        const { capture } = observation;
         return {
           content: [
-            { type: 'image', png: observation.screenshot },
+            capture.kind === 'image'
+              ? { type: 'image', png: capture.png }
+              : {
+                  type: 'text',
+                  text: session.vars.redact(
+                    capture.exchange ? formatHttpExchange(capture.exchange) : 'No request yet.',
+                  ) as string,
+                },
             {
               type: 'text',
               text: session.vars.redact(
@@ -101,7 +110,7 @@ export async function captureTargets(
     },
     {
       name: 'view_before',
-      description: 'View the target screenshot as it was reported.',
+      description: 'View the target screenshot, or the HTTP exchange of an API, as it was reported.',
       inputSchema: schema(targetSchema, ['target']),
       async run(input) {
         const target = selected(input);
@@ -109,7 +118,7 @@ export async function captureTargets(
         const content: Awaited<ReturnType<Tool['run']>>['content'] = [
           { type: 'text', text: `Screen ${input.target}: ${target.shot.screenId ?? '(unknown)'}` },
         ];
-        content.push(...(await image(session.root, target.shot.before)));
+        content.push(...(await beforeParts(session.root, target)));
         return { content };
       },
     },

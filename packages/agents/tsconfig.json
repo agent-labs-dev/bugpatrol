@@ -8,6 +8,7 @@
     { "path": "../diff" },
     { "path": "../drivers" },
     { "path": "../invariants" },
-    { "path": "../logs" }
+    { "path": "../logs" },
+    { "path": "../../examples/api-fixture" }
   ]
 }

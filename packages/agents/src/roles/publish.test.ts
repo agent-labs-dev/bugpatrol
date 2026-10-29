@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Gh } from '../github.js';
-import type { Runtime } from '../types.js';
+import type { Runtime, Tool } from '../types.js';
 import { Workspace } from '../workspace.js';
 import { runPublisher } from './publish.js';
 
@@ -26,13 +26,14 @@ async function fixture(severity: Issue['severity'] = 'major', status: Issue['sta
     severity,
     status,
     candidateIds: [],
-    evidence: {},
+    evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
     judgement: { by: 'judge', reason: 'Visible failure', at: 'now' },
     occurrences: 1,
     firstSeenAt: 'now',
     lastSeenAt: 'now',
   };
   await workspace.saveIssue(issue);
+  await writeFile(join(root, 'shot.png'), 'png');
   const config = parseConfig({
     version: 1,
     app: { connect: { url: 'http://localhost' } },
@@ -191,6 +192,47 @@ describe('runPublisher', () => {
     expect(await runPublisher(f.root, f.config, { gh, createRuntime })).toEqual([]);
     expect((await f.workspace.listSessions())[0]?.summary).toContain('gh is not logged in');
     expect((await f.workspace.readIssue(f.issue.id))?.github).toBeUndefined();
+  });
+  it('publishes an API issue with its exchange as an http block, and uploads no file', async () => {
+    const f = await fixture();
+    await f.workspace.saveIssue({
+      ...f.issue,
+      evidence: {
+        capture: {
+          kind: 'http',
+          exchange: {
+            request: { method: 'GET', path: '/items/0', headers: {} },
+            response: {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+              contentType: 'application/json',
+              body: '{"error":"Division by zero."}',
+              bytes: 29,
+            },
+            latencyMs: 4,
+            at: 'now',
+          },
+        },
+      },
+    });
+    let viewed: Awaited<ReturnType<Tool['run']>> | undefined;
+    const viewing: Runtime = {
+      ...runtime,
+      async run(task, emit) {
+        viewed = await task.tools.find((tool) => tool.name === 'view_item')!.run({ issue_id: 'iss_1' });
+        return runtime.run(task, emit);
+      },
+    };
+    const calls: string[][] = [];
+    expect(
+      await runPublisher(f.root, f.config, { gh: fakeGh(calls), createRuntime: () => viewing, dryRun: true }),
+    ).toMatchObject([{ kind: 'issue' }]);
+    expect(viewed?.content.map((part) => part.type)).toEqual(['text', 'text']);
+    expect(viewed?.content[1]).toMatchObject({ text: expect.stringContaining('HTTP 500 Internal Server Error') });
+    const report = await readFile(join(f.root, '.bugpatrol/runs/publish/iss_1.md'), 'utf8');
+    expect(report).toContain('## Request\n\n```http\nGET /items/0\n\nHTTP 500 Internal Server Error (4 ms)');
+    expect(report).not.toContain('## Screenshots');
+    expect(calls).toEqual([]);
   });
   it('writes a dry-run report without any gh calls', async () => {
     const f = await fixture();

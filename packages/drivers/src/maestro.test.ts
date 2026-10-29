@@ -120,7 +120,7 @@ describe('Maestro data conversion', () => {
     const observation = {
       platform: 'ios',
       location: 'com.example.app',
-      screenshot: Buffer.alloc(0),
+      capture: { kind: 'image', png: Buffer.alloc(0) },
       volatileRegions: [],
       at: new Date().toISOString(),
       title: 'Acme',

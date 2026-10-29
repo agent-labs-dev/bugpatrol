@@ -12,6 +12,7 @@ import {
   type ClaimVerdict,
   type FixProposal,
   fixerAttempts,
+  formatHttpExchange,
   type Issue,
   loadConfig,
   type MemoryFile,
@@ -120,6 +121,9 @@ const recordingKinds: Record<string, Recording['kind']> = {
   '.cast': 'cast',
 };
 
+/** The dashboard shows a whole body: the driver already cut it at 1 MiB. */
+const ALL = { maxBodyChars: Number.POSITIVE_INFINITY };
+
 export class AgentReader {
   constructor(
     private readonly root: string,
@@ -175,7 +179,20 @@ export class AgentReader {
       )
       .map((issue) => {
         const fix = fixes.find((entry) => entry.id === issue.fixId || entry.issueId === issue.id);
-        return { ...issue, pr: fix?.pr ? { ...fix.pr, ci: fix.ci?.state } : undefined };
+        const { capture } = issue.evidence;
+        return {
+          ...issue,
+          // The UI shows an exchange in a <pre> as this text: it has no renderer of its own.
+          ...(capture?.kind === 'http'
+            ? {
+                evidence: {
+                  ...issue.evidence,
+                  capture: { ...capture, text: formatHttpExchange(capture.exchange, ALL) },
+                },
+              }
+            : {}),
+          pr: fix?.pr ? { ...fix.pr, ci: fix.ci?.state } : undefined,
+        };
       })
       .sort(
         (a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9) || b.lastSeenAt.localeCompare(a.lastSeenAt),

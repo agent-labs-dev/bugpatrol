@@ -12,7 +12,10 @@ const apiRequestSchema = z.object({
 import {
   type BugCheck,
   type Candidate,
+  type Evidence,
   fingerprint,
+  formatHttpExchange,
+  type HttpExchange,
   type Locator,
   type Routine,
   type RoutineStep,
@@ -87,11 +90,9 @@ function observationText(observation: Observation): string {
     `Location: ${observation.location}`,
     `Windows: ${windows}`,
     ...errorLines(observation),
-    ...(observation.http
-      ? [
-          `HTTP ${observation.http.status} (${observation.http.contentType ?? 'no content type'})`,
-          observation.http.body,
-        ]
+    // One entry, so the line cap below never cuts an exchange: its body has its own cap.
+    ...(observation.capture.kind === 'http'
+      ? [observation.capture.exchange ? formatHttpExchange(observation.capture.exchange) : 'No request yet.']
       : []),
     ...(observation.terminal
       ? [
@@ -110,12 +111,20 @@ function observationText(observation: Observation): string {
     .join('\n');
 }
 
+/** The evidence of the last capture: its PNG, or the redacted exchange of an API. */
+function captureEvidence(session: AgentSession): Evidence | undefined {
+  const capture = session.lastObservation?.capture;
+  if (capture?.kind === 'http')
+    return capture.exchange && { kind: 'http', exchange: session.vars.redact(capture.exchange) as HttpExchange };
+  return session.lastCapture ? { kind: 'image', screenshot: session.lastCapture } : undefined;
+}
+
 async function observe(session: AgentSession, label: string, summary?: string): Promise<ToolResult> {
   const observation = await session.driver!.observe();
   const screenshot = await session.capture(observation, label);
   return {
     content: [
-      { type: 'image', png: observation.screenshot },
+      ...(observation.capture.kind === 'image' ? [{ type: 'image' as const, png: observation.capture.png }] : []),
       { type: 'text', text: session.vars.redact(observationText(observation)) as string },
     ],
     meta: { summary: summary ?? `Looked at ${observation.title || observation.location}`, screenshot },
@@ -735,9 +744,12 @@ export function explorerTools(
       ),
       async run(input) {
         const title = arg(input, 'title');
-        if (!session.lastScreenshot || !session.lastObservation) {
+        if (!session.lastCapture || !session.lastObservation) {
           await session.capture(await session.driver!.observe(), 'reported-bug');
         }
+        const capture = captureEvidence(session);
+        if (!capture)
+          return { ...text('Not reported: send a request first, so the issue has evidence.'), isError: true };
         const bug: BugCheck = {};
         for (const key of ['shows', 'lacks', 'error'] as const) {
           const value = session.vars.redact(arg(input, key).trim()) as string;
@@ -768,7 +780,7 @@ export function explorerTools(
           detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
           severity: input.severity as Candidate['severity'],
           evidence: {
-            screenshot: session.lastScreenshot,
+            capture,
             routineId: session.anchor.routineId,
             steps: session.trail.slice(session.anchor.index).map(({ at: _at, ...step }) => step as RoutineStep),
             ...(Object.keys(bug).length ? { bug } : {}),
@@ -787,7 +799,7 @@ export function explorerTools(
           }
         }
         await session.workspace.appendCandidate(session.sessionId, candidate);
-        session.emit({ kind: 'candidate', summary: title, screenshot: session.lastScreenshot });
+        session.emit({ kind: 'candidate', summary: title, screenshot: session.lastCapture });
         return text(`Reported ${candidate.id}: ${title}.${fallback}`);
       },
     },

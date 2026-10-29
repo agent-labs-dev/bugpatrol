@@ -642,8 +642,26 @@ function renderUsage(usage) {
   ]);
 }
 
+/** A capture file: a screenshot, or the exchange file of an API, which shows as text. */
 function image(path, label, className = '') {
   if (!path) return el('div', { class: `image-empty ${className}`, text: 'No capture' });
+  if (path.endsWith('.exchange.json')) {
+    const small = isThumb(className);
+    const view = small
+      ? httpThumb(undefined, label, className)
+      : el('pre', { class: `http ${className}`, title: label, text: 'Loading the exchange…' });
+    // The server formats the exchange, so the dashboard shows the same text as the models and issues.
+    fetch(`/api/exchange?path=${encodeURIComponent(path)}`)
+      .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+      .then((text) => {
+        if (small) view.textContent = text.match(/^HTTP \d{3}/m)?.[0] ?? 'HTTP';
+        else view.textContent = text;
+      })
+      .catch(() => {
+        if (!small) view.textContent = 'The exchange is not available.';
+      });
+    return view;
+  }
   return el('img', {
     class: className,
     src: artifact(path),
@@ -651,6 +669,20 @@ function image(path, label, className = '') {
     loading: 'lazy',
     onclick: () => openLightbox(path, label),
   });
+}
+
+/** The capture of an issue: its screenshot, or the HTTP exchange of an API as the server formatted it. */
+function captureView(capture, label, className = '') {
+  if (capture?.kind !== 'http') return image(capture?.screenshot, label, className);
+  if (isThumb(className)) return httpThumb(capture.exchange?.response?.status, label, className);
+  return el('pre', { class: `http ${className}`, title: label, text: capture.text });
+}
+
+const isThumb = (className) => /\b(?:thumb|event-thumb)\b/.test(className);
+
+/** A thumbnail is too small for the exchange text, so it shows the status only. */
+function httpThumb(status, label, className) {
+  return el('div', { class: `http-thumb ${className}`, title: label, text: status ? `HTTP ${status}` : 'HTTP' });
 }
 
 function severityChip(value) {
@@ -726,7 +758,7 @@ function renderOverview() {
           { class: 'stack' },
           data.attention.map((issue) =>
             el('button', { class: 'attention-row', onclick: () => openIssue(issue.id) }, [
-              image(issue.evidence?.screenshot, issue.title, 'thumb'),
+              captureView(issue.evidence?.capture, issue.title, 'thumb'),
               el('span', { class: 'grow' }, [
                 el('strong', { text: issue.title }),
                 el('span', { class: 'row-meta' }, [
@@ -866,13 +898,22 @@ function renderIssueDetail() {
   if (!detail) return el('section', { class: 'card panel empty', text: 'Select an issue.' });
   const { issue, fix, candidates, gaveUpAfter, attemptDiffs = {} } = detail;
   const evidence = issue.evidence ?? {};
-  const shots = [
-    ['Screenshot', evidence.screenshot],
-    ['Baseline', evidence.baseline],
-    ['Diff', evidence.diff],
-  ]
-    .filter(([, path]) => path)
-    .map(([label, path]) => el('figure', {}, [image(path, label), el('figcaption', { text: label })]));
+  const capture = evidence.capture;
+  const shots =
+    capture?.kind === 'http'
+      ? [
+          el('figure', { class: 'http-evidence' }, [
+            captureView(capture, 'HTTP exchange'),
+            el('figcaption', { text: 'HTTP exchange' }),
+          ]),
+        ]
+      : [
+          ['Screenshot', capture?.screenshot],
+          ['Baseline', capture?.baseline],
+          ['Diff', capture?.diff],
+        ]
+          .filter(([, path]) => path)
+          .map(([label, path]) => el('figure', {}, [image(path, label), el('figcaption', { text: label })]));
   const steps = evidence.steps ?? detail.routine?.steps ?? [];
   return el('article', { class: 'card panel issue-detail' }, [
     el('div', { class: 'detail-heading' }, [el('h1', { text: issue.title }), severityChip(issue.severity)]),
@@ -1135,14 +1176,18 @@ function lazyDiff(path) {
 }
 
 function retestBlock(retest, issue) {
-  const before = retest.before ?? issue.evidence?.screenshot;
+  const capture = issue.evidence?.capture;
+  const before = retest.before ?? capture?.screenshot;
+  // An API issue has no before file: the reported exchange is the before.
+  const beforeView = (path) =>
+    !path && capture?.kind === 'http' ? captureView(capture, 'Before') : image(path, 'Before');
   const pair = (shot) =>
     el('div', { class: 'retest-shot-pair' }, [
       retest.shots?.length ? el('h4', { text: screenName(shot.screenId) }) : null,
       shot.reached === false ? el('span', { class: 'muted', text: 'Not reached' }) : null,
       shot.note ? el('p', { class: 'muted', text: shot.note }) : null,
       el('div', { class: 'retest-shots' }, [
-        el('figure', {}, [image(shot.before, 'Before'), el('figcaption', { text: 'Before' })]),
+        el('figure', {}, [beforeView(shot.before), el('figcaption', { text: 'Before' })]),
         el('figure', {}, [
           image(shot.after, 'After (with the fix)'),
           el('figcaption', { text: 'After (with the fix)' }),

@@ -45,7 +45,7 @@ async function fixture() {
     severity: 'major',
     status: 'filed',
     candidateIds: [],
-    evidence: {},
+    evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
     judgement: { by: 'judge', reason: 'Broken', at: 'now' },
     occurrences: 1,
     firstSeenAt: 'now',

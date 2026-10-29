@@ -74,10 +74,11 @@ export function outputOf(step: RoutineStep, screen: Observation): ClaimOutput | 
       step: `$ ${step.command}`,
       text: `exit ${screen.terminal.exitCode ?? 'none'}\n${normalise(screen.terminal.output)}`,
     };
-  if (step.kind === 'request' && screen.http)
+  const response = screen.capture.kind === 'http' ? screen.capture.exchange?.response : undefined;
+  if (step.kind === 'request' && response)
     return {
       step: `${step.method} ${step.url}`,
-      text: `${screen.http.status} ${screen.http.contentType ?? '(no content type)'}\n${normalise(screen.http.body)}`,
+      text: `${response.status} ${response.contentType ?? '(no content type)'}\n${normalise(response.body)}`,
     };
   return undefined;
 }

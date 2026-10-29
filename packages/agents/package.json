@@ -28,5 +28,8 @@
     "@modelcontextprotocol/sdk": "^1.20.0",
     "pngjs": "^7.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@bugpatrol/api-fixture": "workspace:*"
   }
 }

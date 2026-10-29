@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import {
   type BugpatrolConfig,
   type Candidate,
+  type Evidence,
   type FixProposal,
   fixerAttempts,
   type Issue,
@@ -14,6 +15,7 @@ import {
   type RoutineStep,
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { captureParts, screenshotOf } from '../evidence.js';
 import { closeOnGitHub } from '../github.js';
 import { readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -24,7 +26,7 @@ import { lessonTools } from '../tools/memory.js';
 import type { RoleOutcome, Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
-import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { linkEnvFiles, runFixer } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
 import { reflectOnSession } from './reflect.js';
@@ -52,9 +54,10 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
   const add = (
     screenId: string | undefined,
     routineId: string | undefined,
-    before: string | undefined,
+    reported: Evidence,
     steps: RoutineStep[] = [],
   ) => {
+    const before = screenshotOf(reported);
     const existing = targets.find(({ shot }) =>
       shot.screenId && screenId
         ? shot.screenId === screenId
@@ -68,14 +71,14 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
       existing.shot.screenId ??= screenId;
       existing.shot.routineId ??= routineId;
       existing.shot.before ??= before;
+      existing.reported ??= reported;
       if (!existing.steps.length) existing.steps = steps;
       return;
     }
     if (targets.length >= 6) return;
-    targets.push({ shot: { screenId, routineId, before }, steps });
+    targets.push({ shot: { screenId, routineId, before }, steps, reported });
   };
-  if (issue.screenId || issue.evidence.routineId || issue.evidence.screenshot || issue.evidence.steps?.length)
-    add(issue.screenId, issue.evidence.routineId, issue.evidence.screenshot, issue.evidence.steps);
+  add(issue.screenId, issue.evidence.routineId, issue.evidence.capture, issue.evidence.steps);
   const ids = new Set(issue.candidateIds);
   if (ids.size && targets.length < 6) {
     const found = new Map<string, Candidate>();
@@ -88,7 +91,7 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
     for (const id of issue.candidateIds) {
       const candidate = found.get(id);
       if (!candidate) continue;
-      add(candidate.screenId, candidate.evidence.routineId, candidate.evidence.screenshot, candidate.evidence.steps);
+      add(candidate.screenId, candidate.evidence.routineId, candidate.evidence.capture, candidate.evidence.steps);
     }
   }
   return targets;
@@ -232,7 +235,7 @@ export async function retestFix(
     const tools: Tool[] = [
       {
         name: 'view_retest',
-        description: 'View issue details and before and after screenshots.',
+        description: 'View issue details and the before and after captures: screenshots, or HTTP exchanges for an API.',
         inputSchema: schema(),
         async run() {
           const content: Awaited<ReturnType<Tool['run']>>['content'] = [
@@ -244,7 +247,7 @@ export async function retestFix(
               type: 'text',
               text: `Screen ${index + 1}: ${shot.screenId ?? '(unknown)'} — reached: ${shot.reached === true} — explorer: ${shot.note ?? ''}`,
             });
-            content.push(...(await image(root, shot.before)), ...(await image(root, shot.after)));
+            content.push(...(await beforeParts(root, target)), ...(await captureParts(root, shot.after)));
           }
           return { content };
         },

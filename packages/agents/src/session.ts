@@ -1,4 +1,11 @@
-import type { AgentRole, AgentStatus, BugpatrolConfig, RoutineStep, SessionSignal } from '@bugpatrol/core';
+import type {
+  AgentRole,
+  AgentStatus,
+  BugpatrolConfig,
+  HttpExchange,
+  RoutineStep,
+  SessionSignal,
+} from '@bugpatrol/core';
 import type { Driver, Observation } from '@bugpatrol/drivers';
 import type { EventSink } from './types.js';
 import type { Vars } from './vars.js';
@@ -13,7 +20,8 @@ export class AgentSession {
   anchor: { routineId?: string; index: number } = { index: 0 };
   lastObservation?: Observation;
   previousObservation?: Observation;
-  lastScreenshot?: string;
+  /** The last capture file: a PNG, or the exchange JSON of an API. */
+  lastCapture?: string;
   lastScreenId?: string;
   lastScreenTrailIndex = 0;
   /** Where the app was when lastScreenId was recorded. */
@@ -60,7 +68,7 @@ export class AgentSession {
           this.completedRoutines.clear();
           this.lastObservation = undefined;
           this.previousObservation = undefined;
-          this.lastScreenshot = undefined;
+          this.lastCapture = undefined;
           this.lastScreenId = undefined;
           this.lastScreenLocation = undefined;
           this.lastScreenTrailIndex = 0;
@@ -99,13 +107,27 @@ export class AgentSession {
     }
   }
 
-  async capture(observation: Observation, label: string): Promise<string> {
-    const screenshot = await this.workspace.saveScreenshot(this.sessionId, observation.screenshot, label);
+  /**
+   * Saves what the observation shows: a PNG, or for an API the exchange as
+   * `exchange.json`. An API that has had no request yet has no file.
+   */
+  async capture(observation: Observation, label: string): Promise<string | undefined> {
+    const { capture } = observation;
+    const file =
+      capture.kind === 'image'
+        ? await this.workspace.saveCapture(this.sessionId, capture, label)
+        : capture.exchange
+          ? await this.workspace.saveCapture(
+              this.sessionId,
+              { kind: 'http', exchange: this.vars.redact(capture.exchange) as HttpExchange },
+              label,
+            )
+          : undefined;
     if (this.lastObservation !== observation) this.previousObservation = this.lastObservation;
     this.lastObservation = observation;
-    this.lastScreenshot = screenshot;
+    this.lastCapture = file;
     await this.recordSignals(observation);
-    return screenshot;
+    return file;
   }
 
   /**

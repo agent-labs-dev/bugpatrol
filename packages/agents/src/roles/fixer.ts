@@ -7,6 +7,7 @@ import {
   type FixProposal,
   fitLesson,
   fixerAttempts,
+  httpBlock,
   type Issue,
   judgedRetests,
   paths,
@@ -518,10 +519,14 @@ async function runOne(
   history: { earlier: FixAttempt[]; start: WorktreeStart },
 ): Promise<RoleOutcome> {
   const config = session.config.agents.fixer;
-  const evidencePaths = Object.entries(issue.evidence)
-    .filter(([key]) => ['screenshot', 'baseline', 'diff'].includes(key))
-    .map(([key, value]) => `${key}: ${resolve(session.root, String(value))}`);
-  const evidence = evidencePaths.join('\n');
+  const { capture } = issue.evidence;
+  // An API exchange is text, so the fixer reads it here; a screenshot is a file to open.
+  const evidence =
+    capture.kind === 'http'
+      ? httpBlock(capture.exchange)
+      : (['screenshot', 'baseline', 'diff'] as const)
+          .flatMap((key) => (capture[key] ? [`${key}: ${resolve(session.root, capture[key])}`] : []))
+          .join('\n');
   const steps = (issue.evidence.steps ?? []).map((step, index) => `${index + 1}. ${stepWords(step)}`);
   const repro = `Run the routine ${issue.evidence.routineId ?? '(none)'}, then:\n${steps.join('\n')}`;
   const after = last?.shots?.length
@@ -547,7 +552,7 @@ async function runOne(
           `Reproduction: ${repro}` +
           earlierAttempts +
           (last
-            ? `\nYour last change did not fix the issue in the running app. The QA lead said: ${last.reason}. After screenshots:\n${after}\n` +
+            ? `\nYour last change did not fix the issue in the running app. The QA lead said: ${last.reason}. After captures:\n${after}\n` +
               'First find why your last change had no effect in the running app, for example a different file that the app ' +
               'loads on this platform. Do not trust a guess from the QA lead: check the code. When you find the cause, call ' +
               'save_lesson with it, so that later fixes avoid it. Then fix the issue.'

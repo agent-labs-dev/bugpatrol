@@ -10,6 +10,7 @@ import {
   type AppMapScreen,
   type Candidate,
   type FixProposal,
+  type HttpExchange,
   type Issue,
   type Lesson,
   type LessonRole,
@@ -321,13 +322,22 @@ export class Workspace {
     await appendFile(join(dir, 'events.jsonl'), `${JSON.stringify({ ...event, at: new Date().toISOString() })}\n`);
   }
 
-  async saveScreenshot(sessionId: string, png: Buffer, label: string): Promise<string> {
+  /**
+   * Saves one capture of a session as `NNN-<label>.png`, or for an API as
+   * `NNN-<label>.exchange.json`, and returns the workspace-relative file.
+   */
+  async saveCapture(
+    sessionId: string,
+    capture: { kind: 'image'; png: Buffer } | { kind: 'http'; exchange: HttpExchange },
+    label: string,
+  ): Promise<string> {
     const dir = paths.session(this.root, sessionId);
     await mkdir(dir, { recursive: true });
     const files = await readdir(dir);
-    const number = files.filter((file) => /^\d{3}-.*\.png$/.test(file)).length + 1;
-    const file = join(dir, `${String(number).padStart(3, '0')}-${basename(label).replace(/[^a-zA-Z0-9_-]/g, '-')}.png`);
-    await writeFile(file, png);
+    const number = files.filter((file) => /^\d{3}-.*\.(?:png|exchange\.json)$/.test(file)).length + 1;
+    const name = `${String(number).padStart(3, '0')}-${basename(label).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const file = join(dir, capture.kind === 'image' ? `${name}.png` : `${name}.exchange.json`);
+    await writeFile(file, capture.kind === 'image' ? capture.png : `${JSON.stringify(capture.exchange, null, 2)}\n`);
     return relative(this.root, file);
   }
 
