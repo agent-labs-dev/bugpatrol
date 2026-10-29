@@ -30,6 +30,7 @@ Agents
   bugpatrol worktrees clean
   bugpatrol [--once] [--force]            the patrol: explore, judge, fix, retest, publish (= bugpatrol patrol)
   bugpatrol replay <routine-id>
+  bugpatrol endpoints [--spec URL|file] [--json]   the endpoints of the api contract
   bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
   bugpatrol memory list [--role r] | add --role r "text" [--scope s]
   bugpatrol memory remove <id> | retire <id> --reason "..."
@@ -151,6 +152,13 @@ export const COMMAND_HELP: Record<string, string> = {
   publish, and CI checks run in each cycle.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
+`,
+  endpoints: `bugpatrol endpoints [--spec URL|file] [--json]
+  Print the endpoints of the api contract, and each operation that Bugpatrol skips, with the reason.
+  With no --spec, read app.connect.spec, or .bugpatrol/endpoints.yml when there is no spec,
+  and write the endpoints to .bugpatrol/appmap.json. Bugpatrol never uses the servers value of a spec.
+  --spec URL|file   read this spec, and write nothing
+  --json            print JSON
 `,
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.

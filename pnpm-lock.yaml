@@ -128,6 +128,9 @@ importers:
       '@bugpatrol/capture':
         specifier: workspace:*
         version: link:../capture
+      '@bugpatrol/contract':
+        specifier: workspace:*
+        version: link:../contract
       '@bugpatrol/core':
         specifier: workspace:*
         version: link:../core
@@ -158,6 +161,19 @@ importers:
       yaml:
         specifier: ^2.5.1
         version: 2.9.1
+
+  packages/contract:
+    dependencies:
+      '@bugpatrol/core':
+        specifier: workspace:*
+        version: link:../core
+      yaml:
+        specifier: ^2.5.1
+        version: 2.9.1
+    devDependencies:
+      '@bugpatrol/api-fixture':
+        specifier: workspace:*
+        version: link:../../examples/api-fixture
 
   packages/core:
     dependencies:

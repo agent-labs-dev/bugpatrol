@@ -9,6 +9,7 @@ export * from './paths.js';
 export * from './types/agents.js';
 export * from './types/appmodel.js';
 export * from './types/decision.js';
+export * from './types/endpoint.js';
 export * from './types/finding.js';
 export * from './types/ids.js';
 export * from './types/intent.js';

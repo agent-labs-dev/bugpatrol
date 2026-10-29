@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AgentRole } from '../types/agents.js';
+import { HTTP_METHODS } from '../types/endpoint.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
 
 export const viewportSchema = z.object({
@@ -167,10 +168,23 @@ export const appSchema = z
         /** API: default request headers; credentials should be placeholders. */
         headers: z.record(z.string()).default({}),
         /** API: writes require explicit opt-in in repository configuration. */
-        methods: z
-          .array(z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']))
-          .default(['GET', 'HEAD', 'OPTIONS']),
+        methods: z.array(z.enum(HTTP_METHODS)).default(['GET', 'HEAD', 'OPTIONS']),
         timeoutMs: z.number().int().positive().max(120000).default(30000),
+        /**
+         * API: the OpenAPI spec. An http(s) URL, a path on connect.url such as
+         * /openapi.json, or a file relative to the project root. Bugpatrol
+         * never uses its `servers` value.
+         */
+        spec: z.string().optional(),
+        /** API: the error statuses every endpoint may return, and the JSON Schema of their body. */
+        errors: z
+          .object({
+            statuses: z.array(z.number().int().min(400).max(599)).default([]),
+            schema: z.record(z.unknown()).optional(),
+          })
+          .optional(),
+        /** API: the preview deploy of a pull request, with {{PR_NUMBER}}. Reserved; nothing reads it yet. */
+        preview: z.string().optional(),
         /** Linux desktop: a private Xvfb/DBus session; never the host display. */
         cua: z
           .object({

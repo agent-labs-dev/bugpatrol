@@ -76,6 +76,8 @@ export const paths = {
   live: (root: string) => data(root, 'gate', 'live.json'),
   /** Committed. Small JSON with no pixels, so a fresh clone knows the app (ADR 0006). */
   appMap: (root: string) => join(dir(root), 'appmap.json'),
+  /** Committed. The endpoint inventory of an api app without a spec (decision 1b). */
+  endpointInventory: (root: string) => join(dir(root), 'endpoints.yml'),
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
   triage: (root: string) => data(root, 'triage.json'),
   memory: (root: string) => data(root, 'memory.json'),

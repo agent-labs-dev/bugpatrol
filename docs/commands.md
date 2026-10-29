@@ -17,6 +17,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol ci [--issue <id>] [--wait]` | Watch the CI checks of each Bugpatrol PR, and let the fixer fix a failed check. Refer to [GitHub](github.md#5-make-ci-green) |
 | `bugpatrol [--once] [--force]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again |
 | `bugpatrol replay <routine-id>` | Replay a learned routine, with no model |
+| `bugpatrol endpoints [--spec URL\|file] [--json]` | Print the endpoints of an api contract and the operations that Bugpatrol skips. With no `--spec`, it reads `app.connect.spec` (or `.bugpatrol/endpoints.yml`) and writes the endpoints to `appmap.json` |
 
 ## Issues, memory, and GitHub
 

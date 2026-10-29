@@ -38,6 +38,9 @@
       "path": "packages/recon"
     },
     {
+      "path": "packages/contract"
+    },
+    {
       "path": "packages/github-app"
     },
     {

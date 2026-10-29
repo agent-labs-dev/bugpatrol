@@ -159,6 +159,10 @@ export class Workspace {
     return readJson(paths.appMap(this.root));
   }
 
+  async writeAppMap(map: AppMap): Promise<void> {
+    await atomic(paths.appMap(this.root), map);
+  }
+
   async upsertScreen(screen: Partial<AppMapScreen> & Pick<AppMapScreen, 'id'>): Promise<AppMapScreen> {
     const now = new Date().toISOString();
     const map = await this.readAppMap();
@@ -193,6 +197,7 @@ export class Workspace {
       version: 1,
       platform: map?.platform ?? merged.platform,
       screens,
+      ...(map?.endpoints ? { endpoints: map.endpoints } : {}),
       updatedAt: now,
     });
     return merged;

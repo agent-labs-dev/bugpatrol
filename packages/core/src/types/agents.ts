@@ -1,3 +1,4 @@
+import type { Endpoint } from './endpoint.js';
 import type { Severity } from './finding.js';
 import type { TokenUsage } from './usage.js';
 
@@ -205,6 +206,8 @@ export type AppMap = {
   platform: Platform;
   summary?: string;
   screens: AppMapScreen[];
+  /** Api apps: the endpoints of the contract. Only `buildContract()` computes them. */
+  endpoints?: Endpoint[];
   updatedAt: string;
 };
 

@@ -6,6 +6,7 @@
     { "path": "../agents" },
     { "path": "../core" },
     { "path": "../capture" },
+    { "path": "../contract" },
     { "path": "../decide" },
     { "path": "../diff" },
     { "path": "../drivers" },

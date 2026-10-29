@@ -6,6 +6,7 @@ import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
 import { doctorExitCode, runChecks } from './commands/doctor.js';
+import { runEndpointsCommand } from './commands/endpoints.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
@@ -108,6 +109,12 @@ try {
         (message) => process.stdout.write(`${message}\n`),
         selected.configFile,
       );
+      break;
+    }
+
+    case 'endpoints': {
+      const config = args.includes('--spec') ? optionalConfig() : readConfig();
+      await runEndpointsCommand(args, root, (line) => process.stdout.write(`${line}\n`), config);
       break;
     }
 
