@@ -81,6 +81,10 @@ export const paths = {
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
   triage: (root: string) => data(root, 'triage.json'),
   memory: (root: string) => data(root, 'memory.json'),
+  /** The sweep's coverage cells and its cursor, so the next run resumes where this one stopped. */
+  coverage: (root: string) => data(root, 'coverage.json'),
+  /** The `bugpatrol-state` commit that this folder last shared. Not state: it belongs to this machine. */
+  stateBase: (root: string) => data(root, 'state-base.json'),
   agentBaselines: (root: string) => data(root, 'agent-baselines'),
   agentBaseline: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.png`),
   agentBaselineSnapshot: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.snapshot.json`),
@@ -105,6 +109,28 @@ export const paths = {
   sessionSignals: (root: string, id: string) => data(root, 'sessions', recordId(id), 'signals.jsonl'),
   sessionFlow: (root: string, id: string) => data(root, 'sessions', recordId(id), 'flow.json'),
 } as const;
+
+/**
+ * The JSON state that a patrol shares through the `bugpatrol-state` branch
+ * (`agents.patrol.state: branch`). This list is the one allowlist: nothing
+ * else goes on the branch. A path is relative to the Bugpatrol folder, and
+ * `*` is one record id. `keys` shares only those fields of the file:
+ * `agents.json` also holds this machine's live status and pid.
+ *
+ * Never add pixels, casts, videos, raw exchanges, locks, or credentials
+ * (ADR 0004): sessions stay on the machine that recorded them.
+ */
+export const STATE_FILES: readonly { path: string; keys?: readonly string[] }[] = [
+  { path: 'appmap.json' },
+  { path: 'routines/*.json' },
+  { path: `${DATA_DIR}/issues/*.json` },
+  { path: `${DATA_DIR}/fixes/*.json` },
+  { path: `${DATA_DIR}/triage.json` },
+  { path: `${DATA_DIR}/memory.json` },
+  { path: `${DATA_DIR}/coverage.json` },
+  /** The source commit that the last full cycle tested. */
+  { path: `${DATA_DIR}/agents.json`, keys: ['patrol.commit'] },
+];
 
 /**
  * The project root: the nearest folder at or above `start` that holds

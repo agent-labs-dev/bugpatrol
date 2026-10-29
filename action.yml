@@ -1,16 +1,19 @@
 name: Bugpatrol review
-description: Run `bugpatrol review` on a pull request. It tests the change in the running app and posts a GitHub review.
+description: Run `bugpatrol review` on a pull request, or one cycle of the patrol on a schedule. It tests the running app and reports on GitHub.
 author: agent-labs-dev
 branding:
   icon: check-circle
   color: green
 
 inputs:
+  mode:
+    description: "`review` reviews a pull request. `patrol` runs one patrol cycle and keeps its state on the `bugpatrol-state` branch. It never commits to the checked-out branch."
+    default: review
   pr:
     description: The pull request number. Default is the pull request of the event.
     default: ${{ github.event.pull_request.number }}
   github-token:
-    description: "The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on."
+    description: "The token for gh. It needs `pull-requests: write`, `contents: write` for the screenshots on the assets branch, and `checks: write` when `agents.review.block` is on. The patrol pushes its state with the token of actions/checkout, which needs `contents: write`."
     default: ${{ github.token }}
   package:
     description: What npm installs. A version (`bugpatrol@0.2.0`), a tag, or the path of a tarball. On a release tag, the default is the version of that release.
@@ -25,7 +28,7 @@ inputs:
     description: Review a pull request from a fork. Its code runs on this machine, with the secrets of the app.
     default: 'false'
   force:
-    description: Test the pull request again, also when the last review tested the same commit.
+    description: Test the pull request again, also when the last review tested the same commit. In the patrol, explore and judge also when the commit did not change.
     default: 'false'
   claims:
     description: Run the claim check, also when `agents.review.claims` is off.
@@ -34,12 +37,22 @@ inputs:
     description: The step limit of the explorer. Default is `agents.explorer.maxSteps`.
     default: ''
   args:
-    description: More flags for `bugpatrol review`, split on spaces.
+    description: More flags for `bugpatrol review` or `bugpatrol patrol`, split on spaces.
     default: ''
 
 runs:
   using: composite
   steps:
+    - name: Check the mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        if [ "$MODE" != review ] && [ "$MODE" != patrol ]; then
+          echo "::error::The mode input is review or patrol, not $MODE."
+          exit 2
+        fi
+
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
@@ -86,6 +99,7 @@ runs:
         fi
 
     - name: Review the pull request
+      if: inputs.mode == 'review'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -116,4 +130,22 @@ runs:
         # The exit code of Bugpatrol is the exit code of this step: 0 when the
         # review only comments, 1 when the claim check fails (agents.review.block),
         # 4 when Bugpatrol could not test.
+        exec "$BUGPATROL_PREFIX/node_modules/.bin/bugpatrol" "$@"
+
+    - name: Patrol the app
+      if: inputs.mode == 'patrol'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FORCE: ${{ inputs.force }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        # One cycle, with the state on the bugpatrol-state branch: the patrol
+        # pulls it before the cycle and pushes it after, so the next run and a
+        # dev machine continue from it. Exit code 1 when a cycle had a problem.
+        set -- patrol --once --state branch
+        [ "$FORCE" = true ] && set -- "$@" --force
+        # shellcheck disable=SC2086 # the extra flags split on spaces on purpose
+        set -- "$@" $ARGS
         exec "$BUGPATROL_PREFIX/node_modules/.bin/bugpatrol" "$@"

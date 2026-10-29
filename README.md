@@ -175,6 +175,7 @@ On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-
 
 | Input | Default | What it does |
 | --- | --- | --- |
+| `mode` | `review` | `review` reviews a pull request. `patrol` runs one patrol cycle ([Patrol on a schedule](#patrol-on-a-schedule)) |
 | `pr` | the pull request of the event | The pull request to review |
 | `github-token` | `github.token` | The token for `gh` |
 | `package` | the version of the Action tag | The Bugpatrol that npm installs: a version, a tag, or a tarball |
@@ -187,6 +188,30 @@ On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-
 | `args` | | More flags for `bugpatrol review` |
 
 The job passes when the review only comments. With `agents.review.block: true`, a claim that a replay disproved twice fails the job with exit code 1, and the claim check run on the pull request fails too ([Block a merge on a disproved claim](docs/github.md#block-a-merge-on-a-disproved-claim)). When Bugpatrol could not test, for example because the app did not start, the job fails with exit code 4. A refused fork or a config error gives exit code 2. [Review a pull request](docs/github.md#7-review-a-pull-request) tells how the review works.
+
+### Patrol on a schedule
+
+With `mode: patrol`, the Action runs one patrol cycle (`bugpatrol patrol --once --state branch`). It needs no pull request. The patrol keeps its JSON state on the `bugpatrol-state` branch: the issues, the triage, the lessons, the coverage, the fixes, the last tested commit, the app map, and the routines. It pulls the branch before the cycle and pushes it after, so the next run continues from it. Screenshots and videos stay off the branch, and no run commits to `main`. A dev machine with `agents.patrol.state: branch` shares the same branch.
+
+```yaml
+on:
+  schedule: [{ cron: '0 */6 * * *' }]
+  workflow_dispatch:
+permissions:
+  contents: write        # the bugpatrol-state branch
+  issues: write
+  pull-requests: write
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: agent-labs-dev/bugpatrol@v0
+        with:
+          mode: patrol
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+```
 
 ## The dashboard
 

@@ -81,6 +81,7 @@ agents:
     intervalMinutes: 30         # wait between cycles; a cycle runs only on a new commit
     cycles: 0                   # 0 = run until stopped
     pull: origin/main           # remote/branch to pull before each cycle; false = no pull
+    state: local                # local | branch: branch shares the JSON state on the bugpatrol-state branch
 ```
 
 ## Setup and teardown commands

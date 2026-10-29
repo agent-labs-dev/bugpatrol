@@ -513,6 +513,13 @@ export const agentsSchema = z
         pull: z
           .union([z.string().regex(/^[^/]+\/.+$/, 'Use remote/branch, e.g. origin/main'), z.literal(false)])
           .default('origin/main'),
+        /**
+         * `branch` shares the JSON state (`STATE_FILES`) through the
+         * `bugpatrol-state` branch of `origin`: it pulls before each cycle and
+         * pushes after it, so CI and a dev machine see the same issues. `local`
+         * keeps the state only in `.bugpatrol/runs/`.
+         */
+        state: z.enum(['local', 'branch']).default('local'),
       })
       .default({}),
   })

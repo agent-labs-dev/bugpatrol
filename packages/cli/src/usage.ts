@@ -152,6 +152,7 @@ export const COMMAND_HELP: Record<string, string> = {
   publish, and CI checks run in each cycle.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
+  --state <s>     local | branch: share the state on the bugpatrol-state branch (default: agents.patrol.state)
 `,
   endpoints: `bugpatrol endpoints [--spec URL|file] [--json]
   Print the endpoints of the api contract, and each operation that Bugpatrol skips, with the reason.
