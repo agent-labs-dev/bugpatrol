@@ -59,8 +59,7 @@ export async function runExplorer(
   if (guide.text === undefined) session.emit({ kind: 'setup', summary: noGuide(session.root, guide) });
   const api = session.driver instanceof ApiDriver ? session.driver : undefined;
   const endpoints = api
-    ? rankForExplorer(await session.workspace.readCoverage(), api.policy.contract, ENDPOINTS_PER_RUN, {
-        writesAllowed: api.policy.writesAllowed,
+    ? rankForExplorer(await session.workspace.readCoverage(), api.policy, ENDPOINTS_PER_RUN, {
         crossUser: api.credentialSets.includes('other'),
       })
     : undefined;

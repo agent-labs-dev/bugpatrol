@@ -1,4 +1,4 @@
-import type { Contract } from '@bugpatrol/contract';
+import type { RequestPolicy } from '@bugpatrol/contract';
 import type { CoverageCell, CoverageFile, Endpoint } from '@bugpatrol/core';
 
 /** One endpoint that the explorer tests first, and why. */
@@ -10,7 +10,8 @@ const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
  * The endpoints that the explorer tests first (decision 4a), at most `n`.
- * The groups come in this order: endpoints with no coverage, sweep failures
+ * An endpoint that the request policy refuses (deny, skip, a write on a
+ * read-only target) is never a target. The groups come in this order: endpoints with no coverage, sweep failures
  * that did not repeat, write operations (only when writes are allowed), and
  * cross-user cases (only with a second credential set). The other endpoints
  * come last. In each group, the endpoint whose newest cell is oldest comes
@@ -18,9 +19,9 @@ const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  */
 export function rankForExplorer(
   coverage: CoverageFile | undefined,
-  contract: Contract,
+  policy: RequestPolicy,
   n: number,
-  options: { writesAllowed: boolean; crossUser: boolean },
+  options: { crossUser: boolean },
 ): ExplorerTarget[] {
   const cells = new Map<string, CoverageCell[]>();
   for (const cell of Object.values(coverage?.cells ?? {}))
@@ -33,9 +34,7 @@ export function rankForExplorer(
       'a sweep failure that did not repeat',
       (endpoint) => cells.get(endpoint.key)!.some((cell) => cell.repeats === false),
     ],
-    ...(options.writesAllowed
-      ? [['a write operation', (endpoint) => WRITES.has(endpoint.method)] satisfies Group]
-      : []),
+    ...(policy.writesAllowed ? [['a write operation', (endpoint) => WRITES.has(endpoint.method)] satisfies Group] : []),
     // A path parameter names one resource, which belongs to one user.
     ...(options.crossUser
       ? [['a cross-user case', (endpoint) => endpoint.template.includes('{')] satisfies Group]
@@ -43,7 +42,8 @@ export function rankForExplorer(
     ['the oldest coverage', () => true],
   ];
   const groupOf = (endpoint: Endpoint) => groups.findIndex(([, test]) => test(endpoint));
-  return contract.endpoints
+  return policy.contract.endpoints
+    .filter((endpoint) => policy.check(endpoint.method, endpoint.template).ok)
     .map((endpoint, index) => ({ endpoint, index, group: groupOf(endpoint), at: newest(endpoint) }))
     .sort((a, b) => a.group - b.group || a.at.localeCompare(b.at) || a.index - b.index)
     .slice(0, n)

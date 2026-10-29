@@ -1,5 +1,5 @@
 import { fixtureSpecPath } from '@bugpatrol/api-fixture';
-import { buildContract, caseKey, loadSpec } from '@bugpatrol/contract';
+import { buildContract, caseKey, loadSpec, requestPolicy } from '@bugpatrol/contract';
 import type { CoverageFile, EndpointKey } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import { rankForExplorer } from './coverage.js';
@@ -29,8 +29,19 @@ describe('rankForExplorer', async () => {
       cell('GET /items/{id}', '2026-01-03T00:00:00.000Z', { ok: false, repeats: false }),
     ),
   };
+  // A loopback target allows writes; another target is read-only. Both deny /admin/**.
   const ranked = (options: { writesAllowed: boolean; crossUser: boolean }, n = 20) =>
-    rankForExplorer(coverage, contract, n, options).map((item) => `${item.endpoint.key}: ${item.reason}`);
+    rankForExplorer(
+      coverage,
+      requestPolicy(contract, {
+        url: options.writesAllowed ? 'http://127.0.0.1:8000' : 'https://api.example.com',
+        methods: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'],
+        deny: ['/admin/**'],
+        disposable: false,
+      }),
+      n,
+      options,
+    ).map((item) => `${item.endpoint.key}: ${item.reason}`);
 
   it('orders no coverage, failures that did not repeat, writes, cross-user cases, then the oldest coverage', () => {
     expect(ranked({ writesAllowed: true, crossUser: true })).toEqual([
@@ -39,7 +50,6 @@ describe('rankForExplorer', async () => {
       'POST /items: a write operation',
       'PATCH /items/{id}: a write operation',
       'DELETE /items/{id}: a write operation',
-      'POST /admin/wipe: a write operation',
       'GET /health: the oldest coverage',
       ...contract.endpoints
         .map((endpoint) => endpoint.key)
@@ -51,13 +61,14 @@ describe('rankForExplorer', async () => {
     ]);
   });
 
-  it('leaves out writes on a read-only target, ranks cross-user cases, and keeps n', () => {
+  it('leaves out writes on a read-only target and denied endpoints, and keeps n', () => {
+    // The policy refuses PATCH and DELETE here, so no write is a target, even as a cross-user case.
     expect(ranked({ writesAllowed: false, crossUser: true }, 5)).toEqual([
       'GET /search: no coverage yet',
       'GET /items/{id}: a sweep failure that did not repeat',
-      'PATCH /items/{id}: a cross-user case',
-      'DELETE /items/{id}: a cross-user case',
       'GET /health: the oldest coverage',
+      'GET /version: the oldest coverage',
+      'GET /version/fleet: the oldest coverage',
     ]);
   });
 });
