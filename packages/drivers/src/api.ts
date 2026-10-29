@@ -1,6 +1,8 @@
+import type { RequestPolicy } from '@bugpatrol/contract';
 import { formatHttpExchange, type HttpExchange, type HttpMethod } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { z } from 'zod';
+import type { Pacer } from './api-pacer.js';
 import { CastRecorder } from './cast.js';
 import { nativeSnapshot } from './maestro.js';
 import type { ActResult, Driver, DriverAction, Observation, RawResponse } from './types.js';
@@ -8,7 +10,9 @@ import type { ActResult, Driver, DriverAction, Observation, RawResponse } from '
 type ApiOptions = {
   url: string;
   headers: Record<string, string>;
-  methods: HttpMethod[];
+  /** What may be requested. The driver checks each request against it before it sends. */
+  policy: RequestPolicy;
+  pacer: Pacer;
   timeoutMs: number;
   redact: (value: string) => string;
 };
@@ -57,7 +61,15 @@ type Sent = {
   body?: string;
   at: number;
 };
-type Received = { status: number; headers: Headers; text: string; bytes: number; tooLarge: boolean };
+type Received = {
+  status: number;
+  headers: Headers;
+  text: string;
+  bytes: number;
+  tooLarge: boolean;
+  /** An event stream, cut after its headers (T8). */
+  stream?: true;
+};
 
 /**
  * An API over HTTP, with no browser: each `request` step sends one request
@@ -87,6 +99,11 @@ export class ApiDriver implements Driver {
     this.location = endpoint.href;
   }
 
+  /** The request tool offers only the methods of this policy. */
+  get policy(): RequestPolicy {
+    return this.api.policy;
+  }
+
   /** `app.setup` started the API, and a request is the first contact. */
   async connect(): Promise<void> {}
 
@@ -102,8 +119,8 @@ export class ApiDriver implements Driver {
       const url = new URL(action.url, this.api.url);
       if (url.origin !== this.origin || url.username || url.password)
         throw new Error('API requests must stay on the configured origin without embedded credentials');
-      if (!this.api.methods.includes(action.method))
-        throw new Error(`Method ${action.method} is not allowed by app.connect.methods`);
+      const verdict = this.api.policy.check(action.method, url.href);
+      if (!verdict.ok) throw new Error(`${action.method} ${url.pathname} is not allowed: ${verdict.reason}`);
       if (action.body && ['GET', 'HEAD'].includes(action.method))
         throw new Error('GET and HEAD cannot have a request body');
       if (Buffer.byteLength(action.body ?? '') > MAX_BODY_BYTES) throw new Error('Request body exceeds 1 MiB');
@@ -111,17 +128,30 @@ export class ApiDriver implements Driver {
       for (const [name, value] of Object.entries(action.headers ?? {})) headers.set(name, value);
       if (['host', 'connection', 'proxy-authorization'].some((name) => headers.has(name)))
         throw new Error('Host, connection and proxy authorization headers cannot be overridden');
-      sent = { method: action.method, url, headers: action.headers ?? {}, body: action.body, at: Date.now() };
-      const response = await fetch(url, {
-        method: action.method,
-        headers,
-        body: action.body,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(this.api.timeoutMs),
-      }).catch((error: unknown) => {
-        this.serverFailed(`${action.method} ${url.href} → ${error instanceof Error ? error.name : 'no response'}`);
-        throw error;
-      });
+      let response: Response;
+      // A 429 waits for its turn one time. A second 429 is "try later", not evidence (T7).
+      for (let attempt = 1; ; attempt++) {
+        await this.api.pacer.acquire();
+        sent = { method: action.method, url, headers: action.headers ?? {}, body: action.body, at: Date.now() };
+        response = await fetch(url, {
+          method: action.method,
+          headers,
+          body: action.body,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(this.api.timeoutMs),
+        }).catch((error: unknown) => {
+          this.serverFailed(`${action.method} ${url.href} → ${error instanceof Error ? error.name : 'no response'}`);
+          throw error;
+        });
+        const pace = this.api.pacer.onResponse(response.status, response.headers.get('retry-after'));
+        if (!pace) break;
+        await response.body?.cancel();
+        if (pace === 'rate-limited' || attempt === 2) {
+          this.raw = undefined;
+          this.exchange = undefined;
+          return { ok: false, retryable: true, error: 'rate-limited' };
+        }
+      }
       if (response.status >= 500) this.serverFailed(`${action.method} ${url.href} → ${response.status}`);
       const received = await read(response);
       const all: Record<string, string> = {};
@@ -188,6 +218,7 @@ export class ApiDriver implements Driver {
         body: redact(answer.text),
         bytes: answer.bytes,
         ...(answer.tooLarge ? { tooLarge: true as const } : {}),
+        ...(answer.stream ? { stream: true as const } : {}),
       },
     };
   }
@@ -237,8 +268,15 @@ export class ApiDriver implements Driver {
   async close(): Promise<void> {}
 }
 
-/** Reads the body up to 1 MiB. A larger body is kept as its size only, never cut silently. */
+/**
+ * Reads the body up to 1 MiB. A larger body is kept as its size only, never
+ * cut silently. An event stream can run forever, so it stops after its headers.
+ */
 async function read(response: Response): Promise<Received> {
+  if (/^text\/event-stream\b/i.test(response.headers.get('content-type') ?? '')) {
+    await response.body?.cancel();
+    return { status: response.status, headers: response.headers, text: '', bytes: 0, tooLarge: false, stream: true };
+  }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;

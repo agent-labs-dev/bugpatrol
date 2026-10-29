@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
+import { type Contract, requestPolicy } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
 import { ApiDriver } from './api.js';
+import { Pacer } from './api-pacer.js';
 import { CliDriver } from './cli.js';
 import { CuaDriver } from './cua/driver.js';
 import { ElectronDriver } from './electron.js';
@@ -11,13 +13,15 @@ import { WebDriver } from './web.js';
 /**
  * Pick the transport configured for the app while resolving captured
  * endpoints. `source` is the checkout of the build under test, where a CLI
- * app runs its commands; it defaults to `app.source`.
+ * app runs its commands; it defaults to `app.source`. An api app needs the
+ * `contract` that `startApp` loaded, for its request policy.
  */
 export function createDriver(
   config: BugpatrolConfig,
   vars: (value: string) => string,
   redact: (value: string) => string = (value) => value,
   source: string = resolve(config.app.source),
+  contract?: Contract,
 ): Driver {
   const { platform, connect } = config.app;
   if (platform === 'cli') return new CliDriver({ cwd: source, timeoutMs: connect.cli.timeoutMs, redact });
@@ -37,10 +41,13 @@ export function createDriver(
   if (platform === 'api') {
     const url = connect.url ?? config.run?.url;
     if (!url) throw new ConfigError('API driver requires app.connect.url');
+    if (!contract) throw new ConfigError('API driver requires the contract of the app');
+    const origin = vars(url);
     return new ApiDriver({
-      url: vars(url),
+      url: origin,
       headers: Object.fromEntries(Object.entries(connect.headers).map(([name, value]) => [name, vars(value)])),
-      methods: connect.methods,
+      policy: requestPolicy(contract, { ...connect, url: origin }),
+      pacer: new Pacer({ perMinute: connect.perMinute }),
       timeoutMs: connect.timeoutMs,
       redact,
     });

@@ -14,10 +14,25 @@ app:
     url: http://127.0.0.1:8000
     headers:
       Authorization: 'Bearer ${SESSION_TOKEN}'
-    # Read-only by default. Enable writes only against disposable data.
-    methods: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]
+    spec: /openapi.json
+    # Writes go out only to a loopback url, or when the data may be lost.
+    disposable: false
+    # Endpoints Bugpatrol never requests: globs on the spec's path templates.
+    deny: ['/admin/**', 'POST /billing/**']
+    perMinute: 60
     timeoutMs: 30000
 ```
+
+Every request passes one request policy. A loopback url (`127.0.0.0/8`,
+`[::1]`, `localhost`) or `disposable: true` allows writes; any other target is
+read-only. `methods` narrows the allowed methods further. An endpoint in
+`deny`, or marked `x-bugpatrol-skip` in the spec, is never requested. A URL
+that matches no endpoint of the spec can only read. `bugpatrol endpoints`
+shows each endpoint as `allowed`, `read-only`, or `denied: <reason>`.
+
+Requests go out at most `perMinute` per minute. A 429 waits for its
+`Retry-After` and tries one more time; it is never reported as a bug. An
+event stream is cut after its headers.
 
 Use the usual setup captures to provision a session. `request` accepts a method,
 relative URL, optional headers, and a string body (use `Content-Type` for JSON).

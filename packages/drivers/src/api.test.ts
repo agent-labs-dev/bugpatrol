@@ -3,14 +3,23 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type FixtureApi, startFixtureApi } from '@bugpatrol/api-fixture';
-import { formatHttpExchange, type HttpExchange } from '@bugpatrol/core';
+import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
+import { buildContract, type Contract, loadSpec, requestPolicy } from '@bugpatrol/contract';
+import { formatHttpExchange, type HttpExchange, type HttpMethod } from '@bugpatrol/core';
 import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiDriver } from './api.js';
+import { Pacer } from './api-pacer.js';
 import { readCast } from './cast.js';
 
 const ALLOWED = ['content-type', 'location', 'retry-after', 'allow', 'www-authenticate', 'x-request-id'];
+
+/** The fixture contract, with its login: the spec leaves it out, and a URL outside the contract can only read. */
+async function fixtureContract(): Promise<Contract> {
+  const doc = await loadSpec({ file: fixtureSpecPath });
+  doc.paths['/auth/login'] = { post: { operationId: 'login', responses: {} } };
+  return buildContract(doc, {});
+}
 
 describe('API driver against the fixture API', () => {
   let fixture: FixtureApi;
@@ -19,7 +28,25 @@ describe('API driver against the fixture API', () => {
   let elsewhereOrigin: string;
   let leaks = 0;
   let driver: ApiDriver;
+  let contract: Contract;
   const redact = (text: string) => text.replaceAll('fixture-token-a', '{{TOKEN}}');
+  const apiDriver = (
+    url: string,
+    options: { methods?: HttpMethod[]; deny?: string[]; pacer?: Pacer; headers?: Record<string, string> } = {},
+  ) =>
+    new ApiDriver({
+      url,
+      headers: options.headers ?? {},
+      policy: requestPolicy(contract, {
+        url,
+        methods: options.methods ?? ['GET'],
+        deny: options.deny ?? [],
+        disposable: false,
+      }),
+      pacer: options.pacer ?? new Pacer({ perMinute: 60_000 }),
+      timeoutMs: 1000,
+      redact,
+    });
   const exchange = async (): Promise<HttpExchange | undefined> => {
     const { capture } = await driver.observe();
     if (capture.kind !== 'http') throw new Error('The api driver observed an image');
@@ -42,10 +69,12 @@ describe('API driver against the fixture API', () => {
     const address = elsewhere.address();
     if (!address || typeof address === 'string') throw new Error('No port');
     elsewhereOrigin = `http://127.0.0.1:${address.port}`;
+    contract = await fixtureContract();
     driver = new ApiDriver({
       url: fixture.url,
       headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
-      methods: ['GET', 'POST'],
+      policy: requestPolicy(contract, { url: fixture.url, methods: ['GET', 'POST'], deny: [], disposable: false }),
+      pacer: new Pacer({ perMinute: 60_000 }),
       timeoutMs: 300,
       redact,
     });
@@ -112,19 +141,88 @@ describe('API driver against the fixture API', () => {
     expect(Object.keys(headers).every((name) => ALLOWED.includes(name))).toBe(true);
     expect(headers).not.toHaveProperty('date');
     expect(headers).not.toHaveProperty('content-length');
+  });
 
+  it('429 waits Retry-After and is not evidence', async () => {
     const limited = await startFixtureApi({ perSecond: 1 });
-    const paced = new ApiDriver({ url: limited.url, headers: {}, methods: ['GET'], timeoutMs: 1000, redact });
+    const blocked = await startFixtureApi({ perSecond: 0 });
     try {
-      await paced.act({ kind: 'request', method: 'GET', url: '/health' });
-      await paced.act({ kind: 'request', method: 'GET', url: '/health' });
+      const paced = apiDriver(limited.url);
+      expect((await paced.act({ kind: 'request', method: 'GET', url: '/health' })).ok).toBe(true);
+      const started = Date.now();
+      // The fixture answers 429 with Retry-After: 1, and the one more try comes after that second.
+      expect(await paced.act({ kind: 'request', method: 'GET', url: '/health' })).toMatchObject({ ok: true });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+      expect(limited.hits()).toHaveLength(3);
       const { capture } = await paced.observe();
-      expect(capture.kind === 'http' && capture.exchange?.response).toMatchObject({
-        status: 429,
-        headers: { 'retry-after': '1', 'content-type': 'application/json' },
+      expect(capture.kind === 'http' && capture.exchange?.response?.status).toBe(200);
+
+      const always = apiDriver(blocked.url);
+      expect(await always.act({ kind: 'request', method: 'GET', url: '/health' })).toEqual({
+        ok: false,
+        retryable: true,
+        error: 'rate-limited',
       });
+      expect(blocked.hits()).toHaveLength(2);
+      const after = await always.observe();
+      expect(after.capture).toEqual({ kind: 'http' });
+      expect(after.networkErrors).toEqual([]);
+      expect(always.lastRaw()).toBeUndefined();
     } finally {
       await limited.close();
+      await blocked.close();
+    }
+  });
+
+  it('never hits /admin/wipe', async () => {
+    const guarded = apiDriver(fixture.url, { methods: ['GET', 'POST'], deny: ['/admin/**'] });
+    for (const url of ['/admin/wipe', '/admin%2Fwipe', '/admin/./wipe', '/items/../admin/wipe'])
+      for (const method of ['GET', 'POST'] as const) {
+        const result = await guarded.act({ kind: 'request', method, url });
+        expect(result.ok).toBe(false);
+      }
+    expect(fixture.hits().filter((hit) => hit.path.startsWith('/admin'))).toEqual([]);
+  });
+
+  it('event-stream is cut and recorded', async () => {
+    const started = Date.now();
+    expect((await driver.act({ kind: 'request', method: 'GET', url: '/events' })).ok).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1000);
+    const evidence = (await exchange())!;
+    expect(evidence.response).toMatchObject({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: '',
+      bytes: 0,
+      stream: true,
+    });
+    expect(formatHttpExchange(evidence)).toContain('[stream cut after 0 bytes]');
+  });
+
+  it('pacer spaces requests at 60 per minute', async () => {
+    const realTimeout = globalThis.setTimeout;
+    /** Real time for the loopback requests; the pacer waits on the fake clock. */
+    const io = () => new Promise((resolve) => realTimeout(resolve, 100));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const paced = apiDriver(fixture.url, { pacer: new Pacer() });
+      const health = () => fixture.hits().filter((hit) => hit.path === '/health').length;
+      const before = health();
+      const requests = Promise.all([1, 2, 3].map(() => paced.act({ kind: 'request', method: 'GET', url: '/health' })));
+      await io();
+      expect(health() - before).toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      await io();
+      expect(health() - before).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await io();
+      expect(health() - before).toBe(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      await io();
+      expect(health() - before).toBe(3);
+      expect((await requests).every((result) => result.ok)).toBe(true);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -199,7 +297,7 @@ describe('API driver against the fixture API', () => {
     expect(
       (await driver.act({ kind: 'request', method: 'GET', url: fixture.url.replace('http://', 'http://user:pw@') })).ok,
     ).toBe(false);
-    const redirected = new ApiDriver({ url: elsewhereOrigin, headers: {}, methods: ['GET'], timeoutMs: 1000, redact });
+    const redirected = apiDriver(elsewhereOrigin);
     const health = () => fixture.hits().filter((hit) => hit.path === '/health').length;
     const before = health();
     expect((await redirected.act({ kind: 'request', method: 'GET', url: '/redirect' })).ok).toBe(true);

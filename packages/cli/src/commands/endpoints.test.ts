@@ -39,7 +39,7 @@ describe('bugpatrol endpoints', () => {
     await runEndpointsCommand([], root, log, config);
 
     expect(lines).toEqual([
-      'GET /items/{id}  getItem',
+      'GET /items/{id}  getItem  allowed',
       'POST /notify  skipped: x-bugpatrol-skip',
       '\n1 endpoint(s), 1 skipped.',
     ]);
@@ -74,6 +74,22 @@ describe('bugpatrol endpoints', () => {
     await mkdir(join(root, '.bugpatrol'), { recursive: true });
     await writeFile(paths.endpointInventory(root), 'endpoints:\n  - {method: GET, path: /items}\n');
     await runEndpointsCommand([], root, log, config);
-    expect(lines).toEqual(['GET /items', '\n1 endpoint(s), 0 skipped.']);
+    expect(lines).toEqual(['GET /items  allowed', '\n1 endpoint(s), 0 skipped.']);
+  });
+
+  it('marks each endpoint allowed, read-only, or denied', async () => {
+    await mkdir(join(root, '.bugpatrol'), { recursive: true });
+    await writeFile(
+      paths.endpointInventory(root),
+      'endpoints:\n  - {method: GET, path: /items}\n  - {method: POST, path: /items}\n  - {method: POST, path: /admin/wipe}\n',
+    );
+    const connect = { url: 'https://api.example.com', deny: ['/admin/**'] };
+    const shared = parseConfig({ version: 1, app: { platform: 'api', connect } });
+    await runEndpointsCommand([], root, log, shared);
+    expect(lines.slice(0, 3)).toEqual([
+      'GET /items  allowed',
+      'POST /items  read-only',
+      'POST /admin/wipe  denied: app.connect.deny has /admin/**',
+    ]);
   });
 });

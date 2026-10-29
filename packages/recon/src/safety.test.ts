@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAction, looksLikeProduction } from './safety.js';
+import { classifyAction } from './safety.js';
 
 describe('classifyAction', () => {
   it('treats destructive copy as destructive', async () => {
@@ -40,19 +40,5 @@ describe('classifyAction', () => {
       { origin: 'http://localhost:3000' },
     );
     expect([safe.class, destructive.class]).toEqual(['safe-action', 'destructive']);
-  });
-});
-
-describe('looksLikeProduction', () => {
-  it('does not flag localhost', () => {
-    expect(looksLikeProduction('http://localhost:3000', {})).toBe(false);
-  });
-
-  it('flags a bare public hostname', () => {
-    expect(looksLikeProduction('https://app.example.com', {})).toBe(true);
-  });
-
-  it('respects NODE_ENV even on localhost', () => {
-    expect(looksLikeProduction('http://localhost:3000', { NODE_ENV: 'production' })).toBe(true);
   });
 });

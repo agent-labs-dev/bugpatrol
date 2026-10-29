@@ -167,8 +167,24 @@ export const appSchema = z
         url: z.string().optional(),
         /** API: default request headers; credentials should be placeholders. */
         headers: z.record(z.string()).default({}),
-        /** API: writes require explicit opt-in in repository configuration. */
-        methods: z.array(z.enum(HTTP_METHODS)).default(['GET', 'HEAD', 'OPTIONS']),
+        /**
+         * API: the methods Bugpatrol may send. The request policy narrows them
+         * further: a target that is not loopback or `disposable` gets no writes.
+         */
+        methods: z.array(z.enum(HTTP_METHODS)).default([...HTTP_METHODS]),
+        /**
+         * API: the target holds data that may be lost, so writes are on also
+         * when it is not loopback.
+         */
+        disposable: z.boolean().default(false),
+        /**
+         * API: endpoints Bugpatrol never requests. Each glob matches a path
+         * template of the spec, with an optional leading method: `*` is one
+         * segment, `**` is any number of segments. Example: `POST /admin/**`.
+         */
+        deny: z.array(z.string().min(1)).default([]),
+        /** API: the most requests in one minute. A 429 or a Retry-After also slows them. */
+        perMinute: z.number().int().positive().default(60),
         timeoutMs: z.number().int().positive().max(120000).default(30000),
         /**
          * API: the OpenAPI spec. An http(s) URL, a path on connect.url such as

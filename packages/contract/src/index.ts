@@ -5,6 +5,8 @@ export {
   loadSpec,
   type OpenApiDoc,
   type OpenApiOperation,
+  projectDoc,
   type SpecSource,
   specSource,
 } from './load.js';
+export { type PolicyVerdict, type RequestPolicy, requestPolicy } from './policy.js';

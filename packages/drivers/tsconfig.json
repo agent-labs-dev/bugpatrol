@@ -2,5 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }, { "path": "../invariants" }, { "path": "../../examples/api-fixture" }]
+  "references": [
+    { "path": "../contract" },
+    { "path": "../core" },
+    { "path": "../invariants" },
+    { "path": "../../examples/api-fixture" }
+  ]
 }

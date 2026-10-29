@@ -1,12 +1,25 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { buildContract, type Contract, projectDoc } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
 import type { Vars } from './vars.js';
 
 type Options = { root: string; vars: Vars; emit?: (summary: string) => void; source?: string };
 
+type RunningApp = {
+  vars: Vars;
+  /**
+   * An api app: its contract, loaded one time when setup is done, because
+   * the spec can come from the running app. The driver, the sweep, and the
+   * explorer of this run all use this one object. Without a spec or an
+   * endpoint inventory it has no endpoints, so only reads can go out.
+   */
+  contract?: Contract;
+  stop(): Promise<void>;
+};
+
 /** Shell commands belong to the app configuration. A source override swaps commands rooted at app.source into the worktree; every command receives BUGPATROL_SOURCE (and BUGHUNTERS_SOURCE, its name before the rename). Output is redacted. */
-export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: Vars; stop(): Promise<void> }> {
+export async function startApp(app: AppConfig, opts: Options): Promise<RunningApp> {
   const children: ChildProcess[] = [];
   const report = (message: string) => opts.emit?.(opts.vars.redact(message) as string);
   const configuredSource = resolve(opts.root, app.source);
@@ -103,9 +116,18 @@ export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: V
     }
   }
 
+  let contract: Contract | undefined;
   try {
     for (const command of app.setup) {
       await run(command, 'Setup');
+    }
+    if (app.platform === 'api') {
+      const { spec, url } = app.connect;
+      const doc = await projectDoc(opts.root, {
+        spec: spec && opts.vars.resolve(spec),
+        url: url && opts.vars.resolve(url),
+      });
+      contract = buildContract(doc ?? { openapi: '3.1.0', paths: {} }, app.connect);
     }
   } catch (error) {
     // A setup that fails halfway may already hold resources (a test run, an
@@ -124,6 +146,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: V
   }
   return {
     vars: opts.vars,
+    ...(contract ? { contract } : {}),
     async stop() {
       for (const command of app.teardown) {
         try {

@@ -353,6 +353,7 @@ async function withBuild<T>(
           vars.resolve.bind(vars),
           (value) => vars.redact(value) as string,
           worktree,
+          app?.contract,
         );
         driver = next;
         await next.connect();

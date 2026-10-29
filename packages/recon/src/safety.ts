@@ -62,21 +62,3 @@ export async function classifyAction(
   }
   return { class: 'destructive', reason: `Not confidently safe (p=${answer.value.toFixed(2)}).` };
 }
-
-const PRODUCTION_HOSTNAME = /^(?!localhost|127\.|0\.0\.0\.0|.*\.local$|.*\.test$|dev\.|staging\.|preview\.)/;
-
-/**
- * Production detection, run before any write action (spec 1.2). If it looks
- * like production, mutations are disabled and the run continues read-only.
- * There is no flag that silently overrides this.
- */
-export function looksLikeProduction(url: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.NODE_ENV === 'production') return true;
-  try {
-    const { hostname } = new URL(url);
-    if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.endsWith('.local')) return false;
-    return PRODUCTION_HOSTNAME.test(hostname);
-  } catch {
-    return false;
-  }
-}

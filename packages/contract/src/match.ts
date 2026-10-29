@@ -8,7 +8,9 @@ type Segment = { rank: 2; literal: string } | { rank: 1; pattern: RegExp } | { r
  * decoded one time, so `%2F` stays inside its segment. Literals compare
  * case-sensitively.
  */
-export function matcher(endpoints: Endpoint[]): (method: string, url: string) => Endpoint | undefined {
+export function matcher<T extends Pick<Endpoint, 'method' | 'template'>>(
+  endpoints: T[],
+): (method: string, url: string) => T | undefined {
   const compiled = endpoints.map((endpoint) => ({ endpoint, segments: split(endpoint.template).map(compile) }));
   return (method, url) => {
     const wanted = method.toUpperCase();

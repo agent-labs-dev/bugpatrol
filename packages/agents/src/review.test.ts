@@ -2331,7 +2331,7 @@ describe('API claim', { timeout: 60_000 }, () => {
         gh: github.gh,
         createRuntime: () => runtime,
         // Tells the API which build sends the request. Headers stay out of the recording.
-        createDriver: (config, vars, redact, source) =>
+        createDriver: (config, vars, redact, source, contract) =>
           createDriver(
             {
               ...config,
@@ -2343,6 +2343,7 @@ describe('API claim', { timeout: 60_000 }, () => {
             vars,
             redact,
             source,
+            contract,
           ),
       });
       expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
@@ -2433,7 +2434,7 @@ describe('API same-behavior claim', { timeout: 60_000 }, () => {
       const review = await reviewPullRequest(f.root, config, 7, {
         gh: github.gh,
         createRuntime: () => runtime,
-        createDriver: (config, vars, redact, source) =>
+        createDriver: (config, vars, redact, source, contract) =>
           createDriver(
             {
               ...config,
@@ -2442,6 +2443,7 @@ describe('API same-behavior claim', { timeout: 60_000 }, () => {
             vars,
             redact,
             source,
+            contract,
           ),
       });
       expect(review.claims![0]).toMatchObject({

@@ -18,7 +18,7 @@ export type HttpExchange = {
     bytes: number;
     /** The body was over the read limit, so Bugpatrol kept none of it. */
     tooLarge?: true;
-    /** The server streamed the body, and Bugpatrol cut it at the read limit. */
+    /** An event stream: Bugpatrol cut it after the headers, so `body` is empty. */
     stream?: true;
   };
   /** Why no response came: a timeout, a refused connection, a rejected request. */

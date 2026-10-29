@@ -1,9 +1,10 @@
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type FixtureApi, startFixtureApi } from '@bugpatrol/api-fixture';
+import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
+import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
 import { parseConfig, paths } from '@bugpatrol/core';
-import { ApiDriver } from '@bugpatrol/drivers';
+import { ApiDriver, Pacer } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentSession } from './session.js';
 import { explorerTools } from './tools/explorer.js';
@@ -30,10 +31,19 @@ async function explorer() {
   const workspace = new Workspace(root);
   const record = await workspace.startSession('explorer');
   const vars = new Vars();
+  // The spec leaves out the login, and a URL outside the contract can only read.
+  const doc = await loadSpec({ file: fixtureSpecPath });
+  doc.paths['/auth/login'] = { post: { responses: {} } };
   const driver = new ApiDriver({
     url: fixture.url,
     headers: {},
-    methods: ['GET', 'POST'],
+    policy: requestPolicy(buildContract(doc, {}), {
+      url: fixture.url,
+      methods: ['GET', 'POST'],
+      deny: [],
+      disposable: false,
+    }),
+    pacer: new Pacer({ perMinute: 60_000 }),
     timeoutMs: 2000,
     redact: (value) => vars.redact(value) as string,
   });
@@ -63,6 +73,12 @@ async function explorer() {
 }
 
 describe('api evidence', () => {
+  it('the enum has only the allowed methods', async () => {
+    const { session } = await explorer();
+    const request = explorerTools(session).find((tool) => tool.name === 'request')!;
+    expect(request.inputSchema).toMatchObject({ properties: { method: { enum: ['GET', 'POST'] } } });
+  });
+
   it('keeps a planted secret out of tool results, the session log, and exchange.json', async () => {
     const { session, call } = await explorer();
     const look = await call('look', {});

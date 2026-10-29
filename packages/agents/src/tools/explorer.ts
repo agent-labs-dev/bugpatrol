@@ -23,7 +23,7 @@ import {
   type ScreenTransition,
   shortHash,
 } from '@bugpatrol/core';
-import type { DriverAction, Observation, UiElement } from '@bugpatrol/drivers';
+import { ApiDriver, type DriverAction, type Observation, type UiElement } from '@bugpatrol/drivers';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
 import { bugMisses, replayRoutine } from '../replay.js';
 import type { AgentSession } from '../session.js';
@@ -426,6 +426,7 @@ export function explorerTools(
   session: AgentSession,
   opts: { replay?: Parameters<typeof replayRoutine>[2] } = {},
 ): Tool[] {
+  const api = session.driver instanceof ApiDriver ? session.driver : undefined;
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -443,15 +444,15 @@ export function explorerTools(
           },
         ]
       : []),
-    ...(session.driver?.platform === 'api'
+    ...(api
       ? [
           {
             name: 'request',
             description:
-              'Send an HTTP request to the configured API origin. Use {{NAME}} placeholders for credentials. Only repository-allowed methods can run; redirects are not followed. Returns status and response evidence, not an application screenshot.',
+              'Send an HTTP request to the configured API origin. Use {{NAME}} placeholders for credentials. Only the listed methods can run, and denied endpoints are refused; redirects are not followed. Returns status and response evidence, not an application screenshot.',
             inputSchema: schema(
               {
-                method: { type: 'string', enum: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+                method: { type: 'string', enum: api.policy.allowedMethods },
                 url: string,
                 headers: { type: 'object', additionalProperties: string },
                 body: string,

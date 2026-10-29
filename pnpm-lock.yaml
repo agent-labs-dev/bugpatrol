@@ -36,6 +36,9 @@ importers:
 
   packages/agents:
     dependencies:
+      '@bugpatrol/contract':
+        specifier: workspace:*
+        version: link:../contract
       '@bugpatrol/core':
         specifier: workspace:*
         version: link:../core
@@ -224,6 +227,9 @@ importers:
 
   packages/drivers:
     dependencies:
+      '@bugpatrol/contract':
+        specifier: workspace:*
+        version: link:../contract
       '@bugpatrol/core':
         specifier: workspace:*
         version: link:../core

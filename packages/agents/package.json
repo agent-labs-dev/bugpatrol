@@ -19,6 +19,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@bugpatrol/contract": "workspace:*",
     "@bugpatrol/core": "workspace:*",
     "@bugpatrol/decide": "workspace:*",
     "@bugpatrol/diff": "workspace:*",

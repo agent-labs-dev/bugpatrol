@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startFixtureApi } from '@bugpatrol/api-fixture';
+import { fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
+import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
 import { parseConfig, type RoutineStep } from '@bugpatrol/core';
-import { ApiDriver } from '@bugpatrol/drivers';
+import { ApiDriver, Pacer } from '@bugpatrol/drivers';
 import { expect, it } from 'vitest';
 import { replaySteps } from './replay.js';
 import { AgentSession } from './session.js';
@@ -17,7 +18,13 @@ it('replays fresh string and numeric ids without rewriting literal request data'
   const driver = new ApiDriver({
     url: fixture.url,
     headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
-    methods: ['GET', 'POST'],
+    policy: requestPolicy(buildContract(await loadSpec({ file: fixtureSpecPath }), {}), {
+      url: fixture.url,
+      methods: ['GET', 'POST'],
+      deny: [],
+      disposable: false,
+    }),
+    pacer: new Pacer({ perMinute: 60_000 }),
     timeoutMs: 1000,
     redact: (value) => vars.redact(value) as string,
   });

@@ -1,4 +1,5 @@
 export * from './api.js';
+export * from './api-pacer.js';
 export * from './cast.js';
 export * from './cli.js';
 export * from './cua/driver.js';
