@@ -136,7 +136,11 @@ export function writeAgentFixture(root: string): void {
       screenId: number ? 'settings' : 'billing',
       source: 'explorer',
       fingerprint: `fingerprint-${id}-${number}`,
-      summary: number ? 'Settings value is clipped.' : 'Billing total differs from invoice.',
+      summary: number
+        ? 'Settings value is clipped.'
+        : live
+          ? 'Billing total differs from invoice.'
+          : 'Billing tax rounds down.',
       severity: number ? 'minor' : 'critical',
       evidence: { capture: { kind: 'image', screenshot: screens[number ? 1 : 2]!.lastCapture! } },
       route: { to: number ? 'ignore' : 'judge', reason: number ? 'Expected responsive layout.' : 'Incorrect total.' },

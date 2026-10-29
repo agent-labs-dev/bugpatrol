@@ -1,17 +1,24 @@
-// Run: pnpm build && node packages/dashboard/scripts/fixture.mjs /tmp/bugpatrol-fixture
+// Run: pnpm build && node packages/dashboard/scripts/fixture.mjs /tmp/bugpatrol-fixture [client|api|monorepo]
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { writeAgentFixture } from '../dist/fixtures/agent-workspace.js';
-import { writeCoverageFixture } from '../dist/fixtures/coverage.js';
+import { writeProjectFixture } from '../dist/fixtures/project.js';
 
 const root = resolve(process.argv[2] || '/tmp/bugpatrol-fixture');
+const shape = process.argv[3] || 'monorepo';
+if (!['client', 'api', 'monorepo'].includes(shape)) {
+  console.error('The shape is client, api, or monorepo.');
+  process.exit(2);
+}
 mkdirSync(root, { recursive: true });
-writeAgentFixture(root);
-writeCoverageFixture(root);
+writeProjectFixture(root, shape);
 
 // The fixture's recordings are stand-in bytes. With ffmpeg, make them real so they play.
 const claim = join(root, '.bugpatrol/runs/reviews/pr-42/claim-1');
+if (!existsSync(claim)) {
+  console.log(`Fixture written to ${root}. Run bugpatrol dashboard there.`);
+  process.exit(0);
+}
 const clip = (source, file) => {
   // Browsers play H.264 only in 4:2:0.
   const pixels = file.endsWith('.mp4') ? ['-pix_fmt', 'yuv420p'] : [];
