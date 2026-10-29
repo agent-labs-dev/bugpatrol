@@ -13,6 +13,7 @@ import {
   detectProviders,
   type InitAnswers,
   interview,
+  PLATFORMS,
   parseInitFlags,
   providerOptions,
   renderConfig,
@@ -364,6 +365,54 @@ describe('interview', () => {
     });
     expect(replies).toEqual([]);
     expect((await play([enter, () => ''])).result.start).toBeUndefined();
+  });
+});
+
+describe('api init', () => {
+  it('api init asks for url and spec and detects no start command', async () => {
+    const guess = { platform: 'web' as const, start: 'npm run dev', url: 'http://localhost:5173', notes: [] };
+    const detected: Detected = { ...none, clis: ['claude'] };
+    const prompts: string[] = [];
+    const replies = [() => String(PLATFORMS.indexOf('api') + 1), () => 'http://127.0.0.1:8000', () => '/openapi.json'];
+    const write = process.stdout.write;
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    let result: InitAnswers;
+    try {
+      result = await interview(
+        async (question, prefill) => {
+          prompts.push(question);
+          return (replies.shift() ?? ((p: string) => p))(prefill ?? '');
+        },
+        fixtureRepo(),
+        guess,
+        detected,
+        defaultAnswers(guess, detected, parseInitFlags([])),
+      );
+    } finally {
+      process.stdout.write = write;
+    }
+    expect(prompts.some((question) => /start command/i.test(question))).toBe(false);
+    expect(result).toMatchObject({
+      platform: 'api',
+      start: undefined,
+      url: 'http://127.0.0.1:8000',
+      spec: '/openapi.json',
+    });
+
+    const yaml = renderConfig(result);
+    const { app } = parseConfig(parse(yaml));
+    expect(app.setup).toEqual([]);
+    expect(app.connect).toMatchObject({ url: 'http://127.0.0.1:8000', spec: '/openapi.json', deny: [] });
+    for (const key of ['errors', 'version', 'credentials', 'disposable']) expect(yaml).toMatch(new RegExp(`# ${key}:`));
+
+    // --yes: the flags give the same config, and the detected web start command stays out.
+    const flagged = defaultAnswers(
+      guess,
+      detected,
+      parseInitFlags(['--platform', 'api', '--url', 'http://127.0.0.1:8000']),
+    );
+    expect(flagged).toMatchObject({ platform: 'api', start: undefined, url: 'http://127.0.0.1:8000', spec: undefined });
+    expect(parseConfig(parse(renderConfig(flagged))).app.connect.spec).toBeUndefined();
   });
 });
 

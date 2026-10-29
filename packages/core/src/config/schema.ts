@@ -163,10 +163,15 @@ export const appSchema = z
     teardown: z.array(appCommandSchema).default([]),
     connect: z
       .object({
-        /** Web: defaults to run.url. May use ${NAME} from env or captures. */
+        /**
+         * Web, API: defaults to run.url. `${NAME}` or `{{NAME}}` takes a setup
+         * capture or a name in `secrets` (read from the environment). Any
+         * other name is an error.
+         */
         url: z.string().optional(),
         /**
-         * API: default request headers; credentials should be placeholders.
+         * API: default request headers; credentials should be placeholders,
+         * with the same names as `url`.
          * They go into each credential set. Without `credentials`, they are
          * the only set.
          */

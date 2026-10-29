@@ -75,7 +75,8 @@ export const COMMAND_HELP: Record<string, string> = {
   --yes, -y              use the detected values, with no questions
   --platform <p>         web | electron | ios | android | api | desktop | cli
   --start "<command>"    the command that starts the app
-  --url <url>            web: the app URL
+  --url <url>            web, api: the app URL
+  --spec <spec>          api: the OpenAPI spec, a URL, a path on the app URL, or a file
   --app-id <id>          ios, android: the bundle ID or the package name
   --agent <a>            the LLM for all agents: claude | codex | kimi | opencode | pi | openrouter | vercel | openai | anthropic
   --explorer, --judge, --fixer <a>   the LLM for one agent
