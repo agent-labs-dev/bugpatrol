@@ -18,6 +18,7 @@ import { createRuntime } from './runtime/index.js';
 import { AgentSession } from './session.js';
 import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
 import { runSweep } from './sweep.js';
+import { pendingCandidates } from './tools/judge.js';
 import type { RoleOutcome } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -285,9 +286,14 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             const record = await workspace.startSession('judge');
             const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, options.onLog);
             activeSession = session;
+            // The judge reads every finding that waits, also from an earlier
+            // session (a sweep alone, a cycle that stopped), not only this one.
+            const earlier: string[] = [];
+            for (const { id } of await workspace.listSessions(Infinity))
+              if (id !== explorerId && (await pendingCandidates(session, [id])).length) earlier.push(id);
             unfinished(
               'Judge',
-              await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId] }),
+              await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId, ...earlier] }),
             );
           }
           if (timedOut) unfinished('Explorer', timedOut);

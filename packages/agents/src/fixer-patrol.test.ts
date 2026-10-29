@@ -1005,6 +1005,43 @@ describe('patrol', () => {
     },
   );
 
+  it('the judge also reads a finding that waits from an earlier session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
+    try {
+      const workspace = new Workspace(root);
+      const earlier = await workspace.startSession('explorer');
+      await workspace.appendCandidate(earlier.id, {
+        id: 'can_earlier',
+        sessionId: earlier.id,
+        source: 'sweep',
+        fingerprint: 'fp-earlier',
+        summary: 'Earlier sweep failure',
+        severity: 'minor',
+        evidence: { capture: { kind: 'image', screenshot: 'earlier.png' }, steps: [] },
+        route: { to: 'judge', reason: 'failed two times' },
+        createdAt: new Date().toISOString(),
+      });
+      await workspace.endSession(earlier.id, { summary: 'Sweep' });
+      const prompts: string[] = [];
+      await runPatrol({
+        root,
+        config,
+        once: true,
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'judge') prompts.push(task.prompt);
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      expect(prompts).toEqual([expect.stringContaining('Earlier sweep failure')]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('tears down when explorer throws, and reports the problem without a crash', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
     const driver = new FakeDriver({ home: { elements: [] } });
