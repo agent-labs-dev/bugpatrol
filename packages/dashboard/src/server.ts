@@ -6,6 +6,7 @@ import { formatHttpExchange, type HttpExchange, loadConfig, paths } from '@bugpa
 import { AgentReader } from './agents.js';
 import { buildGraph } from './graph.js';
 import { ProjectReader } from './project.js';
+import { projectSummary } from './summary.js';
 
 export type DashboardOptions = {
   root: string;
@@ -53,7 +54,7 @@ export async function startDashboard(options: DashboardOptions): Promise<Dashboa
   const clients = new Set<ServerResponse>();
 
   const server = createServer((req, res) => {
-    handle(req, res, { root, reader, agents, clients }).catch((error) => {
+    handle(req, res, { root, configFile: options.configFile, reader, agents, clients }).catch((error) => {
       send(res, 500, { 'content-type': 'application/json' }, JSON.stringify({ error: String(error) }));
     });
   });
@@ -76,13 +77,20 @@ export async function startDashboard(options: DashboardOptions): Promise<Dashboa
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  ctx: { root: string; reader: ProjectReader; agents: AgentReader; clients: Set<ServerResponse> },
+  ctx: {
+    root: string;
+    configFile?: string;
+    reader: ProjectReader;
+    agents: AgentReader;
+    clients: Set<ServerResponse>;
+  },
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
 
   if (path === '/api/events') return streamEvents(res, ctx.clients);
 
+  if (path === '/api/summary') return json(res, projectSummary(ctx.agents, ctx.root, ctx.configFile));
   if (path === '/api/overview') return json(res, ctx.agents.overview());
   if (path === '/api/memory') return json(res, ctx.agents.memory());
   if (path === '/api/issues') return json(res, ctx.agents.issues());
@@ -132,7 +140,6 @@ async function handle(
       hasProject: ctx.reader.hasProject(),
       hasConfig: ctx.reader.readConfigRaw() !== undefined,
       hasAppModel: ctx.reader.readAppModel() !== undefined,
-      hasCoverage: existsSync(paths.coverage(ctx.root)),
       runs,
       live: ctx.reader.readLive() ?? null,
       intents: ctx.reader.readIntents().length,

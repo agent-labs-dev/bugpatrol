@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, sep } from 'node:path';
+import { dirname, extname, join, relative, sep } from 'node:path';
 import {
   type AgentEvent,
   type AgentRole,
@@ -7,6 +7,7 @@ import {
   type AgentsFile,
   type AppMap,
   addUsage,
+  awaitsJudge,
   type BugpatrolConfig,
   type Candidate,
   type ClaimVerdict,
@@ -26,6 +27,7 @@ import {
   usageOf,
 } from '@bugpatrol/core';
 import { type CoverageMatrix, coverageMatrix } from './coverage.js';
+import { type SessionReport, sessionReport } from './summary.js';
 
 const roles: AgentRole[] = ['explorer', 'judge', 'fixer'];
 const severity = { critical: 0, major: 1, minor: 2, cosmetic: 3 };
@@ -125,6 +127,17 @@ const recordingKinds: Record<string, Recording['kind']> = {
 
 /** The dashboard shows a whole body: the driver already cut it at 1 MiB. */
 const ALL = { maxBodyChars: Number.POSITIVE_INFINITY };
+
+/**
+ * A candidate and what became of it. `waiting`: the judge must still decide
+ * it. `ignored`: the decider did not send it to the judge.
+ */
+export type SessionCandidate = Candidate & {
+  state: 'waiting' | 'filed' | 'dismissed' | 'ignored';
+  issueId?: string;
+  /** The exchange of an API capture, as the server formats it. */
+  text?: string;
+};
 
 export class AgentReader {
   constructor(
@@ -241,17 +254,66 @@ export class AgentReader {
       .slice(0, limit);
   }
 
-  session(id: string): { session: SessionSummary; events: AgentEvent[]; candidates: Candidate[] } | undefined {
-    const session = this.sessions(Infinity).find((entry) => entry.id === id);
-    if (!session) return undefined;
-    const dir = paths.session(this.root, id);
-    const events = jsonLines<AgentEvent>(join(dir, 'events.jsonl'));
-    return {
-      // A running session has no totals yet: add up its events so far.
-      session: session.status === 'running' ? { ...session, ...usageOf(events) } : session,
-      events,
-      candidates: jsonLines<Candidate>(join(dir, 'candidates.jsonl')),
-    };
+  session(
+    id: string,
+  ):
+    | { session: SessionSummary; events: AgentEvent[]; candidates: SessionCandidate[]; report: SessionReport }
+    | undefined {
+    const listed = this.sessions(Infinity).find((entry) => entry.id === id);
+    if (!listed) return undefined;
+    const events = jsonLines<AgentEvent>(join(paths.session(this.root, id), 'events.jsonl'));
+    // A running session has no totals yet: add up its events so far.
+    const session = listed.status === 'running' ? { ...listed, ...usageOf(events) } : listed;
+    const issueOf = new Map(
+      this.issues().flatMap((issue) => issue.candidateIds.map((cid) => [cid, issue.id] as const)),
+    );
+    const dismissed = this.dismissed(id);
+    const candidates = this.candidates(id).map((candidate): SessionCandidate => {
+      const issueId = issueOf.get(candidate.id);
+      const state = issueId
+        ? 'filed'
+        : dismissed.has(candidate.id)
+          ? 'dismissed'
+          : awaitsJudge(candidate, dismissed)
+            ? 'waiting'
+            : 'ignored';
+      const { capture } = candidate.evidence;
+      return {
+        ...candidate,
+        state,
+        ...(issueId ? { issueId } : {}),
+        ...(capture?.kind === 'http' ? { text: formatHttpExchange(capture.exchange, ALL) } : {}),
+      };
+    });
+    return { session, events, candidates, report: sessionReport(session, candidates, this.coverage()) };
+  }
+
+  /** The candidates of one session, in the order that they were reported. */
+  candidates(sessionId: string): Candidate[] {
+    return jsonLines<Candidate>(join(paths.session(this.root, sessionId), 'candidates.jsonl'));
+  }
+
+  /** The candidate ids of one session that the judge or a review dismissed. */
+  private dismissed(sessionId: string): Set<string> {
+    return new Set(
+      jsonLines<{ candidateId: string }>(paths.sessionDecisions(this.root, sessionId)).map((line) => line.candidateId),
+    );
+  }
+
+  /** Every candidate that waits for the judge, newest first. */
+  waiting(): Candidate[] {
+    const filed = this.issues().flatMap((issue) => issue.candidateIds);
+    return this.sessions(Infinity)
+      .flatMap((session) => {
+        const decided = new Set([...filed, ...this.dismissed(session.id)]);
+        return this.candidates(session.id).filter((candidate) => awaitsJudge(candidate, decided));
+      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** The names of the log sources in the config, which a session flow reads. */
+  logSources(): string[] {
+    return this.config()?.logs.map((source) => source.name) ?? [];
   }
 
   /** One session's merged flow view: actions, failed requests, backend logs. */
@@ -275,7 +337,7 @@ export class AgentReader {
     const routine = this.routines().find((entry) => entry.id === issue.evidence?.routineId);
     const ids = new Set(issue.candidateIds);
     const candidates = this.sessions(Infinity)
-      .flatMap((session) => jsonLines<Candidate>(join(paths.session(this.root, session.id), 'candidates.jsonl')))
+      .flatMap((session) => this.candidates(session.id))
       .filter((candidate) => ids.has(candidate.id));
     return {
       issue,
@@ -452,7 +514,6 @@ export class AgentReader {
     const appmap = this.appmap();
     const issues = this.issues();
     const sessions = this.sessions(Infinity);
-    const today = now.toLocaleDateString('en-CA');
     const configured = this.configuredAgents();
     // A role with no entry has not run yet: show it from the config, not as off.
     const agents: AgentStatus[] = roles.map(
@@ -487,25 +548,22 @@ export class AgentReader {
         ? `PRs: ${['open', 'merged', 'closed'].map((state) => `${prStates.filter((item) => item === state).length} ${state}`).join(' · ')} · ` +
           `Issues: ${['open', 'closed'].map((state) => `${issueStates.filter((item) => item === state).length} ${state}`).join(' · ')}`
         : undefined;
+    // The newest candidates that wait for the judge, with only the status of an exchange: the list shows no body.
+    const waiting = this.waiting()
+      .slice(0, 8)
+      .map(({ evidence, ...candidate }) => ({
+        ...candidate,
+        capture:
+          evidence.capture?.kind === 'http'
+            ? { kind: 'http', exchange: { response: { status: evidence.capture.exchange.response?.status } } }
+            : evidence.capture,
+      }));
     return {
-      project: { name: basename(this.root), platform: appmap.platform },
       patrol: agentFile?.patrol ?? { state: 'stopped', cycle: 0 },
       agents,
-      counts: {
-        issuesOpen: openIssues.length,
-        issuesBySeverity: Object.fromEntries(
-          Object.keys(severity).map((key) => [key, openIssues.filter((issue) => issue.severity === key).length]),
-        ),
-        fixesProposed: fixes.filter((fix) => fix.status === 'proposed').length,
-        screens: appmap.screens.length,
-        sessionsToday: sessions.filter((session) => new Date(session.startedAt).toLocaleDateString('en-CA') === today)
-          .length,
-        spentTodayUsd: sessions
-          .filter((session) => new Date(session.startedAt).toLocaleDateString('en-CA') === today)
-          .reduce((sum, session) => sum + session.costUsd, 0),
-      },
       usage: usageReport(sessions, now),
       attention,
+      waiting,
       github,
       live: detail ? { summary: detail.session, events, capture } : null,
       recentSessions: sessions.slice(0, 6),

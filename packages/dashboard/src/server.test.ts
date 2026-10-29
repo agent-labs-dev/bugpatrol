@@ -90,12 +90,12 @@ describe('GET /api/coverage', () => {
     const dashboard = await startDashboard({ root, port: 0 });
     try {
       const get = (path: string) => fetch(`${dashboard.url}${path}`);
-      // Before the first sweep, the UI hides the tab.
-      expect((await (await get('/api/state')).json()).hasCoverage).toBe(false);
+      // Before the first sweep, the summary has no API coverage, and the page shows the sweep command.
+      expect((await (await get('/api/summary')).json()).coverage.api).toBeUndefined();
       expect((await get('/api/coverage')).status).toBe(404);
 
       writeCoverageFixture(root);
-      expect((await (await get('/api/state')).json()).hasCoverage).toBe(true);
+      expect((await (await get('/api/summary')).json()).coverage.api).toMatchObject({ endpoints: 13 });
       const matrix = await (await get('/api/coverage')).json();
       // A status column only for a status that a case got and the contract declares.
       expect(matrix.cases).toEqual([

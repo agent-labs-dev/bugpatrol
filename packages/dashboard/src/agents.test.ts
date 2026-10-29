@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentReader } from './agents.js';
 import { writeAgentFixture } from './fixtures/agent-workspace.js';
 import { type Dashboard, startDashboard, watchProject } from './server.js';
+import { projectSummary } from './summary.js';
 import { layoutGraph } from './ui/graph-layout.js';
 
 let root: string;
@@ -226,7 +227,6 @@ describe('AgentReader', () => {
     const overview = reader.overview() as {
       attention: { id: string; fix?: { status: string } }[];
       agents: unknown[];
-      counts: { issuesOpen: number };
       live: { events: { kind: string }[]; capture: string };
     };
     expect(overview.attention.map((issue) => issue.id)).toEqual([
@@ -237,13 +237,14 @@ describe('AgentReader', () => {
     ]);
     expect(overview.attention.find((issue) => issue.id === 'iss-settings')?.fix?.status).toBe('proposed');
     expect(overview.agents).toHaveLength(3);
-    expect(overview.counts.issuesOpen).toBe(4);
+    expect(projectSummary(reader, root).issues.open).toBe(4);
     // An issue that the fixer works on stays in the list, so the list matches the count.
     const profile = join(root, '.bugpatrol', 'runs', 'issues', 'iss-profile.json');
     writeFileSync(profile, JSON.stringify({ ...JSON.parse(readFileSync(profile, 'utf8')), status: 'fixing' }));
-    const fixing = new AgentReader(root).overview() as { attention: { id: string }[]; counts: { issuesOpen: number } };
+    const fixingReader = new AgentReader(root);
+    const fixing = fixingReader.overview() as { attention: { id: string }[] };
     expect(fixing.attention.map((issue) => issue.id)).toContain('iss-profile');
-    expect(fixing.attention).toHaveLength(fixing.counts.issuesOpen);
+    expect(fixing.attention).toHaveLength(projectSummary(fixingReader, root).issues.open);
     expect(overview.live.events.length).toBeGreaterThan(0);
     expect(overview.live.events.length).toBeLessThanOrEqual(12);
     expect(overview.live.events.every((event) => event.kind !== 'thought' && event.kind !== 'tool-call')).toBe(true);
@@ -412,7 +413,9 @@ describe.skipIf(!canBind)('agent API', () => {
     writeAgentFixture(root);
     dashboard = await startDashboard({ root, port: 0 });
     const overview = await (await fetch(`${dashboard.url}/api/overview`)).json();
-    expect(overview.project.platform).toBe('electron');
+    // With no config, the screens in the data show the client surface.
+    const summary = await (await fetch(`${dashboard.url}/api/summary`)).json();
+    expect(summary.surfaces).toEqual([{ kind: 'client', platform: 'electron', configs: [], active: false }]);
     expect(overview.attention[0].severity).toBe('critical');
     expect(overview.recentSessions).toHaveLength(2);
     const issue = await (await fetch(`${dashboard.url}/api/issues/iss-settings`)).json();
