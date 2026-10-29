@@ -38,6 +38,7 @@ The cost on the dashboard counts only the API calls that Bugpatrol makes: the ag
 - **Flow**: agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes.
 - **Screens**: a graph shows how screens connect. Switch to the grid to see each latest screenshot.
 - **Memory**: the lessons that the agents learned.
+- **Coverage**: for an API, the endpoint × case matrix of the sweep. Click a cell to see its HTTP exchange (shown only after the first sweep).
 - **Checks**: the results of `bugpatrol run` (shown only when there are runs).
 
 The dashboard listens on 127.0.0.1 only, because the screenshots can show real data. It is read-only.

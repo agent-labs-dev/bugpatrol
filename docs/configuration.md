@@ -77,6 +77,9 @@ agents:
   memory:
     enabled: true
   checks: []                    # optional automatic checks, for example [usability/contrast, usability/tap-target]
+  sweep:                        # api only: `bugpatrol sweep` and the sweep of each patrol cycle
+    maxRequests: 600            # the most requests in one run; the next run continues from there
+    timeoutMs: 1800000
   patrol:
     intervalMinutes: 30         # wait between cycles; a cycle runs only on a new commit
     cycles: 0                   # 0 = run until stopped
@@ -118,8 +121,28 @@ not mask screenshots.
 | `web` | `url` | `http://localhost:3000` |
 | `electron` | `cdp` | `http://127.0.0.1:${CDP_PORT}` |
 | `ios`, `android` | `appId`, and optional `device` | `com.example.app` |
+| `api` | `url`, and the keys below | `http://127.0.0.1:8000` |
 
 For mobile, the default device is the booted simulator or the running emulator.
+
+### Connect for an API
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `url` | none | The origin of the API. Each request goes here |
+| `spec` | none | The OpenAPI spec: a URL, a path on `url` such as `/openapi.json`, a file in the project, or an absolute file as a `file:` URL. Without a spec, Bugpatrol sends only GET, HEAD, and OPTIONS |
+| `headers` | `{}` | The headers that go into each credential set |
+| `credentials` | none | `self` and an optional `other`, each with its `headers`. `other` enables the cross-user cases |
+| `errors` | none | `statuses` that each endpoint can return, and the `schema` of their body |
+| `deny` | `[]` | Globs of endpoints that Bugpatrol never requests, for example `POST /admin/**` |
+| `methods` | all seven | The methods that Bugpatrol can send. The request policy can allow fewer |
+| `disposable` | `false` | Allow writes also when `url` is not loopback. Set it only when the data can be lost |
+| `perMinute` | `60` | The most requests in one minute |
+| `timeoutMs` | `30000` | The time limit of one request |
+| `version` | none | `path` and `pointer` of the deployed commit. The patrol explores again after each deploy |
+
+[Backend testing](backend-testing.md#test-an-http-api) tells how the sweep, the
+request policy, and the deploy check use these keys.
 
 ## Runtimes
 
