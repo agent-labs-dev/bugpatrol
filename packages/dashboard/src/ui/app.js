@@ -8,11 +8,12 @@ const view = document.getElementById('view');
 const tabs = document.getElementById('tabs');
 const liveEl = document.getElementById('live');
 const projectEl = document.getElementById('project-name');
-const platformEl = document.getElementById('platform');
+const surfacesEl = document.getElementById('surfaces');
 const patrolEl = document.getElementById('patrol');
 
 const state = {
   view: 'overview',
+  summary: null,
   overview: null,
   issues: [],
   issueFilter: 'open',
@@ -26,8 +27,8 @@ const state = {
   selectedScreenId: null,
   routines: [],
   memory: { lessons: [] },
-  hasCoverage: false,
   coverage: null,
+  coverageFilter: { failedOnly: false, hideSkipped: false, query: '' },
   selectedCell: null,
   runs: [],
   selectedRunId: null,
@@ -77,10 +78,9 @@ async function refresh({ keepSelection = true } = {}) {
   state.runs = snapshot.runs;
   state.live = snapshot.live;
   state.root = snapshot.root;
-  state.hasCoverage = snapshot.hasCoverage;
+  state.summary = await getJson('/api/summary');
   state.overview = await getJson('/api/overview');
-  projectEl.textContent = state.overview.project.name;
-  platformEl.textContent = state.overview.project.platform;
+  renderHeader();
   const patrol = state.overview.patrol;
   patrolEl.textContent = patrol.state === 'running' ? `Patrol running · cycle ${patrol.cycle}` : 'Patrol stopped';
   patrolEl.classList.toggle('running', patrol.state === 'running');
@@ -109,7 +109,7 @@ async function refresh({ keepSelection = true } = {}) {
       state.issueDetail = null;
     }
   }
-  if (state.view === 'activity') {
+  if (state.view === 'activity' || state.view === 'flow') {
     state.sessions = await getJson('/api/sessions');
     if (!state.sessions.some((session) => session.id === state.selectedSessionId)) {
       state.selectedSessionId = state.sessions[0]?.id ?? null;
@@ -121,10 +121,6 @@ async function refresh({ keepSelection = true } = {}) {
     }
   }
   if (state.view === 'flow') {
-    state.sessions = await getJson('/api/sessions');
-    if (!state.sessions.some((session) => session.id === state.selectedSessionId)) {
-      state.selectedSessionId = state.sessions[0]?.id ?? null;
-    }
     state.flow = state.selectedSessionId
       ? await getJson(`/api/flow/${encodeURIComponent(state.selectedSessionId)}`).catch(() => null)
       : null;
@@ -139,9 +135,13 @@ async function refresh({ keepSelection = true } = {}) {
     }
   }
   if (state.view === 'memory') state.memory = await getJson('/api/memory');
-  if (state.view === 'coverage' && state.hasCoverage) {
-    state.coverage = await getJson('/api/coverage');
-    if (!state.coverage.cells[state.selectedCell]?.exchange) state.selectedCell = null;
+  if (state.view === 'coverage') {
+    state.coverage = state.summary.coverage.api ? await getJson('/api/coverage') : null;
+    if (!state.coverage?.cells[state.selectedCell]?.exchange) state.selectedCell = null;
+    if (state.summary.coverage.screens) {
+      state.appmap = await getJson('/api/appmap');
+      state.issues = await getJson('/api/issues');
+    }
   }
   if (state.view === 'reviews') {
     const reviews = await getJson('/api/reviews');
@@ -173,12 +173,9 @@ function render() {
   // (native apps have none) does not need the tab.
   const hasChecks = state.runs.length > 0 || state.live?.status === 'running';
   if (state.view === 'checks' && !hasChecks) state.view = 'overview';
-  // Coverage shows the sweep of an API. Before the first sweep, there is nothing to show.
-  if (state.view === 'coverage' && !state.hasCoverage) state.view = 'overview';
   for (const button of tabs.querySelectorAll('button')) {
     button.classList.toggle('active', button.dataset.view === state.view);
     if (button.dataset.view === 'checks') button.hidden = !hasChecks;
-    if (button.dataset.view === 'coverage') button.hidden = !state.hasCoverage;
   }
   // The same page, drawn again with new data, keeps what the reader opened and where they were.
   const page = JSON.stringify([
@@ -192,6 +189,11 @@ function render() {
   ]);
   const opened = page === renderedPage ? detailsOpen() : undefined;
   const scroll = window.scrollY;
+  // A scroll box, such as the coverage matrix, keeps its place too.
+  const boxes = opened
+    ? [...view.querySelectorAll('[data-keep-scroll]')].map((box) => [box.scrollLeft, box.scrollTop])
+    : [];
+  const typing = opened && document.activeElement?.matches('input[type="search"]');
   renderedPage = page;
   view.innerHTML = '';
   if (state.view === 'checks') {
@@ -212,6 +214,9 @@ function render() {
   view.append(renderers[state.view]());
   if (opened) {
     for (const [key, details] of detailsByKey()) if (opened.has(key)) details.open = opened.get(key);
+    for (const [index, box] of [...view.querySelectorAll('[data-keep-scroll]')].entries())
+      if (boxes[index]) [box.scrollLeft, box.scrollTop] = boxes[index];
+    if (typing) view.querySelector('input[type="search"]')?.focus();
     window.scrollTo(0, scroll);
   }
 }
@@ -709,6 +714,177 @@ function title(text, aside) {
   ]);
 }
 
+// ---------------------------------------------------------------- shared blocks
+
+const DOCS = 'https://github.com/agent-labs-dev/bugpatrol/blob/main/docs';
+
+const PLATFORM_WORDS = {
+  api: 'API',
+  web: 'Web app',
+  electron: 'Electron app',
+  desktop: 'Desktop app',
+  ios: 'iOS app',
+  android: 'Android app',
+  cli: 'CLI app',
+};
+
+const surfaceName = (surface) => PLATFORM_WORDS[surface.platform] ?? surface.platform;
+const fileName = (path) => path?.split('/').pop() ?? '';
+
+function surfacesOf(kind) {
+  return (state.summary?.surfaces ?? []).filter((surface) => surface.kind === kind);
+}
+
+/** The project's surfaces in the top bar. The surface of the config that the dashboard reads is marked. */
+function renderHeader() {
+  const summary = state.summary;
+  projectEl.textContent = summary.name;
+  surfacesEl.replaceChildren(
+    ...summary.surfaces.map((surface) =>
+      el('span', {
+        class: `surface${surface.active ? ' active' : ''}`,
+        title: surface.configs.length
+          ? `${surface.active ? 'The dashboard reads' : 'Config'}: ${surface.configs.join(', ')}`
+          : 'From the data. No config file tests it now.',
+        text: surfaceName(surface),
+      }),
+    ),
+    summary.config ? el('span', { class: 'muted', title: summary.config, text: fileName(summary.config) }) : null,
+  );
+}
+
+/** A command for the config that the dashboard reads, or for the config of another surface. */
+function cli(args, surface) {
+  const config =
+    surface && !surface.active && surface.configs[0]
+      ? ` --config ${surface.configs[0]}`
+      : (state.summary?.configArg ?? '');
+  return `bugpatrol ${args}${config}`;
+}
+
+/** A command with a copy button. */
+function commandBox(text) {
+  const button = el('button', {
+    type: 'button',
+    class: 'copy',
+    text: 'Copy',
+    'aria-label': `Copy the command ${text}`,
+  });
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = 'Copied';
+    } catch {
+      button.textContent = 'Copy failed';
+    }
+    setTimeout(() => {
+      button.textContent = 'Copy';
+    }, 1500);
+  });
+  return el('div', { class: 'command' }, [el('code', { text }), button]);
+}
+
+/**
+ * The one empty state of the dashboard: what the block shows, why it is
+ * empty now, and the one next step, as a command or a button.
+ */
+function emptyState({ heading, why = [], command, action, docs, compact = false }) {
+  return el('div', { class: `empty-state${compact ? ' compact' : ''}` }, [
+    el('h3', { text: heading }),
+    ...[].concat(why).map((text) => el('p', { text })),
+    command ? commandBox(command) : null,
+    action ? el('button', { type: 'button', class: 'primary', text: action.label, onclick: action.onclick }) : null,
+    docs
+      ? el('a', { class: 'docs', href: docs, target: '_blank', rel: 'noopener noreferrer', text: 'Read the docs' })
+      : null,
+  ]);
+}
+
+/** A note with one command, for a block that has data but also a next step. */
+function callout(text, command) {
+  return el('div', { class: 'callout' }, [el('p', { text }), commandBox(command)]);
+}
+
+const number = (value) => Number(value ?? 0).toLocaleString('en-US');
+
+function percent(part, whole) {
+  if (!whole) return '0%';
+  const value = (part / whole) * 100;
+  return value > 0 && value < 1 ? '<1%' : `${Math.round(value)}%`;
+}
+
+/** A row of numbers. A stat with an action is a button. */
+function statBand(stats, className = '') {
+  return el(
+    'div',
+    { class: `band ${className}` },
+    stats.filter(Boolean).map(({ label, value, note, tone, bar, go }) =>
+      el(
+        go ? 'button' : 'div',
+        {
+          class: `stat${tone ? ` tone-${tone}` : ''}`,
+          ...(go ? { type: 'button', onclick: go } : {}),
+        },
+        [
+          el('span', { class: 'stat-label', text: label }),
+          el('strong', { class: 'stat-value', text: String(value) }),
+          bar ?? null,
+          note ? el('span', { class: 'stat-note', title: note, text: note }) : null,
+        ],
+      ),
+    ),
+  );
+}
+
+const CELL_STATES = ['pass', 'fail', 'blocked', 'skip', 'untested'];
+
+/** The cases of each state as one stacked bar. */
+function caseBar(cases) {
+  const states = CELL_STATES.filter((name) => cases[name]);
+  const total = states.reduce((sum, name) => sum + cases[name], 0);
+  return el(
+    'div',
+    { class: 'bar', role: 'img', 'aria-label': states.map((name) => `${number(cases[name])} ${name}`).join(', ') },
+    states.map((name) =>
+      el('span', {
+        class: `bar-${name}`,
+        style: `flex-grow: ${cases[name] / total}`,
+        title: `${number(cases[name])} ${name}`,
+      }),
+    ),
+  );
+}
+
+function caseLegend(cases) {
+  return el(
+    'div',
+    { class: 'bar-legend' },
+    CELL_STATES.filter((name) => cases[name] !== undefined).map((name) =>
+      el('span', {}, [el('i', { class: `bar-${name}` }), `${number(cases[name])} ${name}`]),
+    ),
+  );
+}
+
+async function go(view) {
+  state.view = view;
+  if (view === 'screens') state.selectedScreenId = null;
+  await refresh();
+}
+
+async function openSession(id) {
+  state.view = 'activity';
+  state.selectedSessionId = id;
+  await refresh();
+}
+
+function formatDuration(ms) {
+  if (ms === undefined) return '-';
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
 const CI_WORDS = { pending: 'CI running', passed: 'CI green', failed: 'CI failed, fixing', 'gave-up': 'CI red' };
 
 function githubChip({ kind, number, url, state, draft, ci }) {
@@ -734,7 +910,8 @@ function issueChips(issue) {
 
 function renderOverview() {
   const data = state.overview;
-  if (!data) return el('div', { class: 'empty', text: 'Loading overview…' });
+  const summary = state.summary;
+  if (!data || !summary) return el('div', { class: 'empty', text: 'Loading overview…' });
   const agents = el(
     'div',
     { class: 'agent-grid' },
@@ -763,58 +940,212 @@ function renderOverview() {
       ]),
     ),
   );
-  const attention = el('section', { class: 'card panel' }, [
-    title('Needs attention', `${data.counts.issuesOpen} open`),
-    data.attention.length
-      ? el(
-          'div',
-          { class: 'stack' },
-          data.attention.map((issue) =>
-            el('button', { class: 'attention-row', onclick: () => openIssue(issue.id) }, [
-              captureView(issue.evidence?.capture, issue.title, 'thumb'),
-              el('span', { class: 'grow' }, [
-                el('strong', { text: issue.title }),
-                el('span', { class: 'row-meta' }, [
-                  el('small', { class: 'muted', text: `${screenName(issue.screenId)} · ×${issue.occurrences}` }),
-                  ...issueChips(issue),
-                ]),
-              ]),
-              severityChip(issue.severity),
-              el('span', { class: 'muted', text: issueStatus(issue, issue.fix) }),
-            ]),
-          ),
-        )
-      : el('p', { class: 'empty', text: 'No open issues. The agents found nothing wrong yet.' }),
+  return el('div', {}, [
+    renderConfidence(summary),
+    el('div', { class: 'overview-grid' }, [
+      renderAttention(data, summary),
+      el('div', { class: 'stack-gap' }, [data.live ? renderLive(data.live) : null, renderRecentSessions(data)]),
+    ]),
+    renderSurfaceCoverage(data, summary),
+    agents,
+    renderUsage(data.usage),
   ]);
-  const live = data.live;
-  const latest = data.recentSessions[0];
-  const livePanel = el('section', { class: 'card panel' }, [
-    title('Live', live ? 'Session running' : 'Quiet now'),
-    live
-      ? el('div', {}, [
-          captureFile(live.capture, 'Newest session capture', 'live-shot'),
-          el('div', { class: 'event-list' }, live.events.map(renderEventRow)),
-        ])
-      : el('div', { class: 'quiet' }, [
-          el('p', {
-            text: latest
-              ? `Last: the ${latest.role}, ${relativeTime(latest.startedAt)}. ${firstSentence(latest.summary)}`
-              : 'No sessions yet.',
-          }),
-          data.patrol?.nextAt
-            ? el('p', {
-                class: 'muted',
-                text: `Next patrol at ${new Date(data.patrol.nextAt).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}${data.patrol.commit ? ` · last tested commit ${data.patrol.commit.slice(0, 7)}` : ''}`,
+}
+
+/** The numbers that say if the project works: the verdict, the open problems, the coverage, and the last session. */
+function renderConfidence(summary) {
+  const { issues, waiting, coverage, lastSession, verdict } = summary;
+  const severe = issues.bySeverity.critical + issues.bySeverity.major;
+  const api = coverage.api;
+  return statBand(
+    [
+      { label: 'Status', value: verdict.text, tone: verdict.tone },
+      {
+        label: 'Open issues',
+        value: number(issues.open),
+        note: severe ? `${severe} critical or major` : issues.open ? 'None is critical or major' : 'None',
+        tone: severe ? 'fail' : undefined,
+        go: () => go('issues'),
+      },
+      {
+        label: 'Wait for the judge',
+        value: number(waiting.total),
+        note: waiting.repeat
+          ? `${number(waiting.repeat)} failed two times`
+          : waiting.total
+            ? 'The judge did not read them yet'
+            : 'None',
+        tone: waiting.total ? 'warn' : undefined,
+        go: () => go('activity'),
+      },
+      surfacesOf('api').length
+        ? {
+            label: 'API coverage',
+            value: api ? percent(api.tested, api.endpoints) : '-',
+            note: api ? `${number(api.tested)} of ${number(api.endpoints)} endpoints tested` : 'No sweep yet',
+            go: () => go('coverage'),
+          }
+        : null,
+      surfacesOf('client').length
+        ? {
+            label: 'Screens',
+            value: number(coverage.screens?.found),
+            note: coverage.screens?.found ? `${coverage.screens.withIssues} with open issues` : 'No screens yet',
+            go: () => go('coverage'),
+          }
+        : null,
+      {
+        label: 'Last session',
+        value: lastSession ? (lastSession.status === 'running' ? 'Running' : relativeTime(lastSession.startedAt)) : '-',
+        note: lastSession
+          ? firstSentence(lastSession.summary) || `${capital(lastSession.role)} session`
+          : 'No session yet',
+        go: lastSession ? () => openSession(lastSession.id) : undefined,
+      },
+    ],
+    'confidence',
+  );
+}
+
+/** The open issues, then the findings that wait for the judge. */
+function renderAttention(data, summary) {
+  const { issues, waiting } = summary;
+  const tested = summary.verdict.tone !== 'info';
+  const issueRows = data.attention.map((issue) =>
+    el('button', { class: 'attention-row', onclick: () => openIssue(issue.id) }, [
+      captureView(issue.evidence?.capture, issue.title, 'thumb'),
+      el('span', { class: 'grow' }, [
+        el('strong', { text: issue.title }),
+        el('span', { class: 'row-meta' }, [
+          el('small', { class: 'muted', text: `${issueWhere(issue)} · ×${issue.occurrences}` }),
+          ...issueChips(issue),
+        ]),
+      ]),
+      severityChip(issue.severity),
+      el('span', { class: 'muted', text: issueStatus(issue, issue.fix) }),
+    ]),
+  );
+  const waitingRows = data.waiting.slice(0, 5).map((candidate) =>
+    el('button', { class: 'attention-row', onclick: () => openSession(candidate.sessionId) }, [
+      captureView(candidate.capture, candidate.summary, 'thumb'),
+      el('span', { class: 'grow' }, [
+        el('strong', { class: 'truncate', text: candidate.summary }),
+        el('small', {
+          class: 'muted',
+          text: `${candidate.blocking ? 'Failed two times' : capital(candidate.source)} · ${relativeTime(candidate.createdAt)}`,
+        }),
+      ]),
+      severityChip(candidate.severity),
+    ]),
+  );
+  return el('section', { class: 'card panel' }, [
+    title('Needs attention', `${number(issues.open)} open · ${number(waiting.total)} wait for the judge`),
+    issueRows.length || waitingRows.length
+      ? null
+      : emptyState({
+          heading: tested ? 'Nothing needs attention' : 'Not tested yet',
+          why: tested
+            ? 'No issue is open, and no finding waits for the judge.'
+            : 'A patrol tests the project. The explorer reports findings, and the judge files the real problems as issues.',
+          command: cli('patrol --once'),
+          compact: true,
+        }),
+    issueRows.length ? el('div', { class: 'stack' }, issueRows) : null,
+    waitingRows.length
+      ? el('div', { class: 'subsection' }, [
+          el('h3', { text: `Findings that wait for the judge (${number(waiting.total)})` }),
+          callout(
+            'The judge reads each finding and files the real problems as issues. Run the judge now:',
+            cli('patrol --once'),
+          ),
+          el('div', { class: 'stack' }, waitingRows),
+          waiting.total > waitingRows.length
+            ? el('button', {
+                type: 'button',
+                class: 'link',
+                text: `Show all ${number(waiting.total)} findings in Activity`,
+                onclick: () => go('activity'),
               })
             : null,
-        ]),
+        ])
+      : null,
   ]);
-  const coverage = el('section', { class: 'card panel coverage' }, [
-    title('Coverage', `${data.counts.screens} screens found`),
+}
+
+function renderLive(live) {
+  return el('section', { class: 'card panel' }, [
+    title('Live', 'Session running'),
+    captureFile(live.capture, 'Newest session capture', 'live-shot'),
+    el('div', { class: 'event-list' }, live.events.map(renderEventRow)),
+  ]);
+}
+
+/** One coverage block for each surface: the endpoints of an API, the screens of a client app. */
+function renderSurfaceCoverage(data, summary) {
+  const blocks = summary.surfaces.map((surface) =>
+    el('div', { class: 'surface-block' }, [
+      el('div', { class: 'surface-head' }, [
+        el('h3', { text: surfaceName(surface) }),
+        surface.configs[0] ? el('span', { class: 'muted mono', text: fileName(surface.configs[0]) }) : null,
+      ]),
+      surface.kind === 'api'
+        ? apiCoverageBlock(summary.coverage.api, surface)
+        : screenCoverageBlock(data, summary, surface),
+    ]),
+  );
+  return el('section', { class: 'card panel block' }, [
+    title('Coverage', summary.surfaces.length > 1 ? 'For each surface' : ''),
     data.github ? el('div', { class: 'muted github-summary', text: `GitHub · ${data.github}` }) : null,
+    blocks.length
+      ? el('div', { class: 'surface-list' }, blocks)
+      : emptyState({
+          heading: 'No config yet',
+          why: 'Bugpatrol reads the config in .bugpatrol/ to know what to test.',
+          command: 'bugpatrol init',
+          compact: true,
+        }),
+  ]);
+}
+
+function apiCoverageBlock(api, surface) {
+  if (!api)
+    return emptyState({
+      heading: 'No sweep yet',
+      why: 'The sweep sends each case of each endpoint and checks the answer against the spec.',
+      command: cli('sweep', surface),
+      compact: true,
+    });
+  return el('button', { type: 'button', class: 'surface-numbers', onclick: () => go('coverage') }, [
+    el('div', { class: 'surface-line' }, [
+      el('strong', { class: 'big', text: percent(api.tested, api.endpoints) }),
+      el('span', { text: `of the endpoints tested: ${number(api.tested)} of ${number(api.endpoints)}` }),
+    ]),
+    caseBar(api.cases),
+    caseLegend(api.cases),
+    api.remaining
+      ? el('small', { class: 'muted', text: `${number(api.remaining)} cases wait for the next sweep.` })
+      : null,
+  ]);
+}
+
+function screenCoverageBlock(data, summary, surface) {
+  const screens = summary.coverage.screens;
+  if (!screens?.found)
+    return emptyState({
+      heading: 'No screens yet',
+      why: surface.configs[0]
+        ? `${fileName(surface.configs[0])} tests the ${surfaceName(surface).toLowerCase()}. The explorer finds its screens when it runs.`
+        : 'The explorer finds the screens when it runs.',
+      command: cli('explore', surface),
+      compact: true,
+    });
+  return el('div', {}, [
+    el('div', { class: 'surface-line' }, [
+      el('strong', { class: 'big', text: number(screens.found) }),
+      el('span', {
+        text: `screens found · ${number(screens.replayable)} with a routine · ${number(screens.withIssues)} with open issues`,
+      }),
+    ]),
     el(
       'div',
       { class: 'coverage-row' },
@@ -826,12 +1157,52 @@ function renderOverview() {
       ),
     ),
   ]);
-  return el('div', {}, [
-    agents,
-    el('div', { class: 'overview-grid' }, [attention, livePanel]),
-    coverage,
-    renderUsage(data.usage),
+}
+
+function renderRecentSessions(data) {
+  const next = data.patrol?.nextAt
+    ? `Next patrol at ${new Date(data.patrol.nextAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : data.live
+      ? ''
+      : 'Quiet now';
+  return el('section', { class: 'card panel' }, [
+    title('Recent sessions', next),
+    data.recentSessions.length
+      ? el(
+          'div',
+          { class: 'stack' },
+          data.recentSessions.map((session) =>
+            el('button', { class: 'list-row', onclick: () => openSession(session.id) }, [
+              roleIcon(session.role),
+              el('span', { class: 'grow' }, [
+                el('strong', {
+                  class: 'truncate',
+                  text: firstSentence(session.summary) || `${capital(session.role)} session`,
+                }),
+                el('small', {
+                  class: 'muted',
+                  text: `${capital(session.role)} · ${relativeTime(session.startedAt)} · ${duration(session)}`,
+                }),
+              ]),
+              el('span', { class: `badge ${SESSION_BADGE[session.status] ?? 'info'}`, text: session.status }),
+            ]),
+          ),
+        )
+      : emptyState({
+          heading: 'No sessions yet',
+          why: 'Each run of an agent is a session.',
+          command: cli('patrol --once'),
+          compact: true,
+        }),
   ]);
+}
+
+const SESSION_BADGE = { running: 'warn', failed: 'fail', finished: 'info' };
+
+/** Where an issue shows: its screen, or for an API issue, its request. */
+function issueWhere(issue) {
+  const request = issue.evidence?.capture?.kind === 'http' ? issue.evidence.capture.exchange?.request : undefined;
+  return !issue.screenId && request ? `${request.method} ${request.path}` : screenName(issue.screenId);
 }
 
 function screenName(id) {
@@ -854,6 +1225,25 @@ async function openIssue(id) {
 }
 
 function renderIssues() {
+  if (!state.issues.length) {
+    const { waiting, verdict } = state.summary;
+    return el('section', { class: 'card panel' }, [
+      title('Issues'),
+      emptyState({
+        heading: 'No issues yet',
+        why: [
+          'An issue is a problem that the judge confirmed, with its evidence, its steps, and its fix.',
+          waiting.total
+            ? `${number(waiting.total)} findings wait for the judge now. The judge files the real problems as issues.`
+            : verdict.tone === 'info'
+              ? 'Bugpatrol did not test this project yet.'
+              : 'The judge found no real problem yet.',
+        ],
+        command: cli('patrol --once'),
+        action: waiting.total ? { label: 'Show the findings', onclick: () => go('activity') } : undefined,
+      }),
+    ]);
+  }
   const filters = ['open', 'fixed', 'dismissed', 'all'];
   const filtered = visibleIssues();
   const list = el('div', { class: 'card panel' }, [
@@ -872,6 +1262,9 @@ function renderIssues() {
         }),
       ),
     ),
+    filtered.length
+      ? null
+      : el('p', { class: 'muted', text: `No issue is ${state.issueFilter}. Select a different filter.` }),
     ...filtered.map((issue) =>
       el(
         'button',
@@ -883,7 +1276,7 @@ function renderIssues() {
             el('span', { class: 'row-meta' }, [
               el('small', {
                 class: 'muted',
-                text: `${screenName(issue.screenId)} · ${relativeTime(issue.lastSeenAt)}`,
+                text: `${issueWhere(issue)} · ${relativeTime(issue.lastSeenAt)}`,
               }),
               ...issueChips(issue),
             ]),
@@ -946,7 +1339,7 @@ function renderIssueDetail() {
       : null,
     el('div', { class: 'kv' }, [
       el('span', { text: issueStatus(issue, fix) }),
-      el('span', { text: screenName(issue.screenId) }),
+      el('span', { text: issueWhere(issue) }),
       el('span', { text: `×${issue.occurrences}` }),
       el('span', { text: `First ${relativeTime(issue.firstSeenAt)}` }),
       el('span', { text: `Last ${relativeTime(issue.lastSeenAt)}` }),
@@ -1265,9 +1658,9 @@ function inlineMarkdown(line) {
   return parts;
 }
 
-function renderActivity() {
-  const list = el('section', { class: 'card panel' }, [
-    title('Activity'),
+function sessionList(heading) {
+  return el('section', { class: 'card panel' }, [
+    title(heading, `${state.sessions.length}`),
     ...state.sessions.map((session) =>
       el(
         'button',
@@ -1284,59 +1677,228 @@ function renderActivity() {
             el('strong', { text: firstSentence(session.summary) || `${capital(session.role)} session` }),
             el('small', {
               class: 'muted',
-              text:
-                `${capital(session.role)} · ${relativeTime(session.startedAt)} · ${duration(session)} · ${session.steps} steps · ` +
-                `${session.tokens ? `${tokens(session.tokens)} · ` : ''}API ${money(session.costUsd)} · ` +
-                `${session.screensFound.length} screens · ${session.issues.length} issues`,
+              text: `${capital(session.role)} · ${relativeTime(session.startedAt)} · ${duration(session)}`,
             }),
           ]),
+          session.status === 'finished'
+            ? null
+            : el('span', { class: `badge ${SESSION_BADGE[session.status]}`, text: session.status }),
         ],
       ),
     ),
   ]);
+}
+
+function noSessions(page) {
+  return el('section', { class: 'card panel' }, [
+    title(page),
+    emptyState({
+      heading: 'No sessions yet',
+      why: [
+        page === 'Flow'
+          ? 'Flow puts the actions of a session, the requests that failed, and the backend logs in one timeline.'
+          : 'Activity shows each agent session: what it tested, what it found, and what the judge decided.',
+        'No agent ran in this project yet.',
+      ],
+      command: cli('patrol --once'),
+    }),
+  ]);
+}
+
+function renderActivity() {
+  if (!state.sessions.length) return noSessions('Activity');
   const detail = state.sessionDetail;
-  const timeline = detail
-    ? el('section', { class: 'card panel' }, [
-        title('Timeline', `${capital(detail.session.role)} · ${relativeTime(detail.session.startedAt)}`),
-        detail.session.summary ? el('div', { class: 'session-summary' }, [markdown(detail.session.summary)]) : null,
-        el(
-          'div',
-          { class: 'muted session-usage' },
-          detail.session.tokensByModel
-            ? Object.entries(detail.session.tokensByModel).map(([model, usage]) =>
-                el('div', { title: tokenDetail(usage), text: `${model}: ${tokens(usage)}` }),
-              )
-            : [el('div', { text: 'No token usage reported for this session.' })],
-        ),
-        el('label', { class: 'toggle' }, [
-          el('input', {
-            type: 'checkbox',
-            ...(state.showThoughts ? { checked: '' } : {}),
-            onchange: (event) => {
-              state.showThoughts = event.target.checked;
-              render();
-            },
-          }),
-          el('span', { text: 'Show agent reasoning' }),
-        ]),
-        el(
-          'div',
-          { class: 'event-list' },
-          detail.events.filter((event) => state.showThoughts || isFeedEvent(event)).map(renderEventRow),
-        ),
-        detail.candidates.length ? title('Candidates') : null,
-        ...detail.candidates.map((candidate) =>
-          el('div', { class: 'candidate' }, [
-            el('strong', { text: candidate.summary }),
-            el('span', {
-              class: 'muted',
-              text: `${candidate.route?.to || 'unrouted'} · ${candidate.route?.reason || ''}`,
+  return el('div', { class: 'master-detail' }, [
+    sessionList('Sessions'),
+    detail ? renderSessionDetail(detail) : el('section', { class: 'card panel empty', text: 'Select a session.' }),
+  ]);
+}
+
+// Most findings of a sweep wait for the judge, so that state is quiet text and the others are badges.
+const CANDIDATE_STATES = {
+  waiting: ['', 'Waits for the judge'],
+  filed: ['fail', 'Filed as an issue'],
+  dismissed: ['info', 'Dismissed'],
+  ignored: ['info', 'Not sent to the judge'],
+};
+
+/** One session: its numbers first, then its findings by failure, then its events. */
+function renderSessionDetail(detail) {
+  const { session, report, candidates, events } = detail;
+  const { findings, sweep } = report;
+  const cases = sweep ? sweep.pass + sweep.fail + sweep.blocked : 0;
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const agentEvents = events.some((event) => event.kind !== 'candidate');
+  const timeline = el(
+    'div',
+    { class: 'event-list' },
+    events.filter((event) => state.showThoughts || isFeedEvent(event)).map(renderEventRow),
+  );
+  return el('section', { class: 'card panel session-detail' }, [
+    title(
+      firstSentence(session.summary) || `${capital(session.role)} session`,
+      `${capital(session.role)} · ${formatTime(session.startedAt)}`,
+    ),
+    statBand([
+      { label: 'Duration', value: session.status === 'running' ? 'Running' : formatDuration(report.durationMs) },
+      sweep
+        ? {
+            label: 'Cases in this session',
+            value: number(cases),
+            note: `${number(sweep.endpoints)} endpoints tested · ${number(sweep.blocked)} blocked`,
+          }
+        : null,
+      sweep
+        ? {
+            label: 'Pass · fail · blocked',
+            value: `${number(sweep.pass)} · ${number(sweep.fail)} · ${number(sweep.blocked)}`,
+            bar: caseBar(sweep),
+          }
+        : null,
+      report.steps || !sweep
+        ? { label: 'Steps', value: number(report.steps), note: `${report.screens.length} screens found` }
+        : null,
+      {
+        label: 'Findings',
+        value: number(findings.total),
+        note: sweep
+          ? `${number(findings.repeat)} failed two times`
+          : `${number(findings.filed)} filed as ${findings.filed === 1 ? 'an issue' : 'issues'}`,
+      },
+      {
+        label: 'Wait for the judge',
+        value: number(findings.waiting),
+        note: `${number(findings.filed)} filed · ${number(findings.dismissed)} dismissed`,
+        tone: findings.waiting ? 'warn' : undefined,
+      },
+      session.tokens
+        ? {
+            label: 'Tokens',
+            value: count(session.tokens.input + session.tokens.output),
+            note: `API ${money(session.costUsd)}`,
+          }
+        : null,
+    ]),
+    findings.waiting
+      ? callout(
+          `The judge did not read ${number(findings.waiting)} findings of this session yet. Run the judge:`,
+          cli('patrol --once'),
+        )
+      : null,
+    report.groups.length
+      ? el('section', { class: 'subsection' }, [
+          title(
+            'Findings',
+            `${number(findings.total)} in ${report.groups.length} ${report.groups.length === 1 ? 'group' : 'groups'}`,
+          ),
+          ...report.groups.map((group) => findingGroup(group, byId)),
+        ])
+      : el('p', { class: 'muted', text: 'This session reported no finding.' }),
+    countChips('Findings by case', report.byCase),
+    countChips('Findings by check', report.byCheck),
+    countChips(
+      'Findings by screen',
+      report.byScreen.map(({ label, count: n }) => ({ label: screenName(label), count: n })),
+    ),
+    // A sweep uses no model, so it has no usage to show.
+    session.tokensByModel
+      ? el('section', { class: 'subsection' }, [
+          title('Usage'),
+          el(
+            'div',
+            { class: 'muted session-usage' },
+            Object.entries(session.tokensByModel).map(([model, usage]) =>
+              el('div', { title: tokenDetail(usage), text: `${model}: ${tokens(usage)}` }),
+            ),
+          ),
+        ])
+      : null,
+    // A sweep has no actions: its events repeat its findings, so they stay one click away.
+    agentEvents
+      ? el('section', { class: 'subsection' }, [
+          title(
+            'Timeline',
+            state.showThoughts
+              ? `${events.length} events`
+              : `${events.filter(isFeedEvent).length} of ${events.length} events`,
+          ),
+          // The heading shows the first sentence. A longer summary shows here in full.
+          session.summary && firstSentence(session.summary) !== session.summary.trim()
+            ? el('div', { class: 'session-summary' }, [markdown(session.summary)])
+            : null,
+          el('label', { class: 'toggle' }, [
+            el('input', {
+              type: 'checkbox',
+              ...(state.showThoughts ? { checked: '' } : {}),
+              onchange: (event) => {
+                state.showThoughts = event.target.checked;
+                render();
+              },
             }),
+            el('span', { text: 'Show agent reasoning' }),
           ]),
-        ),
-      ])
-    : el('section', { class: 'card panel empty', text: 'Select a session.' });
-  return el('div', { class: 'master-detail' }, [list, timeline]);
+          timeline,
+        ])
+      : el('details', { class: 'subsection raw-events' }, [
+          el('summary', { text: `All events (${events.length})` }),
+          timeline,
+        ]),
+  ]);
+}
+
+function countChips(heading, counts) {
+  if (!counts.length) return null;
+  return el('section', { class: 'subsection' }, [
+    title(heading),
+    el(
+      'div',
+      { class: 'chips' },
+      counts.map(({ label, count: n }) =>
+        el('span', { class: 'chip' }, [el('span', { text: label }), el('strong', { text: number(n) })]),
+      ),
+    ),
+  ]);
+}
+
+/** A group of findings with the same failure. Each finding opens to its evidence. */
+function findingGroup(group, byId) {
+  const members = group.candidateIds.map((id) => byId.get(id)).filter(Boolean);
+  return el('details', { class: 'finding-group' }, [
+    el('summary', {}, [
+      el('span', { class: 'group-label', text: capital(group.label) }),
+      ...group.assertions.map((id) => el('code', { class: 'assertion', text: id })),
+      el('span', {
+        class: 'muted group-repeat',
+        text: group.repeat && group.repeat < group.count ? `${group.repeat} of ${group.count} failed two times` : '',
+      }),
+      el('strong', { class: 'group-count', text: number(group.count) }),
+    ]),
+    ...members.map((candidate) => {
+      const [badge, words] = CANDIDATE_STATES[candidate.state] ?? ['info', candidate.state];
+      const at = candidate.source === 'sweep' ? candidate.summary.indexOf(': ') : -1;
+      const capture = candidate.evidence?.capture;
+      return el('details', { class: 'candidate-row' }, [
+        el('summary', {}, [
+          el('span', { class: 'grow truncate', text: at > 0 ? candidate.summary.slice(0, at) : candidate.summary }),
+          candidate.state === 'filed' && candidate.issueId
+            ? el('button', {
+                type: 'button',
+                class: `badge ${badge}`,
+                text: words,
+                onclick: (event) => {
+                  event.preventDefault();
+                  openIssue(candidate.issueId);
+                },
+              })
+            : el('span', { class: badge ? `badge ${badge}` : 'muted state-words', text: words }),
+        ]),
+        candidate.route?.reason ? el('p', { class: 'muted', text: candidate.route.reason }) : null,
+        capture?.kind === 'http'
+          ? el('pre', { class: 'http', text: candidate.text })
+          : captureFile(capture?.screenshot, candidate.summary, 'candidate-shot'),
+      ]);
+    }),
+  ]);
 }
 
 function duration(session) {
@@ -1371,52 +1933,17 @@ function renderEventRow(event) {
 // failed requests the app reported, and the backend logs that followed, merged
 // in time order. A log close behind a failure is marked correlated.
 function renderFlow() {
-  const list = el('section', { class: 'card panel' }, [
-    title('Flow'),
-    ...state.sessions.map((session) =>
-      el(
-        'button',
-        {
-          class: `list-row ${session.id === state.selectedSessionId ? 'active' : ''}`,
-          onclick: async () => {
-            state.selectedSessionId = session.id;
-            await refresh();
-          },
-        },
-        [
-          roleIcon(session.role),
-          el('span', { class: 'grow' }, [
-            el('strong', { text: firstSentence(session.summary) || `${capital(session.role)} session` }),
-            el('small', {
-              class: 'muted',
-              text: `${capital(session.role)} · ${relativeTime(session.startedAt)} · ${duration(session)}`,
-            }),
-          ]),
-        ],
-      ),
-    ),
-  ]);
+  if (!state.sessions.length) return noSessions('Flow');
   const flow = state.flow;
-  if (!flow) {
-    return el('div', { class: 'master-detail' }, [
-      list,
-      el('section', {
-        class: 'card panel empty',
-        text: 'No flow for this session. Add a `logs:` source to bugpatrol.yml and run a patrol.',
-      }),
-    ]);
-  }
+  const list = sessionList('Sessions');
+  if (!flow) return el('div', { class: 'master-detail' }, [list, el('section', { class: 'card panel' }, [noFlow()])]);
   const sources = flow.sources.length
     ? flow.sources.map((source) =>
         el('div', {
           text: `${source.name} (${source.kind}): ${source.collected} line${source.collected === 1 ? '' : 's'}`,
         }),
       )
-    : [
-        el('div', {
-          text: 'No log sources configured. Add `logs:` to bugpatrol.yml to see backend logs beside each action.',
-        }),
-      ];
+    : [el('div', { text: 'The config had no log source for this session, so the flow has no backend logs.' })];
   return el('div', { class: 'master-detail' }, [
     list,
     el('section', { class: 'card panel' }, [
@@ -1427,6 +1954,49 @@ function renderFlow() {
         : el('div', { class: 'muted', text: 'This session recorded nothing.' }),
     ]),
   ]);
+}
+
+const LOGS_EXAMPLE = `logs:
+  - name: api
+    kind: file
+    path: logs/api.log`;
+
+/** Why the selected session has no flow, and the next step. */
+function noFlow() {
+  const summary = state.summary;
+  const session = state.sessionDetail?.session;
+  const report = state.sessionDetail?.report;
+  const what =
+    'Flow puts the actions of a session, the requests that failed, and the backend logs in one timeline, so you can see which log line follows which request.';
+  if (session?.status === 'running')
+    return emptyState({
+      heading: 'The flow shows when the session ends',
+      why: [what, 'This session runs now. Bugpatrol writes its flow at the end.'],
+    });
+  if (!summary.logs.length)
+    return emptyState({
+      heading: 'No backend logs',
+      why: [
+        what,
+        `${summary.config ? fileName(summary.config) : 'The config'} has no logs: source, so Bugpatrol reads no backend logs. Add one, then run a patrol:`,
+      ],
+      command: LOGS_EXAMPLE,
+      docs: `${DOCS}/dashboard.md#flow`,
+    });
+  if (report?.sweep && !report.steps)
+    return emptyState({
+      heading: 'A sweep has no flow',
+      why: [
+        what,
+        'This session is a sweep from bugpatrol sweep, which reads no logs. A patrol runs the sweep and reads the logs: sources too.',
+      ],
+      command: cli('patrol --once'),
+    });
+  return emptyState({
+    heading: 'No flow for this session',
+    why: [what, 'This session ran before the config had a logs: source. The next patrol writes a flow.'],
+    command: cli('patrol --once'),
+  });
 }
 
 function renderFlowRow(entry) {
@@ -1445,9 +2015,37 @@ async function openScreen(id) {
   await refresh();
 }
 
+/** Screens belong to a client app. For an API, the page says so and points to Coverage. */
+function noScreens() {
+  const clients = surfacesOf('client');
+  const apis = surfacesOf('api');
+  const coverage = { label: 'Open Coverage', onclick: () => go('coverage') };
+  if (!clients.length)
+    return emptyState({
+      heading: 'This project tests an API',
+      why: [
+        'Screens shows the screens that the explorer finds in a client app, and how they connect.',
+        `${apis[0]?.configs[0] ? fileName(apis[0].configs[0]) : 'The config'} tests an API, which has no screens. Coverage shows its endpoints and cases.`,
+        'A monorepo can test a client app too: add a config for it in .bugpatrol/.',
+      ],
+      action: coverage,
+    });
+  const client = clients[0];
+  return emptyState({
+    heading: 'No screens yet',
+    why: [
+      'Screens shows the screens that the explorer finds in a client app, and how they connect.',
+      `${client.configs[0] ? fileName(client.configs[0]) : 'This project'} tests the ${surfaceName(client).toLowerCase()}. The explorer did not find a screen yet.`,
+      apis.length ? 'This project also tests an API. Coverage shows its endpoints.' : '',
+    ].filter(Boolean),
+    command: cli('explore', client),
+  });
+}
+
 function renderScreens() {
   const graphScreens = state.appmap?.screens ?? [];
   const screens = graphScreens.filter((screen) => !screen.virtual);
+  if (!screens.length) return el('section', { class: 'card panel' }, [title('Screens'), noScreens()]);
   const edges = state.appmap?.edges ?? [];
   const selected = screens.find((screen) => screen.id === state.selectedScreenId);
   if (selected) {
@@ -1516,38 +2114,48 @@ function renderScreens() {
       }),
     ),
   );
+  const apis = surfacesOf('api');
   return el('div', {}, [
     title('Screens', `${screens.length} found`),
+    apis.length
+      ? el('p', { class: 'muted surface-note' }, [
+          `This project also tests an API${apis[0].configs[0] ? ` (${fileName(apis[0].configs[0])})` : ''}. `,
+          el('button', {
+            type: 'button',
+            class: 'link',
+            text: 'Coverage shows its endpoints.',
+            onclick: () => go('coverage'),
+          }),
+        ])
+      : null,
     toggle,
-    screens.length === 0
-      ? el('div', { class: 'empty', text: 'No screens found yet.' })
-      : screenMode === 'graph'
-        ? renderScreenGraph(graphScreens, edges)
-        : el(
-            'div',
-            { class: 'screen-grid' },
-            screens.map((screen) =>
-              el(
-                'button',
-                {
-                  class: 'card screen-card',
-                  onclick: () => openScreen(screen.id),
-                },
-                [
-                  captureFile(screen.lastCapture, screen.name),
-                  el('div', { class: 'screen-copy' }, [
-                    el('strong', { text: screen.name }),
-                    el('p', { class: 'truncate muted', text: screen.description }),
-                    el('small', {
-                      class: 'muted',
-                      text: `${relativeTime(screen.lastSeenAt)} · ${screen.visits} visits`,
-                    }),
-                    screen.openIssues ? el('span', { class: 'issue-count', text: `${screen.openIssues} open` }) : null,
-                  ]),
-                ],
-              ),
+    screenMode === 'graph'
+      ? renderScreenGraph(graphScreens, edges)
+      : el(
+          'div',
+          { class: 'screen-grid' },
+          screens.map((screen) =>
+            el(
+              'button',
+              {
+                class: 'card screen-card',
+                onclick: () => openScreen(screen.id),
+              },
+              [
+                captureFile(screen.lastCapture, screen.name),
+                el('div', { class: 'screen-copy' }, [
+                  el('strong', { text: screen.name }),
+                  el('p', { class: 'truncate muted', text: screen.description }),
+                  el('small', {
+                    class: 'muted',
+                    text: `${relativeTime(screen.lastSeenAt)} · ${screen.visits} visits`,
+                  }),
+                  screen.openIssues ? el('span', { class: 'issue-count', text: `${screen.openIssues} open` }) : null,
+                ]),
+              ],
             ),
           ),
+        ),
   ]);
 }
 
@@ -1824,11 +2432,21 @@ async function openReview(number) {
 }
 
 function renderReviews() {
+  if (!state.reviews.length)
+    return el('section', { class: 'card panel' }, [
+      title('Pull request reviews'),
+      emptyState({
+        heading: 'No pull request reviews yet',
+        why: [
+          'A review tests one pull request in the running app. It checks each claim of the pull request and lists the problems that the pull request adds.',
+          'Bugpatrol did not review a pull request in this project yet. Give the number of a pull request:',
+        ],
+        command: cli('review <pr>'),
+        docs: `${DOCS}/github.md`,
+      }),
+    ]);
   const list = el('div', { class: 'card panel' }, [
     title('Pull request reviews', `${state.reviews.length}`),
-    state.reviews.length
-      ? null
-      : el('p', { class: 'empty', text: 'No reviews yet. Run bugpatrol review <pr> to review a pull request.' }),
     ...state.reviews.map((review) =>
       el(
         'button',
@@ -2119,6 +2737,18 @@ function renderMemory() {
       el('span', { class: 'badge info', text: lesson.scope ?? 'app' }),
       el('span', { class: 'muted', text: `${lesson.source} · ×${lesson.hits} · ${relativeTime(lesson.lastSeenAt)}` }),
     ]);
+  if (!lessons.length)
+    return el('section', { class: 'card panel' }, [
+      title('Memory'),
+      emptyState({
+        heading: 'No lessons yet',
+        why: [
+          'A lesson is a fact about the app that an agent keeps for its next sessions, for example how to sign in.',
+          'The agents save lessons when they learn something. You can also add one:',
+        ],
+        command: cli('memory add --role explorer "text"'),
+      }),
+    ]);
   return el('section', { class: 'card panel' }, [
     title('Memory'),
     el('p', { class: 'muted', text: 'Use bugpatrol memory to edit lessons.' }),
@@ -2162,55 +2792,162 @@ function caseHeader(id) {
 const LEGEND = { pass: '200', fail: '500', blocked: 'blocked', skip: 'skip', untested: 'untested' };
 const CELL_BADGE = { pass: 'pass', fail: 'fail', blocked: 'warn' };
 
-/** The exchange behind one cell, as the server formats it. */
+/** The exchange behind one cell, as the server formats it, in a panel at the side of the matrix. */
 function renderCellExchange(key, cell) {
   const space = key.lastIndexOf(' ');
   const label = `${key.slice(0, space)} · ${caseHeader(key.slice(space + 1))[0]}`;
   const reason = cell.state === 'fail' ? `Failed checks: ${cell.reason}` : cell.reason;
-  return el('section', { class: 'matrix-exchange' }, [
+  return el('aside', { class: 'drawer card', 'aria-label': 'The exchange of the cell' }, [
     el('div', { class: 'section-title' }, [
-      el('h2', { text: label }),
+      el('h2', { class: 'mono', text: label }),
       el('span', { class: `badge ${CELL_BADGE[cell.state] ?? 'info'}`, text: cell.state }),
+      el('button', {
+        type: 'button',
+        class: 'close',
+        'aria-label': 'Close the exchange',
+        text: '×',
+        onclick: () => {
+          state.selectedCell = null;
+          render();
+        },
+      }),
     ]),
     reason ? el('p', { class: 'muted', text: reason }) : null,
     captureFile(cell.exchange, label),
   ]);
 }
 
-/** The endpoint × case matrix of the last sweeps. A cell shows the status that the case got. */
+/** Coverage for each surface of the project: the endpoints of an API, the screens of a client app. */
 function renderCoverage() {
-  const data = state.coverage;
-  if (!data) return el('div', { class: 'empty', text: 'Loading coverage…' });
-  const { endpoints, cases, cells } = data;
-  // A `declared:<code>` cell copies the cell of its case, so the totals count the cases only.
-  const own = Object.entries(cells).filter(([key]) => !/ declared:\d+$/.test(key));
-  const tested = own.filter(([, cell]) => cell.state === 'pass' || cell.state === 'fail');
-  const covered = new Set(tested.map(([key]) => key.slice(0, key.lastIndexOf(' '))));
-  const failures = tested.filter(([, cell]) => cell.state === 'fail').length;
-
-  const cellView = (endpoint, id) => {
-    const key = `${endpoint} ${id}`;
-    const cell = cells[key];
-    if (!cell) return el('td', { class: 'matrix-none', title: 'The sweep makes no such case for this endpoint' });
-    const text = cell.status ?? cell.state;
-    const tip = [CELL_WORDS[cell.state], cell.reason, cell.at ? relativeTime(cell.at) : ''].filter(Boolean);
-    const props = { class: `matrix-cell ${cell.state}${state.selectedCell === key ? ' active' : ''}`, text };
-    return el('td', {}, [
-      cell.exchange
-        ? el('button', {
-            ...props,
-            type: 'button',
-            title: [...tip, 'Click to open the exchange'].join('\n'),
-            onclick: () => {
-              state.selectedCell = state.selectedCell === key ? null : key;
-              render();
-            },
-          })
-        : el('span', { ...props, title: tip.join('\n') }),
+  const summary = state.summary;
+  if (!summary.surfaces.length)
+    return el('section', { class: 'card panel' }, [
+      title('Coverage'),
+      emptyState({
+        heading: 'No config yet',
+        why: 'Coverage shows what Bugpatrol tested: the screens of a client app and the endpoints of an API.',
+        command: 'bugpatrol init',
+      }),
     ]);
+  return el(
+    'div',
+    { class: 'stack-gap' },
+    summary.surfaces.map((surface) =>
+      surface.kind === 'api' ? renderApiCoverage(surface) : renderScreenCoverage(surface),
+    ),
+  );
+}
+
+function surfaceTitle(surface, aside) {
+  return el('div', { class: 'section-title' }, [
+    el('h2', {}, [
+      surfaceName(surface),
+      surface.configs[0]
+        ? el('span', { class: 'muted mono config-name', text: ` ${fileName(surface.configs[0])}` })
+        : null,
+    ]),
+    aside ? el('span', { class: 'muted', text: aside }) : null,
+  ]);
+}
+
+function renderScreenCoverage(surface) {
+  const totals = state.summary.coverage.screens;
+  const screens = (state.appmap?.screens ?? []).filter((screen) => !screen.virtual);
+  if (!totals?.found)
+    return el('section', { class: 'card panel' }, [
+      surfaceTitle(surface),
+      screenCoverageBlock(null, state.summary, surface),
+    ]);
+  const open = state.issues.filter((issue) => !['fixed', 'dismissed'].includes(issue.status));
+  const rows = screens
+    .map((screen) => ({ screen, issues: open.filter((issue) => issue.screenId === screen.id).length }))
+    .sort((a, b) => b.issues - a.issues || a.screen.name.localeCompare(b.screen.name));
+  return el('section', { class: 'card panel' }, [
+    surfaceTitle(surface, 'Screens that the explorer found'),
+    statBand([
+      { label: 'Screens found', value: number(totals.found) },
+      { label: 'With a routine', value: number(totals.replayable), note: 'Bugpatrol can reach them again' },
+      {
+        label: 'With open issues',
+        value: number(totals.withIssues),
+        tone: totals.withIssues ? 'fail' : undefined,
+        note: `${number(open.length)} open issues in all`,
+      },
+    ]),
+    el('table', { class: 'usage-table screen-table' }, [
+      el(
+        'tr',
+        {},
+        ['Screen', 'Visits', 'Routine', 'Open issues', 'Last seen'].map((text) => el('th', { text })),
+      ),
+      ...rows.map(({ screen, issues }) =>
+        el('tr', {}, [
+          el('td', {}, [
+            el('button', { type: 'button', class: 'link', text: screen.name, onclick: () => openScreen(screen.id) }),
+          ]),
+          el('td', { text: number(screen.visits) }),
+          el('td', { text: screen.routineId ? 'Yes' : 'No' }),
+          el('td', {}, [
+            issues
+              ? el('span', { class: 'issue-count', text: `${issues} open` })
+              : el('span', { class: 'muted', text: '0' }),
+          ]),
+          el('td', { text: relativeTime(screen.lastSeenAt) }),
+        ]),
+      ),
+    ]),
+  ]);
+}
+
+/**
+ * The rank of an endpoint: 0 with a failed case, 1 with a passed case, 2 with
+ * a case that waits in the cursor, and 3 when the sweep skipped or blocked all of its cases.
+ */
+function endpointRank(endpoint, cases, cells) {
+  let rank = 3;
+  for (const id of cases) {
+    const cell = cells[`${endpoint} ${id}`]?.state;
+    if (cell === 'fail') return 0;
+    if (cell === 'pass') rank = 1;
+    if (cell === 'untested') rank = Math.min(rank, 2);
+  }
+  return rank;
+}
+
+function renderApiCoverage(surface) {
+  const totals = state.summary.coverage.api;
+  const data = state.coverage;
+  if (!totals || !data)
+    return el('section', { class: 'card panel' }, [surfaceTitle(surface), apiCoverageBlock(undefined, surface)]);
+  const { cases, cells } = data;
+  const own = CELL_STATES.reduce((sum, name) => sum + totals.cases[name], 0);
+  const ranks = new Map(data.endpoints.map((endpoint) => [endpoint, endpointRank(endpoint, cases, cells)]));
+  const endpoints = [...data.endpoints].sort((a, b) => ranks.get(a) - ranks.get(b));
+  const filter = state.coverageFilter;
+  const tbody = el('tbody', {
+    onclick: (event) => {
+      const button = event.target.closest('button[data-key]');
+      if (!button) return;
+      const key = button.dataset.key;
+      state.selectedCell = state.selectedCell === key ? null : key;
+      render();
+    },
+  });
+  const shown = el('span', { class: 'muted' });
+  const fill = () => {
+    const query = filter.query.trim().toLowerCase();
+    const rows = endpoints.filter(
+      (endpoint) =>
+        (!filter.failedOnly || ranks.get(endpoint) === 0) &&
+        (!filter.hideSkipped || ranks.get(endpoint) < 3) &&
+        (!query || endpoint.toLowerCase().includes(query)),
+    );
+    tbody.replaceChildren(...rows.map((endpoint) => matrixRow(endpoint, cases, cells)));
+    shown.textContent = `${number(rows.length)} of ${number(endpoints.length)} endpoints`;
   };
+  fill();
   const declared = cases.filter((id) => id.startsWith('declared:')).length;
-  const table = el('table', { class: 'matrix' }, [
+  const table = el('table', { class: `matrix${filter.hideSkipped ? ' hide-skipped' : ''}` }, [
     el('thead', {}, [
       // The declared columns repeat a case that got that status, so they get their own group.
       declared
@@ -2229,38 +2966,107 @@ function renderCoverage() {
         }),
       ]),
     ]),
-    el(
-      'tbody',
-      {},
-      endpoints.map((endpoint) => {
-        const space = endpoint.indexOf(' ');
-        return el('tr', {}, [
-          el('th', { scope: 'row' }, [
-            el('span', { class: 'method', text: endpoint.slice(0, space) }),
-            el('code', { text: endpoint.slice(space + 1) }),
-          ]),
-          ...cases.map((id) => cellView(endpoint, id)),
-        ]);
-      }),
-    ),
+    tbody,
   ]);
+  const toggle = (key, label) =>
+    el('label', { class: 'toggle' }, [
+      el('input', {
+        type: 'checkbox',
+        ...(filter[key] ? { checked: '' } : {}),
+        onchange: (event) => {
+          filter[key] = event.target.checked;
+          table.classList.toggle('hide-skipped', filter.hideSkipped);
+          fill();
+        },
+      }),
+      el('span', { text: label }),
+    ]);
   const selected = state.selectedCell && cells[state.selectedCell];
   return el('section', { class: 'card panel' }, [
-    title('Coverage', 'Endpoint × case, from the sweep'),
-    el('div', { class: 'matrix-legend' }, [
-      ...Object.entries(LEGEND).map(([name, sample]) =>
-        el('span', {}, [el('span', { class: `matrix-cell ${name}`, text: sample }), name]),
-      ),
-      el('span', { text: 'A blank cell: the sweep makes no such case.' }),
+    surfaceTitle(surface, 'Endpoint × case, from the sweep'),
+    statBand([
+      {
+        label: 'Endpoints tested',
+        value: percent(totals.tested, totals.endpoints),
+        note: `${number(totals.tested)} of ${number(totals.endpoints)}`,
+      },
+      {
+        label: 'All cases',
+        value: number(own),
+        bar: caseBar(totals.cases),
+        note: `${number(totals.cases.pass)} pass · ${number(totals.cases.fail)} fail`,
+      },
+      {
+        label: 'Failed',
+        value: number(totals.cases.fail),
+        tone: totals.cases.fail ? 'fail' : undefined,
+        note: `${percent(totals.cases.fail, totals.cases.pass + totals.cases.fail)} of the cases that ran`,
+      },
+      {
+        label: 'Blocked · skipped',
+        value: `${number(totals.cases.blocked)} · ${number(totals.cases.skip)}`,
+        note: 'The sweep could not run them, or the policy refuses them',
+      },
+      {
+        label: 'Wait in the cursor',
+        value: number(totals.remaining),
+        note: totals.remaining ? 'The next sweep runs them first' : 'This pass is complete',
+      },
     ]),
-    el('div', { class: 'matrix-scroll' }, [table]),
-    el('p', {
-      class: 'muted matrix-footer',
-      text:
-        `${covered.size} of ${endpoints.length} endpoints covered · ${tested.length} of ${own.length} cases covered · ` +
-        `${failures} ${failures === 1 ? 'failure' : 'failures'} · ${data.remaining} ${data.remaining === 1 ? 'case waits' : 'cases wait'} for the next sweep`,
-    }),
+    el('div', { class: 'matrix-tools' }, [
+      el('input', {
+        type: 'search',
+        class: 'search',
+        placeholder: 'Search the paths',
+        'aria-label': 'Search the endpoint paths',
+        value: filter.query,
+        oninput: (event) => {
+          filter.query = event.target.value;
+          fill();
+        },
+      }),
+      toggle('failedOnly', 'Failed only'),
+      toggle('hideSkipped', 'Hide skipped and blocked'),
+      shown,
+      el('div', { class: 'matrix-legend' }, [
+        ...Object.entries(LEGEND).map(([name, sample]) =>
+          el('span', {}, [el('span', { class: `matrix-cell ${name}`, text: sample }), name]),
+        ),
+        el('span', { text: 'Blank: the sweep makes no such case.' }),
+      ]),
+    ]),
+    el('div', { class: 'matrix-scroll', 'data-keep-scroll': '' }, [table]),
     selected ? renderCellExchange(state.selectedCell, selected) : null,
+  ]);
+}
+
+function matrixRow(endpoint, cases, cells) {
+  const space = endpoint.indexOf(' ');
+  return el('tr', {}, [
+    el('th', { scope: 'row' }, [
+      el('span', { class: 'method', text: endpoint.slice(0, space) }),
+      el('code', { text: endpoint.slice(space + 1) }),
+    ]),
+    ...cases.map((id) => {
+      const key = `${endpoint} ${id}`;
+      const cell = cells[key];
+      if (!cell) return el('td', { class: 'matrix-none', title: 'The sweep makes no such case for this endpoint' });
+      const tip = [CELL_WORDS[cell.state], cell.reason, cell.at ? relativeTime(cell.at) : ''].filter(Boolean);
+      const props = {
+        class: `matrix-cell ${cell.state}${state.selectedCell === key ? ' active' : ''}`,
+        text: cell.status ?? cell.state,
+      };
+      return el('td', { class: `cell-${cell.state}` }, [
+        cell.exchange
+          ? el('button', {
+              ...props,
+              type: 'button',
+              'data-key': key,
+              title: [...tip, 'Click to open the exchange'].join('\n'),
+            })
+          : el('span', { ...props, title: tip.join('\n') }),
+      ]);
+    }),
   ]);
 }
 
