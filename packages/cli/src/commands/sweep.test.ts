@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExitCode, parseConfig, paths } from '@bugpatrol/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseSweepFlags, runSweepCommand } from './sweep.js';
 
 const spec = {
@@ -61,5 +61,21 @@ describe('bugpatrol sweep', () => {
     expect(plan.skipped).toEqual([{ key: 'POST /admin/reset ok', reason: 'app.connect.deny has /admin/**' }]);
     expect(hits).toBe(0);
     expect(existsSync(paths.coverage(root))).toBe(false);
+  });
+
+  it('prints only the JSON on stdout, and the setup progress on stderr', async () => {
+    const config = parseConfig({
+      version: 1,
+      app: { platform: 'api', setup: [{ run: 'true' }], connect: { url, spec: 'openapi.json', deny: ['/admin/**'] } },
+    });
+    const lines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await runSweepCommand(['--json'], root, config, (line) => lines.push(line));
+      expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/^Setup: ran `true`/));
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(JSON.parse(lines.join('\n'))).toMatchObject({ requests: expect.any(Number) });
   });
 });

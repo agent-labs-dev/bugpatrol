@@ -81,7 +81,9 @@ export async function runSweepCommand(
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
-    app = await startApp(config.app, { root, vars, emit: log });
+    // The JSON on stdout must parse, so the setup progress goes to stderr.
+    const progress = flags.json ? (line: string) => process.stderr.write(`${line}\n`) : log;
+    app = await startApp(config.app, { root, vars, emit: progress });
     driver = createDriver(
       config,
       vars.resolve.bind(vars),
