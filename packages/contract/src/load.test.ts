@@ -117,6 +117,7 @@ describe('specSource', () => {
       url: 'http://127.0.0.1:8000/api/openapi.json',
     });
     expect(specSource('docs/openapi.yaml', { root: '/repo' })).toEqual({ file: '/repo/docs/openapi.yaml' });
+    expect(specSource('file:///specs/openapi.json', { root: '/repo' })).toEqual({ file: '/specs/openapi.json' });
     expect(() => specSource('/openapi.json', { root: '/repo' })).toThrow(/connect.url is not set/);
   });
 });

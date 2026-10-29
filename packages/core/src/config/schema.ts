@@ -188,8 +188,8 @@ export const appSchema = z
         timeoutMs: z.number().int().positive().max(120000).default(30000),
         /**
          * API: the OpenAPI spec. An http(s) URL, a path on connect.url such as
-         * /openapi.json, or a file relative to the project root. Bugpatrol
-         * never uses its `servers` value.
+         * /openapi.json, a file relative to the project root, or an absolute
+         * file as a file: URL. Bugpatrol never uses its `servers` value.
          */
         spec: z.string().optional(),
         /** API: the error statuses every endpoint may return, and the JSON Schema of their body. */

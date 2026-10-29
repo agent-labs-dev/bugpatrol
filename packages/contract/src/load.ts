@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ConfigError, HTTP_METHODS, type HttpMethod, InfrastructureError, paths } from '@bugpatrol/core';
 import { parse as parseYaml } from 'yaml';
 
@@ -31,10 +32,12 @@ const MiB = 1024 * 1024;
 
 /**
  * Where `app.connect.spec` points: an http(s) URL, a path on connect.url
- * such as `/openapi.json`, or a file relative to the project root.
+ * such as `/openapi.json`, a file relative to the project root, or an
+ * absolute file as a `file:` URL.
  */
 export function specSource(spec: string, base: { root: string; url?: string }): SpecSource {
   if (/^https?:\/\//i.test(spec)) return { url: spec };
+  if (/^file:/i.test(spec)) return { file: fileURLToPath(spec) };
   if (!spec.startsWith('/')) return { file: resolve(base.root, spec) };
   if (!base.url) throw new ConfigError(`app.connect.spec ${spec} is a path on connect.url, and connect.url is not set`);
   return { url: `${base.url.replace(/\/+$/, '')}${spec}` };
