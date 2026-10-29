@@ -1,8 +1,10 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_CHECKS, parseConfig, paths } from '@bugpatrol/core';
+import { startFixtureApi } from '@bugpatrol/api-fixture';
+import { AGENT_CHECKS, type Candidate, parseConfig, paths } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
+import { runPatrol } from './patrol.js';
 import { replayRoutine } from './replay.js';
 import { AgentSession } from './session.js';
 import { FakeDriver, type FakeScreen } from './testing/fake-driver.js';
@@ -520,5 +522,136 @@ describe('explorer, replay, and judge', () => {
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('api explorer and judge on the fixture, with a scripted model', () => {
+  /**
+   * One patrol cycle: the sweep, then a scripted explorer that reads item 1
+   * of user a as user b and reads /health, then a scripted judge that files
+   * each explorer candidate and dismisses the sweep candidates.
+   */
+  async function patrol() {
+    const fixture = await startFixtureApi({ perSecond: 1000 });
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-api-flow-'));
+    const config = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        connect: {
+          url: fixture.url,
+          spec: '/openapi.json',
+          credentials: {
+            self: { headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' } },
+            other: { headers: { Authorization: 'Bearer fixture-token-b', 'X-Workspace-Id': 'ws-b' } },
+          },
+          errors: { statuses: [401, 409] },
+          deny: ['/admin/**'],
+          perMinute: 60_000,
+        },
+      },
+      agents: { fixer: { enabled: false }, patrol: { cycles: 1 } },
+    });
+    const seen: { explorer?: string; judge?: string; candidates: Candidate[] } = { candidates: [] };
+    try {
+      const result = await runPatrol({
+        root,
+        config,
+        once: true,
+        force: true,
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            const tool = (name: string) => task.tools.find((item) => item.name === name)!;
+            if (task.role === 'explorer') {
+              seen.explorer = task.prompt;
+              await tool('request').run({ method: 'GET', url: '/items/1', as: 'other', case: 'other-user' });
+              expect(
+                (
+                  await tool('report_bug').run({
+                    screen_id: 'unrecorded',
+                    title: 'User b learns that item 1 of user a exists',
+                    what_is_wrong: 'GET /items/1 as user b gives 403',
+                    expected: '404, so the item stays hidden',
+                    severity: 'major',
+                    rule: 'other-user-data',
+                    shows: 'forbidden',
+                  })
+                ).isError,
+              ).toBeFalsy();
+              await tool('request').run({ method: 'GET', url: '/health' });
+              await tool('report_bug').run({
+                screen_id: 'unrecorded',
+                title: 'Health says ok while the database is down',
+                what_is_wrong: 'status is ok and db is down',
+                expected: 'status is not ok when db is down',
+                severity: 'major',
+                rule: 'body-contradicts-status',
+                shows: 'down',
+              });
+              return { stop: 'done', steps: 4, costUsd: 0, summary: 'Done' };
+            }
+            seen.judge = task.system;
+            const sessionId = task.prompt.match(/session\(s\) (\S+)\./)![1]!;
+            seen.candidates = await new Workspace(root).readCandidates(sessionId);
+            for (const candidate of seen.candidates) {
+              await (candidate.source === 'explorer'
+                ? tool('file_issue').run({
+                    candidate_ids: [candidate.id],
+                    title: candidate.summary,
+                    body: candidate.detail ?? candidate.summary,
+                    severity: candidate.severity,
+                    reason: 'The exchange breaks an API rule',
+                  })
+                : tool('dismiss').run({ candidate_ids: [candidate.id], reason: 'Covered by the sweep test' }));
+            }
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      const issues = await new Workspace(root).listIssues();
+      return { result, issues, seen, coverage: await new Workspace(root).readCoverage() };
+    } finally {
+      await fixture.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  // One cycle for both tests: it runs the full sweep.
+  let cycle: ReturnType<typeof patrol> | undefined;
+  const once = () => {
+    cycle ??= patrol();
+    return cycle;
+  };
+
+  it('files bug 3 as other-user', async () => {
+    const { result, issues, seen, coverage } = await once();
+    expect(result.problems).toEqual([]);
+    expect(seen.explorer).toContain('ENDPOINTS TO TEST FIRST');
+    expect(seen.judge).toContain('API RULES');
+    expect(seen.judge).toContain('Account enumeration depends on context. The judge gives "unclear".');
+    expect(seen.judge).toContain('Latency is not a bug. It shows as information only.');
+
+    const bug3 = issues.find((issue) => issue.title.startsWith('User b learns'))!;
+    expect(bug3.evidence.steps).toEqual([expect.objectContaining({ method: 'GET', url: '/items/1', as: 'other' })]);
+    expect(bug3.evidence.capture).toMatchObject({ kind: 'http', exchange: { response: { status: 403 } } });
+    expect(JSON.stringify(bug3.evidence)).not.toContain('fixture-token-b');
+    expect(coverage?.cells['GET /items/{id} other-user']).toMatchObject({ status: 403, ok: false });
+    // The sweep found bug 3 too, with the second credential set, and it repeats.
+    expect(
+      seen.candidates.find((candidate) => candidate.source === 'sweep' && candidate.ruleId === 'sweep:other-user'),
+    ).toMatchObject({ blocking: true });
+  });
+
+  it('bug 6 is non-blocking', async () => {
+    const { issues, seen } = await once();
+
+    const bug6 = issues.find((issue) => issue.title.startsWith('Health says ok'))!;
+    expect(bug6.evidence.capture).toMatchObject({ kind: 'http', exchange: { response: { status: 200 } } });
+    const explorer = seen.candidates.filter((candidate) => candidate.source === 'explorer');
+    expect(explorer.map((candidate) => [candidate.ruleId, candidate.blocking])).toEqual([
+      ['judge:other-user-data', false],
+      ['judge:body-contradicts-status', false],
+    ]);
   });
 });

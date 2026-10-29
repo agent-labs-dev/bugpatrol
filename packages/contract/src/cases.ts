@@ -20,6 +20,10 @@ export type SweepCaseId = Exclude<CaseId, `declared:${number}`>;
  */
 export type SweepCase = { endpoint: Endpoint; case: SweepCaseId; steps: RoutineStep[]; blocked?: string };
 
+/**
+ * `credentials`: the sets that send at least one header. With none, a
+ * no-auth case would send the same request as the ok case, so it is blocked.
+ */
 export type SweepOptions = { credentials: Exclude<CredentialSet, 'none'>[] };
 
 /** The key of a case in the coverage file and the sweep cursor. */
@@ -66,7 +70,11 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
     if (negative && noAuth && plan.needsAuth())
       add(
         'no-auth',
-        isBlocked(base) ? base : [...base.setup, plan.request(base, { as: 'none', assert: checks(noAuth) })],
+        !options.credentials.length
+          ? { blocked: 'no credentials configured' }
+          : isBlocked(base)
+            ? base
+            : [...base.setup, plan.request(base, { as: 'none', assert: checks(noAuth) })],
       );
 
     const invalid = expected('invalid-input');

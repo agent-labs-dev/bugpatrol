@@ -191,12 +191,14 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
         { kind: 'http', exchange: session.vars.redact(first.exchange) as HttpExchange },
         `sweep-${item.case}`,
       ));
+    const repeats = differs === undefined;
     const cell: CoverageCell = {
       endpoint: item.endpoint.key,
       case: item.case,
       ...(first.status === undefined ? {} : { status: first.status }),
       ok: !first.blocked && !ids.length,
       failed: ids,
+      ...(!first.blocked && ids.length ? { repeats } : {}),
       ...(first.blocked ? { blocked: first.blocked } : {}),
       ...(exchange ? { exchange } : {}),
       at: now(),
@@ -207,7 +209,6 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
       write({ ...cell, case: `declared:${first.status}` });
     next.splice(next.indexOf(key), 1);
     if (ids.length) {
-      const repeats = differs === undefined;
       const words = first.results.filter((r) => !r.ok).map((r) => assertionWords(r, true));
       const finding: SweepFinding = {
         key,
@@ -304,9 +305,9 @@ const findingFingerprint = (finding: SweepFinding) =>
 /**
  * The key of an explorer report on an api: the same key as a sweep failure of
  * the same check on the same case, so both go to one issue. A report that no
- * contract check confirms is a bug that only the judge sees, `judge:explorer`.
+ * contract check confirms is a bug that only the judge sees, `judge:<rule>`.
  */
-export function reportFingerprint(session: AgentSession): string | undefined {
+export function reportFingerprint(session: AgentSession, rule?: string): string | undefined {
   const { driver, lastObservation: screen } = session;
   if (!(driver instanceof ApiDriver) || screen?.capture.kind !== 'http' || !screen.capture.exchange) return undefined;
   const { request } = screen.capture.exchange;
@@ -321,7 +322,7 @@ export function reportFingerprint(session: AgentSession): string | undefined {
     // A read outside the spec keeps its own method and path as its name.
     endpoint: endpoint?.key ?? (`${request.method} ${request.path.split('?')[0]}` as EndpointKey),
     case: as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok',
-    assertionId: failed ? assertionId(failed.assertion) : 'judge:explorer',
+    assertionId: failed ? assertionId(failed.assertion) : `judge:${rule ?? 'explorer'}`,
   });
 }
 

@@ -53,6 +53,8 @@ export type CoverageCell = {
   ok: boolean;
   /** The assertion ids that failed. */
   failed: string[];
+  /** A sweep failure: it came back on a second run. The explorer looks first at one that did not. */
+  repeats?: boolean;
   /** Why the case did not run, for example "no known id". A blocked cell proves nothing. */
   blocked?: string;
   /** The workspace-relative `.exchange.json` file of the checked request. */

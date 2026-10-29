@@ -1,3 +1,5 @@
+import { ApiDriver } from '@bugpatrol/drivers';
+import { rankForExplorer } from '../coverage.js';
 import { noGuide, readGuide } from '../guide.js';
 import { explorerPrompt, explorerSystem } from '../prompts.js';
 import type { AgentSession } from '../session.js';
@@ -5,6 +7,9 @@ import { explorerTools } from '../tools/explorer.js';
 import type { RoleOutcome, Runtime, Tool } from '../types.js';
 import { lessonsFor } from '../workspace.js';
 import { reflectOnSession } from './reflect.js';
+
+/** How many endpoints an api explorer gets to test first in one run. */
+const ENDPOINTS_PER_RUN = 10;
 
 const STOP_REASONS: Record<RoleOutcome['stop'], string> = {
   done: 'finished',
@@ -52,6 +57,13 @@ export async function runExplorer(
   const routines = await session.workspace.listRoutines();
   const guide = await readGuide(session.root, session.config);
   if (guide.text === undefined) session.emit({ kind: 'setup', summary: noGuide(session.root, guide) });
+  const api = session.driver instanceof ApiDriver ? session.driver : undefined;
+  const endpoints = api
+    ? rankForExplorer(await session.workspace.readCoverage(), api.policy.contract, ENDPOINTS_PER_RUN, {
+        writesAllowed: api.policy.writesAllowed,
+        crossUser: api.credentialSets.includes('other'),
+      })
+    : undefined;
   const task = {
     role: 'explorer' as const,
     sessionId: session.sessionId,
@@ -67,6 +79,7 @@ export async function runExplorer(
       routines,
       placeholders: session.vars.names(),
       maxSteps: opts.maxSteps ?? config.maxSteps,
+      endpoints,
     }),
     tools: explorerTools(session).map((tool) => stopOnCancellation(session, tool)),
     maxSteps: opts.maxSteps ?? config.maxSteps,

@@ -1,7 +1,7 @@
 import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
 import type { AssertionResult } from '@bugpatrol/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type ContractResponse, checkContract, checkSchema } from './check.js';
+import { type ContractResponse, checkContract, checkSchema, expectedContract } from './check.js';
 import { buildContract, type Contract } from './contract.js';
 import { loadSpec } from './load.js';
 
@@ -142,5 +142,20 @@ describe('checkContract', () => {
     expect(verdicts(checkContract(broken.endpoints[0]!, raw, broken)).schema).toMatch(
       /^failed: the schema does not compile: strict mode: unknown keyword: "minProperty"/,
     );
+  });
+});
+
+describe('expectedContract', () => {
+  it('names each declared response with its schema, and the statuses of connect.errors', async () => {
+    const contract = buildContract(await loadSpec({ file: fixtureSpecPath }), {
+      errors: { statuses: [401], schema: { type: 'object' } },
+    });
+    const create = contract.endpoints.find((endpoint) => endpoint.key === 'POST /items')!;
+    expect(expectedContract(create, contract).split('\n')).toEqual([
+      'Expected contract of POST /items (createItem):',
+      expect.stringMatching(/^- 201: application\/json #\/components\/schemas\/ItemResult = \{"type":"object"/),
+      expect.stringMatching(/^- 422: application\/json #\/components\/schemas\/Error = /),
+      '- 401 (connect.errors): {"type":"object"}',
+    ]);
   });
 });

@@ -242,6 +242,8 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
           );
           await driver.connect();
           let explorerId: string | undefined;
+          // L14: an explorer that runs out of time still has candidates, so the judge runs before the cycle fails.
+          let timedOut: RoleOutcome | undefined;
           if (config.agents.explorer.enabled && !interrupted) {
             const record = await workspace.startSession('explorer');
             explorerId = record.id;
@@ -256,7 +258,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
                   if (!interrupted && driver instanceof ApiDriver) {
                     const sweep = await runSweep(
                       session,
-                      sweepCases(driver.policy.contract, { credentials: ['self'] }),
+                      sweepCases(driver.policy.contract, { credentials: driver.credentialSets }),
                       config.agents.sweep,
                     );
                     options.onLog?.(
@@ -265,7 +267,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
                     );
                   }
                   if (!interrupted) {
-                    unfinished('Explorer', await runExplorer(session, runtime(config.agents.explorer.use)));
+                    const outcome = await runExplorer(session, runtime(config.agents.explorer.use));
+                    if (outcome.stop === 'timeout') timedOut = outcome;
+                    else unfinished('Explorer', outcome);
                   } else {
                     await workspace.endSession(record.id, { summary: 'Interrupted' });
                   }
@@ -284,6 +288,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
               await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId] }),
             );
           }
+          if (timedOut) unfinished('Explorer', timedOut);
         } catch (error) {
           activeSession = undefined;
           const problem = `Cycle ${cycle}: ${String(error)}`;

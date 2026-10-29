@@ -11,7 +11,7 @@ import {
 } from '@bugpatrol/agents';
 import { buildContract, projectDoc, requestPolicy, sweepCases } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError, type CoverageFile, ExitCode, type ExitCodeValue } from '@bugpatrol/core';
-import { ApiDriver, createDriver } from '@bugpatrol/drivers';
+import { ApiDriver, apiCredentials, createDriver, credentialSets } from '@bugpatrol/drivers';
 
 type SweepFlags = { json: boolean; dryRun: boolean; maxRequests?: number };
 
@@ -60,7 +60,8 @@ export async function runSweepCommand(
     });
     const contract = buildContract(doc ?? { openapi: '3.1.0', paths: {} }, connect);
     const policy = requestPolicy(contract, { ...connect, url: vars.resolveConfig(url) });
-    const plan = planSweep(sweepCases(contract, { credentials: ['self'] }), policy, await workspace.readCoverage());
+    const credentials = credentialSets(apiCredentials(connect, (value) => value));
+    const plan = planSweep(sweepCases(contract, { credentials }), policy, await workspace.readCoverage());
     printPlan(plan, budget.maxRequests, flags.json, log);
     return ExitCode.Clean;
   }
@@ -87,7 +88,7 @@ export async function runSweepCommand(
     await driver.connect();
     const record = await workspace.startSession('explorer');
     session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
-    const cases = sweepCases(driver.policy.contract, { credentials: ['self'] });
+    const cases = sweepCases(driver.policy.contract, { credentials: driver.credentialSets });
     const result = await runSweep(session, cases, budget);
     const blocking = result.findings.filter((finding) => finding.repeats && !finding.dismissed).length;
     await workspace.endSession(record.id, {

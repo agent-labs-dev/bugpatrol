@@ -123,6 +123,13 @@ describe('sweepCases', () => {
     ]);
   });
 
+  it('blocks the no-auth cases when no credential headers are configured', async () => {
+    const contract = buildContract(await loadSpec({ file: fixtureSpecPath }), { errors: { statuses: [401] } });
+    const noAuth = sweepCases(contract, { credentials: [] }).filter((item) => item.case === 'no-auth');
+    expect(noAuth.length).toBeGreaterThan(0);
+    expect(new Set(noAuth.map((item) => item.blocked))).toEqual(new Set(['no credentials configured']));
+  });
+
   it('gives no negative case without a declared status for it', async () => {
     const contract = buildContract(await loadSpec({ file: fixtureSpecPath }), {});
     const kinds = new Set(sweepCases(contract, { credentials: ['self'] }).map((item) => item.case));

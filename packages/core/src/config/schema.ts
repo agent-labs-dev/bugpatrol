@@ -165,8 +165,22 @@ export const appSchema = z
       .object({
         /** Web: defaults to run.url. May use ${NAME} from env or captures. */
         url: z.string().optional(),
-        /** API: default request headers; credentials should be placeholders. */
+        /**
+         * API: default request headers; credentials should be placeholders.
+         * They go into each credential set. Without `credentials`, they are
+         * the only set.
+         */
         headers: z.record(z.string()).default({}),
+        /**
+         * API: two users (3b). Each set keeps its token and its workspace
+         * header together. Without `other`, the cross-user cases are blocked.
+         */
+        credentials: z
+          .object({
+            self: z.object({ headers: z.record(z.string()) }),
+            other: z.object({ headers: z.record(z.string()) }).optional(),
+          })
+          .optional(),
         /**
          * API: the methods Bugpatrol may send. The request policy narrows them
          * further: a target that is not loopback or `disposable` gets no writes.

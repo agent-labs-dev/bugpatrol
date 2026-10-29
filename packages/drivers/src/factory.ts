@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { type Contract, requestPolicy } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
-import { ApiDriver } from './api.js';
+import { type ApiCredentials, ApiDriver } from './api.js';
 import { Pacer } from './api-pacer.js';
 import { CliDriver } from './cli.js';
 import { CuaDriver } from './cua/driver.js';
@@ -45,9 +45,7 @@ export function createDriver(
     const origin = vars(url);
     return new ApiDriver({
       url: origin,
-      credentials: {
-        self: Object.fromEntries(Object.entries(connect.headers).map(([name, value]) => [name, vars(value)])),
-      },
+      credentials: apiCredentials(connect, vars),
       policy: requestPolicy(contract, { ...connect, url: origin }),
       pacer: new Pacer({ perMinute: connect.perMinute }),
       timeoutMs: connect.timeoutMs,
@@ -79,4 +77,26 @@ export function createDriver(
     appId: vars(connect.appId),
     device: connect.device ? vars(connect.device) : undefined,
   });
+}
+
+/**
+ * The credential sets of an api app (3b). `connect.headers` goes into each
+ * set, and a set's own headers win. Without `connect.credentials`,
+ * `connect.headers` is the only set.
+ */
+export function apiCredentials(
+  connect: Pick<BugpatrolConfig['app']['connect'], 'headers' | 'credentials'>,
+  vars: (value: string) => string,
+): ApiCredentials {
+  // Header names ignore case, so a set's own `authorization` replaces a shared `Authorization`.
+  const set = (headers: Record<string, string> = {}) => {
+    const own = new Set(Object.keys(headers).map((name) => name.toLowerCase()));
+    const shared = Object.entries(connect.headers).filter(([name]) => !own.has(name.toLowerCase()));
+    return Object.fromEntries([...shared, ...Object.entries(headers)].map(([name, value]) => [name, vars(value)]));
+  };
+  const { credentials } = connect;
+  return {
+    self: set(credentials?.self.headers),
+    ...(credentials?.other ? { other: set(credentials.other.headers) } : {}),
+  };
 }

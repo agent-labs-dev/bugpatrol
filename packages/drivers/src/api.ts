@@ -7,13 +7,19 @@ import { CastRecorder } from './cast.js';
 import { nativeSnapshot } from './maestro.js';
 import type { ActResult, Driver, DriverAction, Observation, RawResponse } from './types.js';
 
+/**
+ * The headers of each credential set (3b). A request `as: 'none'` sends
+ * neither set, so a no-auth case removes exactly the configured credentials.
+ */
+export type ApiCredentials = { self: Record<string, string>; other?: Record<string, string> };
+
+/** The sets that send at least one header. With none, nothing tells a request with credentials from one without. */
+export const credentialSets = (credentials: ApiCredentials): ('self' | 'other')[] =>
+  (['self', 'other'] as const).filter((set) => Object.keys(credentials[set] ?? {}).length > 0);
+
 type ApiOptions = {
   url: string;
-  /**
-   * The headers of each credential set (3b). A request `as: 'none'` sends
-   * neither set, so a no-auth case removes exactly the configured credentials.
-   */
-  credentials: { self: Record<string, string>; other?: Record<string, string> };
+  credentials: ApiCredentials;
   /** What may be requested. The driver checks each request against it before it sends. */
   policy: RequestPolicy;
   pacer: Pacer;
@@ -106,6 +112,11 @@ export class ApiDriver implements Driver {
   /** The request tool offers only the methods of this policy. */
   get policy(): RequestPolicy {
     return this.api.policy;
+  }
+
+  /** The credential sets that the sweep and the explorer can use. */
+  get credentialSets(): ('self' | 'other')[] {
+    return credentialSets(this.api.credentials);
   }
 
   /** `app.setup` started the API, and a request is the first contact. */

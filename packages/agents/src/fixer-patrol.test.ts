@@ -966,6 +966,45 @@ describe('patrol', () => {
     }
   });
 
+  it.each([
+    ['timeout', ['explorer', 'judge']],
+    ['error', ['explorer']],
+  ] as const)(
+    'the judge runs after an explorer timeout, not after an error (%s), and the cycle fails',
+    async (stop, expected) => {
+      const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
+      const roles: string[] = [];
+      try {
+        const result = await runPatrol({
+          root,
+          config,
+          once: true,
+          createDriver: () => new FakeDriver({ home: { elements: [] } }),
+          createRuntime: () => ({
+            label: 'scripted',
+            async run(task) {
+              roles.push(task.role);
+              if (task.role === 'judge') {
+                expect(task.prompt).toContain('Broken home');
+                return { stop: 'done', steps: 1, costUsd: 0, summary: 'Judged' };
+              }
+              await task.tools
+                .find((item) => item.name === 'report_bug')!
+                .run({ title: 'Broken home', what_is_wrong: 'Blank', expected: 'Content', severity: 'major' });
+              return { stop, steps: 3, costUsd: 0, error: 'out of time' };
+            },
+          }),
+        });
+        expect(roles).toEqual(expected);
+        expect(result.problems).toEqual([expect.stringContaining(`Explorer did not finish (${stop})`)]);
+        // A failed cycle tests the same commit again.
+        expect((await new Workspace(root).readAgents()).patrol?.commit).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('tears down when explorer throws, and reports the problem without a crash', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
     const driver = new FakeDriver({ home: { elements: [] } });

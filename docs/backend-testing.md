@@ -30,6 +30,18 @@ read-only. `methods` narrows the allowed methods further. An endpoint in
 that matches no endpoint of the spec can only read. `bugpatrol endpoints`
 shows each endpoint as `allowed`, `read-only`, or `denied: <reason>`.
 
+A second user unlocks the cross-user cases. Each credential set keeps its
+token and its workspace header together, and `headers` goes into both sets:
+
+```yaml
+    credentials:
+      self: { headers: { Authorization: 'Bearer ${SESSION_TOKEN}', X-Workspace-Id: '${WORKSPACE}' } }
+      other: { headers: { Authorization: 'Bearer ${OTHER_TOKEN}', X-Workspace-Id: '${OTHER_WORKSPACE}' } }
+```
+
+Without `credentials`, `headers` is the only set and the cross-user cases are
+blocked. Without any credential header, the no-auth cases are blocked too.
+
 Requests go out at most `perMinute` per minute. A 429 waits for its
 `Retry-After` and tries one more time; it is never reported as a bug. An
 event stream is cut after its headers.

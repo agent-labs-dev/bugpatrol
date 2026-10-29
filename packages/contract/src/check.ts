@@ -58,6 +58,41 @@ export function checkContract(endpoint: Endpoint, raw: ContractResponse, contrac
   return results;
 }
 
+/**
+ * The contract of an endpoint as text for the model (decision 2): each
+ * declared response with its media types and schema, and the statuses of
+ * `connect.errors`. A `$ref` schema shows its pointer, which a `schema`
+ * assertion can use, and the schema that it points to. Each schema has a cap.
+ */
+export function expectedContract(endpoint: Endpoint, contract: Contract): string {
+  const operation = resolvePointer(contract.doc, endpoint.specRef)?.value;
+  const responses = isObject(operation) && isObject(operation.responses) ? operation.responses : {};
+  const lines = [`Expected contract of ${endpoint.key}${endpoint.operationId ? ` (${endpoint.operationId})` : ''}:`];
+  for (const [key, value] of Object.entries(responses)) {
+    const ref = refOf(value);
+    const response = ref === undefined ? value : resolvePointer(contract.doc, ref)?.value;
+    const content = isObject(response) && isObject(response.content) ? response.content : {};
+    const media = Object.entries(content).map(([type, entry]) =>
+      isObject(entry) && entry.schema !== undefined ? `${type} ${schemaText(entry.schema, contract)}` : type,
+    );
+    lines.push(`- ${key}: ${media.join('; ') || 'no body'}`);
+  }
+  if (!Object.keys(responses).length) lines.push('- no declared response');
+  const { statuses, schema } = contract.errors;
+  if (statuses.length)
+    lines.push(`- ${statuses.join(', ')} (connect.errors)${schema ? `: ${schemaText(schema, contract)}` : ''}`);
+  return lines.join('\n');
+}
+
+const SCHEMA_CHARS = 1000;
+
+function schemaText(schema: unknown, contract: Contract): string {
+  const ref = refOf(schema);
+  const text = JSON.stringify(ref === undefined ? schema : resolvePointer(contract.doc, ref)?.value) ?? 'unresolved';
+  const capped = text.length > SCHEMA_CHARS ? `${text.slice(0, SCHEMA_CHARS)}…` : text;
+  return ref === undefined ? capped : `${ref} = ${capped}`;
+}
+
 /** Checks a JSON body against the strict schema at `ref`, a pointer into the spec. */
 export function checkSchema(ref: string, raw: ContractResponse, contract: Contract): AssertionResult {
   return { assertion: { kind: 'schema', ref }, ...checkBody(validator(contract, ref), raw) };
@@ -102,7 +137,7 @@ function errorWords(schema: ValidateFunction): string {
 /** RFC 6901: `~` becomes `~0`, and `/` becomes `~1`. */
 const token = (value: string) => value.replaceAll('~', '~0').replaceAll('/', '~1');
 
-/** The `$ref` of a response object that points to `components.responses`. */
+/** The `$ref` of a response object or a schema. */
 const refOf = (response: unknown) =>
   isObject(response) && typeof response.$ref === 'string' ? response.$ref : undefined;
 

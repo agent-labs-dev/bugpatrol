@@ -254,7 +254,11 @@ export type Candidate = {
   evidence: IssueEvidence;
   /** Where the decider routed it, and why. */
   route?: { to: 'judge' | 'issue' | 'ignore'; reason: string; confidence?: number };
-  /** Sweep candidates: true when the failure repeated on a second replay (ADR 0007), false when it did not. */
+  /**
+   * Sweep candidates: true when the failure repeated on a second replay (ADR
+   * 0007), false when it did not. Explorer candidates come from the model
+   * alone, so they are always false.
+   */
   blocking?: boolean;
   createdAt: string;
 };
