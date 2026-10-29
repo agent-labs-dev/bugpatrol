@@ -1,0 +1,48 @@
+# The api smoke test (.github/workflows/review-smoke.yml, job api). A workflow
+# step starts examples/api-fixture on port 3400 before Bugpatrol runs, so the
+# fixture is an external backend: Bugpatrol starts nothing.
+version: 1
+
+app:
+  platform: api
+  # The repo root: the patrol reads its commit there.
+  source: ../..
+  setup: []
+  connect:
+    url: http://127.0.0.1:3400
+    spec: /openapi.json
+    # The fixed tokens of the fixture. Two users, so the cross-user cases run.
+    credentials:
+      self:
+        headers:
+          Authorization: Bearer fixture-token-a
+          X-Workspace-Id: ws-a
+      other:
+        headers:
+          Authorization: Bearer fixture-token-b
+          X-Workspace-Id: ws-b
+    # Every endpoint may return these. The spec of the fixture does not declare them.
+    errors:
+      statuses: [401, 409]
+      schema:
+        type: object
+        required: [error]
+        properties:
+          error:
+            type: object
+            required: [code, message]
+            properties:
+              code: { type: string }
+              message: { type: string }
+    # The deployed commit. The patrol explores again only when it changes.
+    version: { path: /version, pointer: /result/commit }
+    deny: ['/admin/**']
+    # The fixture allows 20 requests in one second.
+    perMinute: 600
+
+agents:
+  explorer:
+    budgetUsd: 0.5
+    maxSteps: 40
+  judge:
+    budgetUsd: 0.5
