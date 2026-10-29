@@ -263,6 +263,15 @@ export type Candidate = {
   createdAt: string;
 };
 
+/**
+ * A candidate that the judge must still decide: the decider routed it to the
+ * judge, and no issue holds it and no decision names it. `decided` holds the
+ * candidate ids of every issue and every decision.
+ */
+export function awaitsJudge(candidate: Candidate, decided: ReadonlySet<string>): boolean {
+  return candidate.route?.to === 'judge' && !decided.has(candidate.id);
+}
+
 export type IssueEvidence = {
   /** What the app showed: a screenshot, or for an API the exchange as text. */
   capture: Evidence;

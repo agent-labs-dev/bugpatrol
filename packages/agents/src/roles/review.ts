@@ -711,8 +711,7 @@ async function settleCandidates(ctx: ReviewContext, sessionId: string, findings:
         at: new Date().toISOString(),
       }),
     );
-  if (lines.length)
-    await appendFile(join(paths.session(ctx.root, sessionId), 'decisions.jsonl'), `${lines.join('\n')}\n`);
+  if (lines.length) await appendFile(paths.sessionDecisions(ctx.root, sessionId), `${lines.join('\n')}\n`);
 }
 
 /**

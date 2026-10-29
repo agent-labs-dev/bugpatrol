@@ -110,6 +110,8 @@ export const paths = {
   sessionLogs: (root: string, id: string) => data(root, 'sessions', recordId(id), 'logs.json'),
   sessionSignals: (root: string, id: string) => data(root, 'sessions', recordId(id), 'signals.jsonl'),
   sessionFlow: (root: string, id: string) => data(root, 'sessions', recordId(id), 'flow.json'),
+  /** One line for each candidate of the session that the judge or a review dismissed. */
+  sessionDecisions: (root: string, id: string) => data(root, 'sessions', recordId(id), 'decisions.jsonl'),
 } as const;
 
 /**

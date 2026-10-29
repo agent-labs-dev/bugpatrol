@@ -1,6 +1,7 @@
 import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
+  awaitsJudge,
   type Candidate,
   fitLesson,
   formatHttpExchange,
@@ -38,7 +39,7 @@ function issueTitle(value: string): string {
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
   try {
-    const lines = await readFile(join(paths.session(session.root, sessionId), 'decisions.jsonl'), 'utf8');
+    const lines = await readFile(paths.sessionDecisions(session.root, sessionId), 'utf8');
     return new Set(
       lines
         .trim()
@@ -85,15 +86,12 @@ async function saveRepro(
 /** Excludes candidates already accepted or dismissed in the requested sessions. */
 export async function pendingCandidates(session: AgentSession, sessionIds: string[]): Promise<Candidate[]> {
   const issues = await session.workspace.listIssues();
-  const filed = new Set(issues.flatMap((item) => item.candidateIds));
+  const filed = issues.flatMap((item) => item.candidateIds);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
-    const dismissed = await decisions(session, id);
-    for (const candidate of await session.workspace.readCandidates(id)) {
-      if (candidate.route?.to === 'judge' && !filed.has(candidate.id) && !dismissed.has(candidate.id)) {
-        pending.push(candidate);
-      }
-    }
+    const decided = new Set([...filed, ...(await decisions(session, id))]);
+    for (const candidate of await session.workspace.readCandidates(id))
+      if (awaitsJudge(candidate, decided)) pending.push(candidate);
   }
   return pending;
 }
@@ -300,7 +298,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             }
           }
           await appendFile(
-            join(paths.session(session.root, candidate.sessionId), 'decisions.jsonl'),
+            paths.sessionDecisions(session.root, candidate.sessionId),
             `${JSON.stringify({
               candidateId: candidate.id,
               decision: 'dismiss',
