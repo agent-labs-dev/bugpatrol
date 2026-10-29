@@ -99,7 +99,7 @@ describe('sweepCases', () => {
         case: 'DELETE /items/{id} repeat-delete',
         steps: [
           'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
-          'DELETE /items/{{RESPONSE_ID}} expect contract',
+          'DELETE /items/{{RESPONSE_ID}}',
           'DELETE /items/{{RESPONSE_ID}} expect contract,404',
         ],
       },
@@ -118,7 +118,7 @@ describe('sweepCases', () => {
     const other = sweepCases(contract, { credentials: ['self', 'other'] }).find((item) => item.case === 'other-user');
     expect(other?.steps.map(line)).toEqual([
       'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
-      'GET /items/{{RESPONSE_ID}} expect contract',
+      'GET /items/{{RESPONSE_ID}}',
       'as other GET /items/{{RESPONSE_ID}} expect contract,404',
     ]);
   });

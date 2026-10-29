@@ -29,9 +29,15 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-/** A sweep on the fixture, as user a, with 401 and 409 in `connect.errors`. */
+/** A sweep on the fixture, as user a, with 401 and 409 in `connect.errors`. `other` adds user b. */
 async function sweeper(
-  options: { perSecond?: number; errors?: boolean; doc?: (doc: OpenApiDoc) => void; fixture?: FixtureApi } = {},
+  options: {
+    perSecond?: number;
+    errors?: boolean;
+    other?: boolean;
+    doc?: (doc: OpenApiDoc) => void;
+    fixture?: FixtureApi;
+  } = {},
 ) {
   const fixture = options.fixture ?? (await startFixtureApi({ perSecond: options.perSecond ?? 1000 }));
   if (!options.fixture) cleanups.push(() => fixture.close());
@@ -44,6 +50,14 @@ async function sweeper(
       connect: {
         url: fixture.url,
         headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+        ...(options.other
+          ? {
+              credentials: {
+                self: { headers: {} },
+                other: { headers: { Authorization: 'Bearer fixture-token-b', 'X-Workspace-Id': 'ws-b' } },
+              },
+            }
+          : {}),
         deny: ['/admin/**'],
         perMinute: 60_000,
         timeoutMs: 2000,
@@ -57,7 +71,7 @@ async function sweeper(
   const vars = new Vars();
   const driver = createDriver(config, (value) => value, undefined, root, contract);
   const workspace = new Workspace(root);
-  const cases = sweepCases(contract, { credentials: ['self'] });
+  const cases = sweepCases(contract, { credentials: options.other ? ['self', 'other'] : ['self'] });
   const run = async (budget: Partial<SweepBudget> = {}, before?: (session: AgentSession) => void) => {
     const record = await workspace.startSession('explorer');
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
@@ -209,6 +223,24 @@ describe('runSweep', () => {
     expect(Object.values(coverage.cells).every((cell) => cell.blocked)).toBe(true);
     expect(coverage.cursor!.next.length).toBe(result.remaining);
     expect(result.remaining).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('a schema bug on one endpoint gives one finding, not one for each case', async () => {
+    const { run } = await sweeper({
+      other: true,
+      doc: (doc) => {
+        const get = (doc.paths['/items/{id}'] as Record<string, { responses: Record<string, unknown> }>).get!;
+        get.responses['200'] = {
+          description: 'An item with a field that the fixture never sends',
+          content: { 'application/json': { schema: { type: 'object', required: ['result', 'bugpatrol'] } } },
+        };
+      },
+    });
+    const { result } = await run();
+    const schema = result.findings.filter(
+      (finding) => finding.endpoint === 'GET /items/{id}' && finding.failed.includes('contract:schema'),
+    );
+    expect(schema.map((finding) => finding.key)).toEqual(['GET /items/{id} ok']);
   }, 30_000);
 
   it('a spec without errors gives one finding', async () => {

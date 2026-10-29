@@ -1,6 +1,7 @@
 import {
   type Assertion,
   type CaseId,
+  type CoverageCell,
   type CredentialSet,
   type Endpoint,
   type HttpMethod,
@@ -28,6 +29,44 @@ export type SweepOptions = { credentials: Exclude<CredentialSet, 'none'>[] };
 
 /** The key of a case in the coverage file and the sweep cursor. */
 export const caseKey = (endpoint: Endpoint['key'], id: CaseId) => `${endpoint} ${id}`;
+
+/** What one run of a case found, for its coverage cells. */
+export type CaseVerdict = {
+  endpoint: Endpoint['key'];
+  case: SweepCaseId;
+  status?: number;
+  /** The contract declares the status for the endpoint. */
+  declared?: boolean;
+  /** The assertion ids that failed. */
+  failed: string[];
+  blocked?: string;
+  repeats?: boolean;
+  exchange?: string;
+  at: string;
+};
+
+/**
+ * The cells of one run of a case: its own cell, and for a declared error
+ * status, a copy under `declared:<code>`, so the status covers its own column
+ * of the matrix. `repeats` stays only on a failure.
+ */
+export function coverageCells(verdict: CaseVerdict): CoverageCell[] {
+  const { status, failed, blocked, repeats, exchange } = verdict;
+  const cell: CoverageCell = {
+    endpoint: verdict.endpoint,
+    case: verdict.case,
+    ...(status === undefined ? {} : { status }),
+    ok: !blocked && !failed.length,
+    failed,
+    ...(!blocked && failed.length && repeats !== undefined ? { repeats } : {}),
+    ...(blocked ? { blocked } : {}),
+    ...(exchange ? { exchange } : {}),
+    at: verdict.at,
+  };
+  return !blocked && verdict.declared && status !== undefined && status >= 400
+    ? [cell, { ...cell, case: `declared:${status}` }]
+    : [cell];
+}
 
 /** The statuses that a negative case expects, best first. A case exists only when the contract declares one. */
 const EXPECTED = {
@@ -101,7 +140,8 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
             ? base
             : [
                 ...base.setup,
-                plan.request(base, { assert: [CONTRACT] }),
+                // Setup: the ok case checks this request, so a bug in it gives one finding, not one for each case.
+                plan.request(base, {}),
                 plan.request(base, { as: 'other', assert: checks(otherUser) }),
               ],
       );
@@ -115,7 +155,7 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
           ? base
           : [
               ...base.setup,
-              plan.request(base, { assert: [CONTRACT] }),
+              plan.request(base, {}),
               plan.request(base, { assert: again === undefined ? [CONTRACT] : checks(again) }),
             ],
       );
@@ -233,7 +273,7 @@ class Plan {
     );
   }
 
-  request(parts: Parts, step: { as?: CredentialSet; assert: Assertion[] }): RoutineStep {
+  request(parts: Parts, step: { as?: CredentialSet; assert?: Assertion[] }): RoutineStep {
     return request(this.endpoint, parts, step);
   }
 

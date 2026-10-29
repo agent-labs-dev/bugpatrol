@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { type Contract, caseKey, expectedContract, type SweepCaseId } from '@bugpatrol/contract';
+import { type Contract, caseKey, coverageCells, expectedContract, type SweepCaseId } from '@bugpatrol/contract';
 import {
   type Assertion,
   assertionId,
   type BugCheck,
   type Candidate,
-  type CoverageCell,
   type Evidence,
   fingerprint,
   formatHttpExchange,
@@ -69,11 +68,12 @@ const assertionSchema = z.discriminatedUnion('kind', [
 const stepAssertionsSchema = z.array(z.object({ request: z.number().int().positive() }).and(assertionSchema));
 
 /**
- * What each explorer request got, kept for save_routine: an assertion is
- * saved only when it holds on the response that the explorer saw. Keyed by
- * the trail step, so a reset trail drops it.
+ * What each explorer request got and the case that it tests. save_routine
+ * saves an assertion only when it holds on the response that the explorer
+ * saw, and report_bug keys a report by the case. Keyed by the trail step, so
+ * a reset trail drops it.
  */
-const responses = new WeakMap<RoutineStep, { observation: Observation; raw?: RawResponse }>();
+const responses = new WeakMap<RoutineStep, { observation: Observation; raw?: RawResponse; case: SweepCaseId }>();
 
 const text = (value: string): ToolResult => ({ content: [{ type: 'text', text: value }] });
 const schema = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -475,6 +475,12 @@ function stepSignature(step: RoutineStep): string {
   return step.kind;
 }
 
+/** The case that the last request of the explorer tests, as it named it. */
+function testedCase(session: AgentSession): SweepCaseId | undefined {
+  const step = session.trail.findLast((item) => item.kind === 'request');
+  return step && responses.get(step)?.case;
+}
+
 /** The request steps since the last anchor: the ones that save_routine numbers from 1. */
 const pendingRequests = (session: AgentSession) =>
   session.trail.slice(session.anchor.index).filter((step) => step.kind === 'request');
@@ -504,9 +510,10 @@ function stepAssertions(session: AgentSession, input: unknown): Map<RoutineStep,
 
 /**
  * The coverage cell of an explorer request: the contract verdict of the
- * response, under the case that the explorer names. A declared error status
- * also covers its own column, as in the sweep. An event stream, or a request
- * that matches no endpoint, records nothing.
+ * response, under the case that the explorer names, with the saved exchange.
+ * A declared error status also covers its own column, as in the sweep. A
+ * failure keeps the `repeats` of the sweep cell that it replaces. An event
+ * stream, or a request that matches no endpoint, records nothing.
  */
 async function recordCell(session: AgentSession, api: ApiDriver, url: string, id: SweepCaseId): Promise<void> {
   const observation = session.lastObservation;
@@ -517,21 +524,18 @@ async function recordCell(session: AgentSession, api: ApiDriver, url: string, id
   if (!observation || !response || response.stream || !endpoint) return;
   const results = checkAssertions([{ kind: 'contract' }], observation, { raw: api.lastRaw(), contract });
   const failed = [...new Set(results.filter((result) => !result.ok).map((result) => assertionId(result.assertion)))];
-  const cell: CoverageCell = {
+  const coverage = (await session.workspace.readCoverage()) ?? { version: 1, cells: {} };
+  const cells = coverageCells({
     endpoint: endpoint.key,
     case: id,
     status: response.status,
-    ok: !failed.length,
+    declared: results.some((r) => r.assertion.kind === 'contract' && r.assertion.check === 'status' && r.ok),
     failed,
+    repeats: coverage.cells[caseKey(endpoint.key, id)]?.repeats,
+    exchange: session.lastCapture,
     at: new Date().toISOString(),
-  };
-  const coverage = (await session.workspace.readCoverage()) ?? { version: 1, cells: {} };
-  coverage.cells[caseKey(endpoint.key, id)] = cell;
-  const declared = results.some((r) => r.assertion.kind === 'contract' && r.assertion.check === 'status' && r.ok);
-  if (declared && response.status >= 400) {
-    const column = `declared:${response.status}` as const;
-    coverage.cells[caseKey(endpoint.key, column)] = { ...cell, case: column };
-  }
+  });
+  for (const cell of cells) coverage.cells[caseKey(cell.endpoint, cell.case)] = cell;
   await session.workspace.writeCoverage(coverage);
 }
 
@@ -600,8 +604,8 @@ export function explorerTools(
               ['method', 'url'],
             ),
             async run(input: Record<string, unknown>) {
-              const { case: named, ...request } = input;
-              const id = z.enum(REQUEST_CASES).optional().parse(named);
+              const { case: given, ...request } = input;
+              const id = z.enum(REQUEST_CASES).optional().parse(given);
               const parsed = apiRequestSchema.parse(request);
               const resolved = apiRequestSchema.parse(session.vars.redact(parsed));
               const action: Extract<DriverAction, { kind: 'request' }> = {
@@ -618,8 +622,13 @@ export function explorerTools(
               const length = session.trail.length;
               const result = await act(session, action, { kind: 'request', ...resolved });
               if (result.isError || session.trail.length === length) return result;
-              responses.set(session.trail.at(-1)!, { observation: session.lastObservation!, raw: api.lastRaw() });
-              await recordCell(session, api, action.url, id ?? (parsed.as === 'other' ? 'other-user' : 'ok'));
+              const named = id ?? (parsed.as === 'other' ? 'other-user' : 'ok');
+              responses.set(session.trail.at(-1)!, {
+                observation: session.lastObservation!,
+                raw: api.lastRaw(),
+                case: named,
+              });
+              await recordCell(session, api, action.url, named);
               result.content.push({
                 type: 'text',
                 text: `This is request ${pendingRequests(session).length} of the routine in progress.`,
@@ -965,7 +974,7 @@ export function explorerTools(
           source: 'explorer',
           ...(rule ? { ruleId: `judge:${rule}` } : {}),
           fingerprint:
-            reportFingerprint(session, rule) ??
+            reportFingerprint(session, testedCase(session), rule) ??
             fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
           detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,

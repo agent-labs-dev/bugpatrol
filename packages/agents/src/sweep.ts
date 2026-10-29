@@ -1,6 +1,7 @@
 import {
   type Contract,
   caseKey,
+  coverageCells,
   type RequestPolicy,
   type SweepCase,
   type SweepCaseId,
@@ -140,7 +141,14 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
     written.push(cell);
   };
   for (const item of plan.blocked)
-    write({ endpoint: item.endpoint.key, case: item.case, ok: false, failed: [], blocked: item.blocked!, at: now() });
+    for (const cell of coverageCells({
+      endpoint: item.endpoint.key,
+      case: item.case,
+      failed: [],
+      blocked: item.blocked!,
+      at: now(),
+    }))
+      write(cell);
 
   const findings: SweepFinding[] = [];
   const next = plan.order.map(keyOf);
@@ -192,21 +200,18 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
         `sweep-${item.case}`,
       ));
     const repeats = differs === undefined;
-    const cell: CoverageCell = {
+    for (const cell of coverageCells({
       endpoint: item.endpoint.key,
       case: item.case,
-      ...(first.status === undefined ? {} : { status: first.status }),
-      ok: !first.blocked && !ids.length,
+      status: first.status,
+      declared: first.declared,
       failed: ids,
-      ...(!first.blocked && ids.length ? { repeats } : {}),
-      ...(first.blocked ? { blocked: first.blocked } : {}),
-      ...(exchange ? { exchange } : {}),
+      blocked: first.blocked,
+      repeats,
+      exchange,
       at: now(),
-    };
-    write(cell);
-    // A declared error status that a case got covers its own column of the matrix.
-    if (!first.blocked && first.declared && first.status !== undefined && first.status >= 400)
-      write({ ...cell, case: `declared:${first.status}` });
+    }))
+      write(cell);
     next.splice(next.indexOf(key), 1);
     if (ids.length) {
       const words = first.results.filter((r) => !r.ok).map((r) => assertionWords(r, true));
@@ -304,10 +309,13 @@ const findingFingerprint = (finding: SweepFinding) =>
 
 /**
  * The key of an explorer report on an api: the same key as a sweep failure of
- * the same check on the same case, so both go to one issue. A report that no
- * contract check confirms is a bug that only the judge sees, `judge:<rule>`.
+ * the same check on the same case, so both go to one issue. `named` is the
+ * case that the explorer gave its last request. A request without one, for
+ * example a step of a replayed routine, takes the case from its credentials.
+ * A report that no contract check confirms is a bug that only the judge sees,
+ * `judge:<rule>`.
  */
-export function reportFingerprint(session: AgentSession, rule?: string): string | undefined {
+export function reportFingerprint(session: AgentSession, named?: SweepCaseId, rule?: string): string | undefined {
   const { driver, lastObservation: screen } = session;
   if (!(driver instanceof ApiDriver) || screen?.capture.kind !== 'http' || !screen.capture.exchange) return undefined;
   const { request } = screen.capture.exchange;
@@ -321,7 +329,7 @@ export function reportFingerprint(session: AgentSession, rule?: string): string 
   return fingerprint({
     // A read outside the spec keeps its own method and path as its name.
     endpoint: endpoint?.key ?? (`${request.method} ${request.path.split('?')[0]}` as EndpointKey),
-    case: as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok',
+    case: named ?? (as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok'),
     assertionId: failed ? assertionId(failed.assertion) : `judge:${rule ?? 'explorer'}`,
   });
 }

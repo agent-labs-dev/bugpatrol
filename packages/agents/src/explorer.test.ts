@@ -2,12 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
-import { buildContract, loadSpec } from '@bugpatrol/contract';
-import { parseConfig, type RoutineStep } from '@bugpatrol/core';
+import { buildContract, caseKey, loadSpec, sweepCases } from '@bugpatrol/contract';
+import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runExplorer } from './roles/explorer.js';
 import { AgentSession } from './session.js';
+import { runSweep } from './sweep.js';
 import { FakeDriver } from './testing/fake-driver.js';
 import { explorerTools } from './tools/explorer.js';
 import type { Runtime } from './types.js';
@@ -124,7 +125,7 @@ async function apiExplorer(options: { other?: boolean } = {}) {
     const result = await tools.find((tool) => tool.name === name)!.run(input);
     return { ...result, text: result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n') };
   };
-  return { fixture, workspace, session, tools, run };
+  return { fixture, workspace, session, contract, tools, run };
 }
 
 describe('the api explorer', () => {
@@ -151,6 +152,51 @@ describe('the api explorer', () => {
     // Bug 7: getItem declares only 200.
     expect(cells['GET /items/{id} missing-id']).toMatchObject({ status: 404, ok: false, failed: ['contract:status'] });
     expect(Object.keys(cells)).toHaveLength(2);
+  });
+
+  it('a report on a named case has the key of the sweep failure of that case', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    const missing = sweepCases(f.contract, { credentials: ['self', 'other'] }).filter(
+      (item) => caseKey(item.endpoint.key, item.case) === 'GET /items/{id} missing-id',
+    );
+    await runSweep(f.session, missing, { maxRequests: 10, timeoutMs: 10_000 });
+    const sent = await f.run('request', { method: 'GET', url: '/items/2147483647', case: 'missing-id' });
+    expect(sent.text).toContain('HTTP 404');
+    await f.run('report_bug', {
+      screen_id: 'unrecorded',
+      title: 'A missing item gives an undeclared 404',
+      what_is_wrong: 'getItem declares only 200',
+      expected: 'A declared status',
+      severity: 'minor',
+    });
+    const candidates = await f.workspace.readCandidates(f.session.sessionId);
+    expect(candidates.map((item) => item.source)).toEqual(['sweep', 'explorer']);
+    expect(candidates[1]!.fingerprint).toBe(candidates[0]!.fingerprint);
+  });
+
+  it('an explorer request keeps the exchange and the repeats of the sweep cell that it replaces', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    await f.workspace.writeCoverage({
+      version: 1,
+      cells: {
+        'GET /items/{id} missing-id': {
+          endpoint: 'GET /items/{id}' as EndpointKey,
+          case: 'missing-id',
+          status: 404,
+          ok: false,
+          failed: ['contract:status'],
+          repeats: false,
+          at: '2024-01-01T00:00:00Z',
+        },
+      },
+    });
+    await f.run('request', { method: 'GET', url: '/items/2147483647', case: 'missing-id' });
+    const cell = (await f.workspace.readCoverage())!.cells['GET /items/{id} missing-id'];
+    expect(cell).toMatchObject({ ok: false, failed: ['contract:status'], repeats: false });
+    expect(cell?.exchange).toMatch(/^\.bugpatrol\/.*\.exchange\.json$/);
+    expect(cell?.at).not.toBe('2024-01-01T00:00:00Z');
   });
 
   it('as: other uses the other credential set', async () => {
