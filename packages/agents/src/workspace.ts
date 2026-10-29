@@ -10,6 +10,7 @@ import {
   type AppMapScreen,
   type Candidate,
   type CoverageFile,
+  type DeployFile,
   type FixProposal,
   type HttpExchange,
   type Issue,
@@ -172,6 +173,15 @@ export class Workspace {
 
   async writeCoverage(coverage: CoverageFile): Promise<void> {
     await atomic(paths.coverage(this.root), coverage);
+  }
+
+  /** The last probe of `app.connect.version`. Absent before the first probe. */
+  readDeploy(): Promise<DeployFile | undefined> {
+    return readJson(paths.deploy(this.root));
+  }
+
+  async writeDeploy(deploy: DeployFile): Promise<void> {
+    await atomic(paths.deploy(this.root), deploy);
   }
 
   async upsertScreen(screen: Partial<AppMapScreen> & Pick<AppMapScreen, 'id'>): Promise<AppMapScreen> {

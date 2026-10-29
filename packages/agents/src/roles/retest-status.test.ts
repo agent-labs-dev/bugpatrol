@@ -1,6 +1,6 @@
-import { bugpatrolConfigSchema, type FixProposal, type Retest } from '@bugpatrol/core';
+import { bugpatrolConfigSchema, type FixProposal, type Issue, type Retest } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { applyRetest } from './retest.js';
+import { applyRetest, retestFix } from './retest.js';
 
 const config = bugpatrolConfigSchema.parse({ version: 1, app: { platform: 'electron' } });
 const fix = (): FixProposal => ({
@@ -55,5 +55,32 @@ describe('applyRetest', () => {
     const item = fix();
     applyRetest(config, item, retest('fixed'));
     expect(item.status).toBe('verified');
+  });
+
+  it('skips the retest before the merge on an external backend, so the fix goes out unjudged', async () => {
+    const api = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'api', connect: { url: 'https://api.example.com' } },
+    });
+    const issue: Issue = {
+      version: 1,
+      id: 'iss_1',
+      fingerprint: 'fp',
+      title: 'Broken',
+      body: '',
+      severity: 'major',
+      status: 'fix-proposed',
+      candidateIds: [],
+      evidence: { capture: { kind: 'image', screenshot: 'x.png' }, steps: [{ kind: 'open', url: '/items' }] },
+      judgement: { by: 'judge', reason: '', at: 'now' },
+      occurrences: 1,
+      firstSeenAt: 'now',
+      lastSeenAt: 'now',
+    };
+    const item = fix();
+    const result = await retestFix('/nonexistent', api, issue, item, 1, {});
+    expect(result).toMatchObject({ outcome: 'skipped', reason: expect.stringContaining('after a deploy') });
+    applyRetest(api, item, result);
+    expect(item.status).toBe('proposed');
   });
 });

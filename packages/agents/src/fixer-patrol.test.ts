@@ -444,7 +444,7 @@ describe('fix cycle', () => {
         agents: { ...f.config.agents, fixer: { ...f.config.agents.fixer, retest: { prepare: 'touch prepare-ran' } } },
       });
       const result = await recheckMerged(f.root, config, {
-        isMerged: async () => {
+        findMerge: async () => {
           throw new Error('PR state was ignored');
         },
         createDriver: () => new FakeDriver({ home: { elements: [] } }),

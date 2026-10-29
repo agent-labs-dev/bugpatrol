@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
 import { ApiDriver, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -196,13 +197,27 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
       if (config.agents.github.enabled) await syncGitHub(root, config, { onLog: options.onLog });
       await cleanWorktrees(root, config, { onLog: options.onLog });
-      const commit = await sourceCommit(root, config);
+      // An external backend changes only with a deploy, so its trigger is the
+      // deployed commit, not the source commit (T5). Without a version
+      // endpoint, each cycle of the schedule explores.
+      const external = externalBackend(config.app);
+      const deploy = external ? await probeDeploy(root, config) : undefined;
+      const commit = external
+        ? deploy && 'commit' in deploy
+          ? deploy.commit
+          : undefined
+        : await sourceCommit(root, config);
       // An old commit needs no new explore or judge. The work that is not done
       // yet (fixes, retests, publish, CI) still runs, so it never waits for a merge.
-      const fresh = !commit || commit !== tested;
-      if (!fresh) {
+      const fresh = deploy && 'pending' in deploy ? false : !commit || commit !== tested;
+      if (deploy && 'pending' in deploy) {
         options.onLog?.(
-          `No new commit since the last cycle (${commit!.slice(0, 7)}): skipped explore and judge. ` +
+          `The deploy is not settled (${deploy.pending}): skipped explore and judge. ` +
+            'The pending fixes, retests, publish, and CI checks still run.',
+        );
+      } else if (!fresh) {
+        options.onLog?.(
+          `No new ${external ? 'deploy' : 'commit'} since the last cycle (${commit!.slice(0, 7)}): skipped explore and judge. ` +
             'The pending fixes, retests, publish, and CI checks still run.',
         );
       }

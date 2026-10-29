@@ -83,6 +83,8 @@ export const paths = {
   memory: (root: string) => data(root, 'memory.json'),
   /** The sweep's coverage cells and its cursor, so the next run resumes where this one stopped. */
   coverage: (root: string) => data(root, 'coverage.json'),
+  /** The commit that the external backend runs, from the last probe of `app.connect.version`. */
+  deploy: (root: string) => data(root, 'deploy.json'),
   /** The `bugpatrol-state` commit that this folder last shared. Not state: it belongs to this machine. */
   stateBase: (root: string) => data(root, 'state-base.json'),
   agentBaselines: (root: string) => data(root, 'agent-baselines'),
@@ -128,7 +130,8 @@ export const STATE_FILES: readonly { path: string; keys?: readonly string[] }[] 
   { path: `${DATA_DIR}/triage.json` },
   { path: `${DATA_DIR}/memory.json` },
   { path: `${DATA_DIR}/coverage.json` },
-  /** The source commit that the last full cycle tested. */
+  { path: `${DATA_DIR}/deploy.json` },
+  /** The commit that the last full cycle tested. */
   { path: `${DATA_DIR}/agents.json`, keys: ['patrol.commit'] },
 ];
 

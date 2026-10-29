@@ -1026,6 +1026,7 @@ function firstSentence(text) {
 function issueStatus(issue, fix) {
   if (issue.status === 'dismissed') return issue.closedBy ? `Dismissed by ${issue.closedBy.by}` : 'Dismissed';
   if (issue.status === 'fixed') return issue.closedBy ? `Fixed: ${issue.closedBy.reason}` : 'Fixed';
+  if (issue.status === 'waits-for-deploy') return 'Merged, waits for a deploy';
   if (fix?.status === 'rejected' || issue.fixRejected) return 'Fix rejected by the team';
   if (issue.status === 'new' && issue.regression) return 'Regression';
   if (fix?.status === 'verified') return 'Fix verified in the app';

@@ -272,7 +272,11 @@ export type IssueEvidence = {
   console?: string[];
 };
 
-export type IssueStatus = 'new' | 'filed' | 'fixing' | 'fix-proposed' | 'fixed' | 'dismissed';
+/**
+ * `waits-for-deploy`: the fix merged, and the backend that Bugpatrol tests
+ * does not run it yet (or cannot tell). It is never a failure.
+ */
+export type IssueStatus = 'new' | 'filed' | 'fixing' | 'fix-proposed' | 'waits-for-deploy' | 'fixed' | 'dismissed';
 
 export type Issue = {
   version: 1;
@@ -422,6 +426,8 @@ export type FixProposal = {
   diff?: string;
   /** The fix commit on the branch. A merge check trusts only this commit. */
   commit?: string;
+  /** The commit that the merge made on the default branch, for example a squash commit. */
+  mergeCommit?: string;
   summary?: string;
   /** The `verify` command that passed on this change. */
   checks?: string;
@@ -717,7 +723,7 @@ export type AgentsFile = {
     startedAt: string;
     nextAt?: string;
     pid?: number;
-    /** The source commit that the last full cycle tested. */
+    /** The commit that the last full cycle tested: the source commit, or the deployed commit of an external backend. */
     commit?: string;
   };
   agents: AgentStatus[];
@@ -742,6 +748,14 @@ export type SessionSummary = {
   screensFound: string[];
   candidates: number;
   issues: string[];
+};
+
+/** `deploy.json`. The last answer of `app.connect.version`: the live commit, or why it is not known. */
+export type DeployFile = {
+  version: 1;
+  commit?: string;
+  pending?: string;
+  checkedAt: string;
 };
 
 /**

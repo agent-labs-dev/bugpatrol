@@ -230,7 +230,9 @@ export async function closeAbsentChecks(
   const ids = new Set(
     (await session.workspace.listIssues())
       .filter(
-        (issue) => issue.screenId === screenId && ['new', 'filed', 'fixing', 'fix-proposed'].includes(issue.status),
+        (issue) =>
+          issue.screenId === screenId &&
+          ['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy'].includes(issue.status),
       )
       .map((issue) => issue.id),
   );

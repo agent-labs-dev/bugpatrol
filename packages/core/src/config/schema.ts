@@ -199,6 +199,19 @@ export const appSchema = z
             schema: z.record(z.unknown()).optional(),
           })
           .optional(),
+        /**
+         * API: where the deployed commit is. `path` is a path on connect.url,
+         * and `pointer` is a JSON pointer into its response, for example
+         * `/result/commit`. For a fleet, a `*` segment takes each element of
+         * an array (`/result`, then `*`, then `commit`). Every process must
+         * report the same commit.
+         */
+        version: z
+          .object({
+            path: z.string().startsWith('/'),
+            pointer: z.string().startsWith('/'),
+          })
+          .optional(),
         /** API: the preview deploy of a pull request, with {{PR_NUMBER}}. Reserved; nothing reads it yet. */
         preview: z.string().optional(),
         /** Linux desktop: a private Xvfb/DBus session; never the host display. */

@@ -27,7 +27,7 @@ import {
 
 const roles: AgentRole[] = ['explorer', 'judge', 'fixer'];
 const severity = { critical: 0, major: 1, minor: 2, cosmetic: 3 };
-const open = new Set(['new', 'filed', 'fixing', 'fix-proposed']);
+const open = new Set(['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy']);
 type ScreenEdge = {
   from: string;
   to: string;

@@ -56,6 +56,27 @@ be correct behavior, not a bug.
 
 `bugpatrol init --platform api --url http://127.0.0.1:8000` creates a starter.
 
+### Deploys
+
+An api app with no `background` setup step is an external backend: Bugpatrol
+does not start it, so only a deploy changes its code. `connect.version` tells
+Bugpatrol which commit runs:
+
+```yaml
+connect:
+  version:
+    path: /version/fleet
+    pointer: /result/*/commit   # `*` takes each element of an array
+```
+
+A patrol explores and judges again only when that commit changes. A fleet
+counts only when every process reports the same commit; a mixed fleet or a
+missing commit waits. A fix is not retested before its merge. After the merge,
+the issue is `waits-for-deploy` until the deployed commit contains the merge
+commit (a squash commit too), and then Bugpatrol checks it. Without
+`connect.version`, the issue waits, each patrol checks it, and only a pass
+counts: a fix is never marked as failed.
+
 ## Run a disposable stack
 
 Put Bugpatrol's config in the repository whose code you intend to investigate.

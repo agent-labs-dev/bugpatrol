@@ -32,7 +32,7 @@ export async function runIssueCommand(
     else
       log(
         `\n${issues.length} issue(s). Status: new = filed by the judge, not on GitHub; filed = on GitHub; ` +
-          'fix-proposed = a fix waits for review; fixed; dismissed.',
+          'fix-proposed = a fix waits for review; waits-for-deploy = the fix merged, and the backend does not run it yet; fixed; dismissed.',
       );
     return;
   }
