@@ -21,6 +21,20 @@ A patrol cycle has these steps:
 7. The judge **publishes**. A verified fix becomes a PR. A major bug with no fix becomes an issue. The judge skips an item that a Bugpatrol PR or issue on GitHub already covers.
 8. Bugpatrol watches the **CI** checks of each PR. When a check fails, the fixer fixes it and pushes a new commit, until the checks are green.
 
+## The patrol
+
+`npx bugpatrol` runs the patrol: the full cycle, again and again. It runs on your machine, and it can run all day.
+
+- The patrol does not stop by itself. Every 30 minutes, it pulls the latest `origin/main`.
+- The patrol explores and judges only when `main` has new commits. On the same commit, it skips these two steps, but it still finishes the open work: fixes, retests, publish, CI checks, and the GitHub sync. So a patrol that runs all day costs little when nobody merges code, and a fix never waits for the next merge.
+- Bugpatrol keeps the last tested commit in `.bugpatrol/runs/`, so a restart also skips a commit that it tested before. To test again with no new commit, for example after a config change, use `npx bugpatrol --force`.
+- You can change the wait with `agents.patrol.intervalMinutes`. To stop after a number of cycles, set `agents.patrol.cycles`. To run one cycle only, use `npx bugpatrol --once`.
+- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start.
+- To use a different branch, set `agents.patrol.pull`.
+- Let the patrol run all the time on a dedicated computer or a cloud VM. The patrol changes the checkout of the repo, so do not run it in the checkout where you work.
+
+When you turn on GitHub, the patrol opens GitHub issues and PRs automatically, in each cycle, with no approval step. It opens a PR for each fix, and an issue for each major bug with no fix. The PRs are drafts by default (`agents.github.pullRequests`). You can close any issue or PR: the patrol learns from it, and it does not open it again. [GitHub](github.md) tells more.
+
 ## The explore loop
 
 The explorer uses the app one step at a time. In each step, it looks at the screen and calls one tool. Each result also lists the console errors and the failed requests since the last step, so the explorer can report an error that the screenshot does not show. On web and Electron it also lists the native dialogs (`alert`, `confirm`, `prompt`) that opened. Bugpatrol accepts each one, the same way on every run, so the action behind a confirm goes ahead in exploration and in replay. An `upload` attaches a sample image, PDF or text file that Bugpatrol makes, with the same bytes on every run. Each bug report becomes a candidate for the judge.

@@ -5,11 +5,48 @@ for disposable stack setup and coverage limits.
 
 This guide adds Bugpatrol to your repo, step by step. For a faster setup, install the [Bugpatrol skill](../skills/bugpatrol/SKILL.md) with `npx skills add agent-labs-dev/bugpatrol`, and ask your coding agent to set up Bugpatrol. The skill does these steps for you.
 
+The [skills CLI](https://github.com/vercel-labs/skills) installs the skill for Claude Code, Codex, Cursor, and many other agents. It also writes `skills-lock.json` at the repo root. Commit both, so your team gets the skill too. The skill tells the agent what Bugpatrol does, how to configure it for your app, how to run it, and how to show you the results.
+
+## Set up by hand, in short
+
+Bugpatrol needs two things from you: a command that launches your app on this machine, and a way to sign in (a test account, a seed script, or a dev auth bypass). [Before you start](#before-you-start-launch-and-sign-in) tells more. Check the [requirements](#requirements) first.
+
+1. Run `init` in your repo. It detects web, Electron, iOS or Android defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop, API or CLI explicitly:
+
+   ```bash
+   npx bugpatrol init
+   ```
+
+2. Check `.bugpatrol/bugpatrol.yml`. It tells Bugpatrol how to start your app.
+
+3. Write `.bugpatrol/instructions.md`. It is a plain-English note for the explorer: what the app is, how to sign in, and what never to do.
+   Refer to secrets as `{{NAME}}`, and list their names in `app.secrets`. Bugpatrol never sends the real values to a model.
+
+4. Start the patrol, and look at the results:
+
+   ```bash
+   npx bugpatrol               # explore, judge, fix, retest, publish; then check for new commits every 30 minutes
+   npx bugpatrol dashboard     # http://127.0.0.1:4311
+   ```
+
+To run one step at a time, use these commands:
+
+```bash
+npx bugpatrol --once         # one cycle, then stop (add --force to test the same commit again)
+npx bugpatrol explore        # the explorer maps the app and reports problems
+npx bugpatrol judge          # the judge files the real bugs as issues
+npx bugpatrol fix            # fix the worst issues, then retest each fix in the app
+npx bugpatrol publish        # open the PRs and issues
+npx bugpatrol review 123     # review one pull request of your team in the running app
+```
+
+The fixer and GitHub are off until you turn them on. The sections below show each step in full, with Electron and mobile examples.
+
 ## Requirements
 
 - Node 22 or later.
 - `git`, and your app in a git repo with an `origin` remote. Each patrol cycle pulls `origin/main`, and the fixer works in git worktrees.
-- An LLM for the agents: an agent CLI (Claude Code, Codex, Kimi CLI, or pi), or an API key.
+- An LLM for the agents: an agent CLI (Claude Code, Codex, Kimi CLI, opencode, or pi), or an API key.
 - For web apps: Chromium for Playwright. Install it one time:
 
   ```bash
@@ -28,7 +65,7 @@ npm install --save-dev bugpatrol     # then: npx bugpatrol ...
 
 ## Before you start: launch and sign in
 
-Bugpatrol needs two things from you:
+Bugpatrol works with any auth system: your own setup commands, plus plain-English instructions. It needs two things from you:
 
 1. **A way to launch the app on this machine.** This is usually the command that you use for local work, for example `npm run dev`. The app must start with no manual steps. For mobile, the app must be installed on the simulator or the emulator.
 2. **A way to sign in**, if the app has a sign-in. Use one of these, best first:
@@ -59,7 +96,7 @@ npx bugpatrol init
   instructions.md    # the app guide for the explorer: commit it
   appmap.json        # the screens the explorer found: commit it
   routines/          # the routines Bugpatrol replays with no model: commit them
-  runs/              # the local data and screenshots: init adds it to .gitignore
+  runs/              # sessions, issues, fixes, and screenshots: init adds it to .gitignore
 ```
 
 To use the detected values with no questions, add `--yes`. To select the LLM, add `--agent`:
