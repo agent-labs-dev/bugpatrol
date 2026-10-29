@@ -12,16 +12,34 @@ import {
 
 const SESSION = '.bugpatrol/runs/sessions/ses_sweep';
 
-/** `[endpoint, case, status, failed]`, or a blocked reason in place of the status. A copy of a sweep on the api fixture. */
-const RESULTS: [string, CaseId, number | string, string[]?][] = [
+/**
+ * `[endpoint, case, status, failed, body]`, or a blocked reason in place of the
+ * status. A copy of a sweep on the api fixture. Without a body, the cell takes
+ * the body of its status from `BODIES`.
+ */
+const RESULTS: [string, CaseId, number | string, string[]?, string?][] = [
   ['GET /health', 'ok', 200],
   ['GET /version', 'ok', 200],
   ['GET /version/fleet', 'ok', 200],
-  ['GET /items', 'ok', 200, ['contract:schema']],
+  [
+    'GET /items',
+    'ok',
+    200,
+    ['contract:schema'],
+    json({
+      result: [{ id: '1', name: 'Alpha', owner: 'a', workspace: 'ws-a', internal_note: 'seeded by a' }],
+    }),
+  ],
   ['GET /items', 'no-auth', 401],
   ['POST /items', 'ok', 201],
   ['POST /items', 'no-auth', 401],
-  ['POST /items', 'invalid-input', 200, ['contract:status', 'status']],
+  [
+    'POST /items',
+    'invalid-input',
+    200,
+    ['contract:status', 'status'],
+    json({ error: { code: 'invalid_body', message: 'A name is required.' } }),
+  ],
   ['GET /items/{id}', 'ok', 200],
   ['GET /items/{id}', 'no-auth', 401],
   ['GET /items/{id}', 'invalid-input', 500, ['contract:status', 'contract:no-5xx', 'status']],
@@ -47,6 +65,10 @@ const DECLARED: Record<string, number[]> = {
   'DELETE /items/{id}': [404],
 };
 
+function json(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
 const BODIES: Record<number, string> = {
   200: '{\n  "result": {\n    "id": 1,\n    "name": "First item"\n  }\n}',
   201: '{\n  "result": {\n    "id": 4,\n    "name": "Bugpatrol item"\n  }\n}',
@@ -64,7 +86,7 @@ export function writeCoverageFixture(root: string): void {
   const now = Date.now();
   mkdirSync(join(root, SESSION), { recursive: true });
   const cells: Record<string, CoverageCell> = {};
-  for (const [index, [endpoint, id, result, failed = []]] of RESULTS.entries()) {
+  for (const [index, [endpoint, id, result, failed = [], own]] of RESULTS.entries()) {
     const at = new Date(now - (RESULTS.length - index) * 1000).toISOString();
     const cell: CoverageCell = { endpoint: endpoint as EndpointKey, case: id, ok: !failed.length, failed, at };
     if (typeof result === 'string') {
@@ -73,14 +95,15 @@ export function writeCoverageFixture(root: string): void {
     }
     const [method, template] = endpoint.split(' ') as [HttpMethod, string];
     const path = template.replace('{id}', id === 'missing-id' ? '999999' : id === 'invalid-input' ? '0' : '1');
+    const body = own ?? BODIES[result] ?? '';
     const exchange: HttpExchange = {
       request: { method, path, headers: id === 'no-auth' ? {} : { 'x-workspace-id': 'ws-a' } },
       response: {
         status: result,
         headers: { 'content-type': 'application/json' },
         contentType: 'application/json',
-        body: BODIES[result] ?? '',
-        bytes: BODIES[result]?.length ?? 0,
+        body,
+        bytes: body.length,
       },
       latencyMs: 3 + index,
       at,

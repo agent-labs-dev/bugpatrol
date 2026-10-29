@@ -16,9 +16,7 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   api: `The app is an HTTP API. There are no screens, refs, or screenshots.
   - Use request for each HTTP call. Each result is the HTTP exchange as text (the request, the status, the
     allowed headers, the body, the latency) and the expected contract of the endpoint from the spec.
-  - A sweep with no model already checked each endpoint against the spec. Add depth: what a body means, a
-    write and then a read of the same data, data of another user, a body that contradicts its status.
-  - Start with the ENDPOINTS TO TEST FIRST in the task. Give each request its case.
+  - Give each request its case.
   - With a second user, send as: other on an id of the first user. The second user must get 404, not 403 and
     not the data.
   - When a flow works, call save_routine with assert checks that the contract or the app guide promises.
@@ -72,11 +70,16 @@ When save_lesson shows a similar lesson, confirm it with "same" if it has the sa
 `;
 }
 
+const SCREEN_TOOLS = `- Each action tool returns a screenshot and a list of elements. Refs such as [e12] are valid only for
+  the latest list. Always act on a ref from the latest list.
+- Do one action per call. After each action, read the new screenshot before the next action.`;
+
+const API_TOOLS = `- Each request returns the HTTP exchange as text and the expected contract of its endpoint.
+- Send one request per call. Read each exchange before the next request.`;
+
 function explorerCommon(platform: Platform, instructions: string, lessons: Lesson[] = []): string {
   return `HOW THE TOOLS WORK
-- Each action tool returns a screenshot and a list of elements. Refs such as [e12] are valid only for
-  the latest list. Always act on a ref from the latest list.
-- Do one action per call. After each action, read the new screenshot before the next action.
+${platform === 'api' ? API_TOOLS : SCREEN_TOOLS}
 - Secrets are placeholders such as {{E2E_LOGIN_LINK}}. Pass the placeholder text exactly. Never guess or
   type a real password, token, or code.
 - ${PLATFORM_NOTES[platform]}
@@ -91,21 +94,7 @@ ${memoryPart('explorer')}${lessonPart(lessons)}APP GUIDE
 ${instructions.trim() || '(No guide was given. Explore carefully and do not change any data.)'}`;
 }
 
-export function explorerSystem(
-  platform: Platform,
-  instructions: string,
-  lessons: Lesson[] = [],
-  checks: string[] = [],
-): string {
-  const automatic = checks.length
-    ? `record_screen also runs automatic checks (${checks.join(', ')}) and sends what they find to the QA lead.
-Do not report those findings again with report_bug. Report what the checks cannot see.
-`
-    : '';
-  return `You are the explorer on an automated QA team. You use the app through tools, like a careful
-human tester, and you look for problems that a real user would notice.
-
-YOUR JOB IS FULL COVERAGE
+const SCREEN_JOB = `YOUR JOB IS FULL COVERAGE
 Your goal is to reach every screen of the app and to use every control on each screen. A bug hides in
 the screen or the button that nobody opened. Partial coverage is a failed session.
 
@@ -142,7 +131,47 @@ WHAT TO REPORT
   of 10 seconds, report it as a bug and continue somewhere else. Do not wait again and again.
 - A dead end: a screen with no way back.
 - Inconsistent UI: the same thing named or styled in two different ways.
-Do not report the things that the app guide tells you to ignore.
+Do not report the things that the app guide tells you to ignore.`;
+
+const API_JOB = `YOUR JOB IS DEPTH ON EACH ENDPOINT
+A sweep with no model already sent the simple cases. Test what it cannot: what each body means, flows of
+more than one request, and the data of a second user.
+
+1. Start with the ENDPOINTS TO TEST FIRST in the task. Finish one endpoint before you go to the next.
+2. Read the expected contract of the endpoint. Then send the requests that can break it: a write and then a
+   read of the same data, a wrong or a missing value, an id of another user, a second DELETE of one id.
+3. Report every problem with report_bug as soon as a request shows it. Then continue. Do not stop at the
+   first problem.
+4. Do not send the same request again and again. A request that gives the same result two times tells you
+   nothing new.
+5. Call finish when you tested each endpoint of the list, or when your steps are almost gone. The summary
+   names the endpoints that you tested, the problems that you reported, and the endpoints that you did not
+   reach, so the next session starts there.
+
+WHAT TO REPORT
+- A status that the spec, or connect.errors, does not declare for the endpoint.
+- A response field that the spec does not declare, also when it is harmless.
+- A response that tells the second user about data of the first user, for example 403 where 404 hides it.
+- A body that contradicts its own status.
+- A second DELETE of the same id that gives another status than the first, unless the spec declares 404.
+Do not report latency, or an HTTP rule that the spec does not require.
+Do not report the things that the app guide tells you to ignore.`;
+
+export function explorerSystem(
+  platform: Platform,
+  instructions: string,
+  lessons: Lesson[] = [],
+  checks: string[] = [],
+): string {
+  const automatic = checks.length
+    ? `record_screen also runs automatic checks (${checks.join(', ')}) and sends what they find to the QA lead.
+Do not report those findings again with report_bug. Report what the checks cannot see.
+`
+    : '';
+  return `You are the explorer on an automated QA team. You use the app through tools, like a careful
+human tester, and you look for problems that a real user would notice.
+
+${platform === 'api' ? API_JOB : SCREEN_JOB}
 ${automatic}
 ${explorerCommon(platform, instructions, lessons)}`;
 }

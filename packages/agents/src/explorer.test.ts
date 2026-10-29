@@ -6,6 +6,7 @@ import { buildContract, caseKey, loadSpec, sweepCases } from '@bugpatrol/contrac
 import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { explorerSystem } from './prompts.js';
 import { runExplorer } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
@@ -47,6 +48,17 @@ async function explore(app: Record<string, unknown> = {}) {
   const outcome = await runExplorer(session, runtime);
   return { system: systems[0]!, logs, outcome };
 }
+
+describe('the explorer prompt', () => {
+  it('gives an api explorer requests and endpoints, not screens', () => {
+    const api = explorerSystem('api', '');
+    expect(api).toContain('YOUR JOB IS DEPTH ON EACH ENDPOINT');
+    expect(api).toContain('Each request returns the HTTP exchange');
+    for (const words of ['record_screen', 'Each action tool returns a screenshot', 'FULL COVERAGE'])
+      expect(api).not.toContain(words);
+    expect(explorerSystem('web', '')).toContain('record_screen');
+  });
+});
 
 describe('the explorer app guide', () => {
   it('says in the run log when the app has no guide', async () => {
