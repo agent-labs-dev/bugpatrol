@@ -517,6 +517,21 @@ export const agentsSchema = z
           .default(20 * 60 * 1000),
       })
       .default({}),
+    /**
+     * `bugpatrol sweep`, and the sweep that an api patrol runs before the
+     * explorer. A run stops at either limit, and the next run resumes there.
+     */
+    sweep: z
+      .object({
+        /** The most requests in one run. A second replay of a failure can go over by one case. */
+        maxRequests: z.number().int().positive().default(600),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .default(30 * 60 * 1000),
+      })
+      .default({}),
     patrol: z
       .object({
         intervalMinutes: z.number().positive().default(30),

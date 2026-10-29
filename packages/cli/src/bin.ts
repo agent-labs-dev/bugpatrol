@@ -13,6 +13,7 @@ import { runMemoryCommand } from './commands/memory.js';
 import { runPromoteCommand } from './commands/promote.js';
 import { exitCodeForError, runCommand } from './commands/run.js';
 import { formatRunSummary, parseRunFlags } from './commands/run-cli.js';
+import { runSweepCommand } from './commands/sweep.js';
 import { commandHelp, USAGE } from './usage.js';
 
 legacyEnv(process.env);
@@ -115,6 +116,11 @@ try {
     case 'endpoints': {
       const config = args.includes('--spec') ? optionalConfig() : readConfig();
       await runEndpointsCommand(args, root, (line) => process.stdout.write(`${line}\n`), config);
+      break;
+    }
+
+    case 'sweep': {
+      process.exit(await runSweepCommand(args, root, readConfig(), (line) => process.stdout.write(`${line}\n`)));
       break;
     }
 

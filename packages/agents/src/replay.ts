@@ -432,7 +432,8 @@ async function actWhenReady(driver: Driver, action: DriverAction, session: Agent
   }
 }
 
-function toAction({ assert: _assert, ...step }: RoutineStep, session: AgentSession): DriverAction {
+/** A routine step as a driver action, with its placeholders resolved. */
+export function toAction({ assert: _assert, ...step }: RoutineStep, session: AgentSession): DriverAction {
   if (step.kind === 'tap') return { kind: 'tap', locator: step.target };
   if (step.kind === 'type') {
     return {

@@ -9,7 +9,11 @@ import type { ActResult, Driver, DriverAction, Observation, RawResponse } from '
 
 type ApiOptions = {
   url: string;
-  headers: Record<string, string>;
+  /**
+   * The headers of each credential set (3b). A request `as: 'none'` sends
+   * neither set, so a no-auth case removes exactly the configured credentials.
+   */
+  credentials: { self: Record<string, string>; other?: Record<string, string> };
   /** What may be requested. The driver checks each request against it before it sends. */
   policy: RequestPolicy;
   pacer: Pacer;
@@ -124,7 +128,9 @@ export class ApiDriver implements Driver {
       if (action.body && ['GET', 'HEAD'].includes(action.method))
         throw new Error('GET and HEAD cannot have a request body');
       if (Buffer.byteLength(action.body ?? '') > MAX_BODY_BYTES) throw new Error('Request body exceeds 1 MiB');
-      const headers = new Headers(this.api.headers);
+      const credentials = action.as === 'none' ? {} : this.api.credentials[action.as ?? 'self'];
+      if (!credentials) throw new Error('No second credential set is configured, so nothing can be sent as other');
+      const headers = new Headers(credentials);
       for (const [name, value] of Object.entries(action.headers ?? {})) headers.set(name, value);
       if (['host', 'connection', 'proxy-authorization'].some((name) => headers.has(name)))
         throw new Error('Host, connection and proxy authorization headers cannot be overridden');

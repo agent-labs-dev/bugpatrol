@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
-import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { ApiDriver, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -15,6 +16,7 @@ import { cleanWorktrees } from './roles/worktrees.js';
 import { createRuntime } from './runtime/index.js';
 import { AgentSession } from './session.js';
 import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
+import { runSweep } from './sweep.js';
 import type { RoleOutcome } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -234,6 +236,19 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
               await withSessionLogs(
                 { config, root, vars, onLog: options.onLog, workspace, session: record },
                 async () => {
+                  // An api app gets the deterministic sweep first, in the same session, so the
+                  // judge sees its candidates with the explorer's.
+                  if (!interrupted && driver instanceof ApiDriver) {
+                    const sweep = await runSweep(
+                      session,
+                      sweepCases(driver.policy.contract, { credentials: ['self'] }),
+                      config.agents.sweep,
+                    );
+                    options.onLog?.(
+                      `Sweep: ${sweep.requests} request(s), ${sweep.findings.length} finding(s), ` +
+                        `${sweep.remaining} case(s) left for the next cycle.`,
+                    );
+                  }
                   if (!interrupted) {
                     unfinished('Explorer', await runExplorer(session, runtime(config.agents.explorer.use)));
                   } else {

@@ -9,6 +9,7 @@ import {
   type AppMap,
   type AppMapScreen,
   type Candidate,
+  type CoverageFile,
   type FixProposal,
   type HttpExchange,
   type Issue,
@@ -162,6 +163,15 @@ export class Workspace {
 
   async writeAppMap(map: AppMap): Promise<void> {
     await atomic(paths.appMap(this.root), map);
+  }
+
+  /** The sweep's coverage cells and cursor. Absent before the first sweep. */
+  readCoverage(): Promise<CoverageFile | undefined> {
+    return readJson(paths.coverage(this.root));
+  }
+
+  async writeCoverage(coverage: CoverageFile): Promise<void> {
+    await atomic(paths.coverage(this.root), coverage);
   }
 
   async upsertScreen(screen: Partial<AppMapScreen> & Pick<AppMapScreen, 'id'>): Promise<AppMapScreen> {

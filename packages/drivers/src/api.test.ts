@@ -36,7 +36,7 @@ describe('API driver against the fixture API', () => {
   ) =>
     new ApiDriver({
       url,
-      headers: options.headers ?? {},
+      credentials: { self: options.headers ?? {} },
       policy: requestPolicy(contract, {
         url,
         methods: options.methods ?? ['GET'],
@@ -72,7 +72,10 @@ describe('API driver against the fixture API', () => {
     contract = await fixtureContract();
     driver = new ApiDriver({
       url: fixture.url,
-      headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+      credentials: {
+        self: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+        other: { Authorization: 'Bearer fixture-token-b', 'X-Workspace-Id': 'ws-b' },
+      },
       policy: requestPolicy(contract, { url: fixture.url, methods: ['GET', 'POST'], deny: [], disposable: false }),
       pacer: new Pacer({ perMinute: 60_000 }),
       timeoutMs: 300,
@@ -122,6 +125,18 @@ describe('API driver against the fixture API', () => {
       body: '{\n  "name": "hello"\n}',
     });
     expect(formatHttpExchange(write!)).not.toContain('fixture-token');
+  });
+
+  it('sends each credential set, and none for as: none', async () => {
+    const owners = async (as: 'self' | 'other' | 'none') => {
+      await driver.act({ kind: 'request', method: 'GET', url: '/items', as });
+      const raw = driver.lastRaw();
+      const items = (raw?.json as { result?: { owner: string }[] } | undefined)?.result;
+      return items ? [...new Set(items.map((item) => item.owner))] : raw?.status;
+    };
+    expect(await owners('self')).toEqual(['a']);
+    expect(await owners('other')).toEqual(['b']);
+    expect(await owners('none')).toBe(401);
   });
 
   it('gives the raw response before redaction for in-process checks', async () => {

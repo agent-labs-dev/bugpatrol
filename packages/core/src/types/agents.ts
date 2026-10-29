@@ -50,6 +50,9 @@ export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop
 
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+/** The credentials an API request sends: the configured user, the second user (3b), or none. */
+export type CredentialSet = 'self' | 'other' | 'none';
+
 /**
  * How Bugpatrol finds an element again on a later run. The locator is tried
  * first; the point is the last resort, and a replay that needed it is
@@ -94,6 +97,8 @@ export type RoutineStep = (
       headers?: Record<string, string>;
       body?: string;
       capture?: Record<string, string>;
+      /** The credentials of the request. Default: `self`. */
+      as?: CredentialSet;
     }
   /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
   | { kind: 'run'; command: string; input?: string }
@@ -240,7 +245,7 @@ export type Candidate = {
   id: string;
   sessionId: string;
   screenId?: string;
-  source: 'invariant' | 'pixel-diff' | 'explorer' | 'decider';
+  source: 'invariant' | 'pixel-diff' | 'explorer' | 'decider' | 'sweep';
   ruleId?: string;
   fingerprint: string;
   summary: string;
@@ -249,6 +254,8 @@ export type Candidate = {
   evidence: IssueEvidence;
   /** Where the decider routed it, and why. */
   route?: { to: 'judge' | 'issue' | 'ignore'; reason: string; confidence?: number };
+  /** Sweep candidates: true when the failure repeated on a second replay (ADR 0007), false when it did not. */
+  blocking?: boolean;
   createdAt: string;
 };
 

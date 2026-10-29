@@ -45,7 +45,9 @@ export function createDriver(
     const origin = vars(url);
     return new ApiDriver({
       url: origin,
-      headers: Object.fromEntries(Object.entries(connect.headers).map(([name, value]) => [name, vars(value)])),
+      credentials: {
+        self: Object.fromEntries(Object.entries(connect.headers).map(([name, value]) => [name, vars(value)])),
+      },
       policy: requestPolicy(contract, { ...connect, url: origin }),
       pacer: new Pacer({ perMinute: connect.perMinute }),
       timeoutMs: connect.timeoutMs,

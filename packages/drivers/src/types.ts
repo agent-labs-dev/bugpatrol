@@ -1,4 +1,12 @@
-import type { HttpExchange, HttpMethod, Locator, Platform, RoutineStep, SampleFile } from '@bugpatrol/core';
+import type {
+  CredentialSet,
+  HttpExchange,
+  HttpMethod,
+  Locator,
+  Platform,
+  RoutineStep,
+  SampleFile,
+} from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 
 /**
@@ -93,6 +101,7 @@ export type DriverAction =
       headers?: Record<string, string>;
       body?: string;
       capture?: Record<string, string>;
+      as?: CredentialSet;
     }
   | { kind: 'run'; command: string; input?: string };
 

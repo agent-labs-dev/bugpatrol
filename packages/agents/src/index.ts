@@ -20,6 +20,7 @@ export * from './roles/review.js';
 export * from './roles/worktrees.js';
 export * from './runtime/index.js';
 export * from './session.js';
+export * from './sweep.js';
 export * from './tools/explorer.js';
 export * from './tools/judge.js';
 export * from './types.js';

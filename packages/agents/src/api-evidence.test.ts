@@ -36,7 +36,7 @@ async function explorer() {
   doc.paths['/auth/login'] = { post: { responses: {} } };
   const driver = new ApiDriver({
     url: fixture.url,
-    headers: {},
+    credentials: { self: {} },
     policy: requestPolicy(buildContract(doc, {}), {
       url: fixture.url,
       methods: ['GET', 'POST'],

@@ -17,7 +17,7 @@ it('replays fresh string and numeric ids without rewriting literal request data'
   const vars = new Vars();
   const driver = new ApiDriver({
     url: fixture.url,
-    headers: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' },
+    credentials: { self: { Authorization: 'Bearer fixture-token-a', 'X-Workspace-Id': 'ws-a' } },
     policy: requestPolicy(buildContract(await loadSpec({ file: fixtureSpecPath }), {}), {
       url: fixture.url,
       methods: ['GET', 'POST'],
