@@ -33,7 +33,9 @@ const captureSchema = z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.stri
 const RESPONSE_HEADERS = ['content-type', 'location', 'retry-after', 'allow', 'www-authenticate', 'x-request-id'];
 /** A JSON key or a header with one of these names holds a credential. */
 const CREDENTIAL =
-  /(?:token|password|secret|authorization|cookie|api[-_]?key|secret[-_]?key|jwt|session|sid|credentials|private[-_]?key)$/i;
+  /(?:token|password|secret|authorization|cookie|api[-_]?key|secret[-_]?key|jwt|session|sid|credentials?|private[-_]?key)$/i;
+/** A JSON Web Token, whatever the key that holds it is named. */
+const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
 function responseCaptures(body: string, pointers: Record<string, string>): Record<string, string> {
   const parsed: unknown = JSON.parse(body);
@@ -52,9 +54,12 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 function redactCredentials(text: string): string {
   try {
     const value: unknown = JSON.parse(text);
-    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), 2);
+    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), 2).replace(
+      JWT,
+      '[redacted]',
+    );
   } catch {
-    return text;
+    return text.replace(JWT, '[redacted]');
   }
 }
 

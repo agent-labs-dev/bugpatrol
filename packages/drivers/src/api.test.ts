@@ -257,6 +257,20 @@ describe('API driver against the fixture API', () => {
       expect(text).not.toContain(secret);
   });
 
+  it('redacts a singular credential key and a JWT under any key', async () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwbGFudGVkIn0.c2lnbmF0dXJlLXBsYW50ZWQ';
+    await driver.act({
+      kind: 'request',
+      method: 'POST',
+      url: '/items',
+      body: JSON.stringify({ name: 'keyed', mutate_credential: 'planted-credential', note: jwt }),
+    });
+    const text = formatHttpExchange((await exchange())!);
+    expect(text).toContain('"mutate_credential": "[redacted]"');
+    expect(text).toContain('"note": "[redacted]"');
+    for (const secret of ['planted-credential', jwt]) expect(text).not.toContain(secret);
+  });
+
   it('a body over 1 MiB is tooLarge evidence', async () => {
     const result = await driver.act({ kind: 'request', method: 'GET', url: '/export' });
     expect(result.ok).toBe(true);
