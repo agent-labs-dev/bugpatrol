@@ -1,0 +1,284 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bugpatrol API fixture",
+    "version": "1.0.0",
+    "description": "A small item store with planted bugs. Bugpatrol tests itself against it."
+  },
+  "servers": [{ "url": "https://prod.invalid" }],
+  "security": [{ "bearer": [], "workspace": [] }],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The service health.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The deployed commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["result"],
+                  "properties": { "result": { "$ref": "#/components/schemas/Version" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version/fleet": {
+      "get": {
+        "operationId": "getVersionFleet",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The commit of each process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["result"],
+                  "properties": { "result": { "type": "array", "items": { "$ref": "#/components/schemas/Version" } } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items": {
+      "get": {
+        "operationId": "listItems",
+        "responses": {
+          "200": {
+            "description": "The items of the workspace.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemList" } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createItem",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemInput" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "The new item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemResult" } } }
+          },
+          "422": {
+            "description": "The body is not valid.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/items/{id}": {
+      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": {
+        "operationId": "getItem",
+        "responses": {
+          "200": {
+            "description": "One item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemResult" } } }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateItem",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemInput" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The changed item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemResult" } } }
+          },
+          "404": {
+            "description": "No such item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "422": {
+            "description": "The body is not valid.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteItem",
+        "responses": {
+          "204": { "description": "The item is gone." },
+          "404": {
+            "description": "No such item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "operationId": "searchItems",
+        "parameters": [{ "name": "q", "in": "query", "required": false, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "The items whose name contains the query.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ItemList" } } }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "listEvents",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The recent events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["result"],
+                  "properties": { "result": { "type": "array", "items": { "type": "object" } } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/export": {
+      "get": {
+        "operationId": "exportItems",
+        "responses": {
+          "200": {
+            "description": "A full export of the workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["result"],
+                  "properties": { "result": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notify": {
+      "post": {
+        "operationId": "sendNotification",
+        "x-bugpatrol-skip": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "required": ["message"], "properties": { "message": { "type": "string" } } }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The notification is queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["result"],
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "required": ["queued"],
+                      "properties": { "queued": { "type": "boolean" } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/wipe": {
+      "post": {
+        "operationId": "wipeItems",
+        "responses": { "204": { "description": "All items are gone, and the seed items are back." } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer" },
+      "workspace": { "type": "apiKey", "in": "header", "name": "X-Workspace-Id" }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "required": ["status", "db"],
+        "properties": { "status": { "type": "string" }, "db": { "type": "string" } }
+      },
+      "Version": {
+        "type": "object",
+        "required": ["commit"],
+        "properties": { "commit": { "type": "string" } }
+      },
+      "ItemInput": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "minLength": 1 } }
+      },
+      "Item": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+          },
+          {
+            "type": "object",
+            "required": ["owner", "workspace"],
+            "properties": { "owner": { "type": "string" }, "workspace": { "type": "string" } }
+          }
+        ]
+      },
+      "ItemResult": {
+        "type": "object",
+        "required": ["result"],
+        "properties": { "result": { "$ref": "#/components/schemas/Item" } }
+      },
+      "ItemList": {
+        "type": "object",
+        "required": ["result"],
+        "properties": { "result": { "type": "array", "items": { "$ref": "#/components/schemas/Item" } } }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": { "code": { "type": "string" }, "message": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

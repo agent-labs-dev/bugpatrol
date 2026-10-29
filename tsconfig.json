@@ -42,6 +42,9 @@
     },
     {
       "path": "packages/cli"
+    },
+    {
+      "path": "examples/api-fixture"
     }
   ]
 }
