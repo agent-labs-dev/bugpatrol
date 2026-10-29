@@ -1372,3 +1372,133 @@ pre.http.live-shot {
   font-weight: 600;
   margin: 0.5rem 0;
 }
+
+/* ---------- coverage matrix ---------- */
+.matrix-scroll {
+  overflow-x: auto;
+}
+.matrix {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.matrix th,
+.matrix td {
+  padding: 0.3rem 0.45rem;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  white-space: nowrap;
+}
+.matrix thead th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.matrix .matrix-groups th {
+  border-bottom: 0;
+  padding-bottom: 0;
+  font-size: 0.7rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.matrix .matrix-groups th:not(:empty) {
+  border-bottom: 1px solid var(--line);
+}
+.matrix .matrix-groups th.declared {
+  border-right: 1px solid var(--line);
+}
+.matrix thead th.declared {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.matrix th:first-child {
+  text-align: left;
+}
+.matrix tbody th {
+  font-weight: 400;
+  font-size: 0.85rem;
+  padding-right: 1.25rem;
+}
+.matrix .method {
+  display: inline-block;
+  min-width: 3.6rem;
+  color: var(--muted);
+  font:
+    600 0.68rem / 1 ui-monospace,
+    monospace;
+}
+.matrix-cell {
+  display: inline-block;
+  min-width: 4.8rem;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font:
+    600 0.75rem / 1.4 ui-monospace,
+    monospace;
+  color: var(--fg);
+}
+button.matrix-cell:hover,
+.matrix-cell.active {
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
+}
+.matrix-cell.pass {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.matrix-cell.fail {
+  background: var(--critical);
+  color: #2a0505;
+}
+/* A second cue next to the colour: the status of a failed case can look like a good one. */
+.matrix-cell.fail::after {
+  content: " ✕";
+}
+.matrix-cell.blocked {
+  background: color-mix(in srgb, var(--major) 18%, transparent);
+  font-weight: 400;
+}
+.matrix-cell.skip {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--muted);
+  font-weight: 400;
+}
+.matrix-cell.untested {
+  border: 1px dashed var(--muted);
+  color: var(--muted);
+  font-weight: 400;
+}
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.matrix-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.matrix-legend .matrix-cell {
+  min-width: 2.2rem;
+  min-height: 1.3rem;
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.matrix-footer {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+}
+.matrix-exchange {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+.matrix-exchange .section-title h2 {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}

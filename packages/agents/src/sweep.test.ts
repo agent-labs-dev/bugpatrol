@@ -108,11 +108,18 @@ describe('runSweep', () => {
   }, 30_000);
 
   it('slow route and missing Location give no finding', async () => {
-    const { run } = await sweeper();
+    const { run, workspace } = await sweeper();
     const { result } = await run();
     const cells = result.cells;
     const cell = (key: string) => cells.find((item) => `${item.endpoint} ${item.case}` === key);
     expect(cell('GET /search ok')).toMatchObject({ status: 200, ok: true });
+    // The matrix opens the exchange behind each cell and shows the refused cases.
+    expect(cell('GET /search ok')?.exchange).toMatch(/^\.bugpatrol\/.*sweep-ok\.exchange\.json$/);
+    expect((await workspace.readCoverage())!.skipped).toEqual({
+      'POST /notify ok': 'the spec marks it x-bugpatrol-skip',
+      'POST /admin/wipe ok': 'app.connect.deny has /admin/**',
+      'POST /admin/wipe no-auth': 'app.connect.deny has /admin/**',
+    });
     expect(cell('POST /items ok')).toMatchObject({ status: 201, ok: true });
     // The event stream is cut and proves nothing, and the 2 MiB export has no schema check.
     expect(cell('GET /events ok')?.blocked).toContain('event stream');
@@ -225,7 +232,7 @@ describe('runSweep', () => {
   it('two runs give the same coverage, ignoring at', async () => {
     const strip = (cells: CoverageCell[]) =>
       cells
-        .map(({ at: _at, ...cell }) => cell)
+        .map(({ at: _at, exchange: _exchange, ...cell }) => cell)
         .sort((a, b) => `${a.endpoint} ${a.case}`.localeCompare(`${b.endpoint} ${b.case}`));
     const one = await (await sweeper()).run();
     const two = await (await sweeper()).run();

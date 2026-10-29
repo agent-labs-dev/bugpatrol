@@ -110,6 +110,10 @@ async function handle(
     return detail ? json(res, detail) : json(res, { error: 'no such review' }, 404);
   }
   if (path === '/api/appmap') return json(res, ctx.agents.screens());
+  if (path === '/api/coverage') {
+    const coverage = ctx.agents.coverage();
+    return coverage ? json(res, coverage) : json(res, { error: 'no sweep yet' }, 404);
+  }
   if (path === '/api/routines')
     return json(
       res,
@@ -128,6 +132,7 @@ async function handle(
       hasProject: ctx.reader.hasProject(),
       hasConfig: ctx.reader.readConfigRaw() !== undefined,
       hasAppModel: ctx.reader.readAppModel() !== undefined,
+      hasCoverage: existsSync(paths.coverage(ctx.root)),
       runs,
       live: ctx.reader.readLive() ?? null,
       intents: ctx.reader.readIntents().length,

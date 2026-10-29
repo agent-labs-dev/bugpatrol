@@ -15,6 +15,7 @@ import {
   type EndpointKey,
   fingerprint,
   type HttpExchange,
+  type HttpMethod,
   shortHash,
 } from '@bugpatrol/core';
 import { ApiDriver, type Observation } from '@bugpatrol/drivers';
@@ -111,6 +112,8 @@ type CaseRun = {
   failing?: Observation;
   /** The last checked request that got an error status. */
   error?: HttpExchange;
+  /** The last checked request. */
+  exchange?: HttpExchange;
 };
 
 /**
@@ -145,7 +148,15 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
   let requests = 0;
   let stopped: SweepResult['stopped'];
   let errorExchange: HttpExchange | undefined;
-  const save = () => workspace.writeCoverage({ ...coverage, cursor: { specDigest: plan.specDigest, next } });
+  // An endpoint that the contract skips has no cases, so it shows as a skipped `ok`.
+  const skipped = Object.fromEntries([
+    ...contract.skipped.map(({ key }) => {
+      const verdict = driver.policy.check(...(key.split(' ') as [HttpMethod, string]));
+      return [caseKey(key, 'ok'), verdict.ok ? '' : verdict.reason];
+    }),
+    ...plan.skipped.map((item) => [item.key, item.reason]),
+  ]);
+  const save = () => workspace.writeCoverage({ ...coverage, skipped, cursor: { specDigest: plan.specDigest, next } });
 
   for (const item of plan.order) {
     if (session.cancelled) stopped = 'interrupted';
@@ -173,6 +184,13 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
       differs = confirmed.get(key)?.differs;
     }
     errorExchange = first.error ?? errorExchange;
+    const exchange =
+      first.exchange &&
+      (await workspace.saveCapture(
+        session.sessionId,
+        { kind: 'http', exchange: session.vars.redact(first.exchange) as HttpExchange },
+        `sweep-${item.case}`,
+      ));
     const cell: CoverageCell = {
       endpoint: item.endpoint.key,
       case: item.case,
@@ -180,6 +198,7 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
       ok: !first.blocked && !ids.length,
       failed: ids,
       ...(first.blocked ? { blocked: first.blocked } : {}),
+      ...(exchange ? { exchange } : {}),
       at: now(),
     };
     write(cell);
@@ -251,6 +270,7 @@ async function runCase(session: AgentSession, item: SweepCase, contract: Contrac
     if (!step.assert?.length) continue;
     const screen = await driver.observe();
     const response = screen.capture.kind === 'http' ? screen.capture.exchange?.response : undefined;
+    if (screen.capture.kind === 'http') run.exchange = screen.capture.exchange;
     // T8: Bugpatrol does not test an event stream, so a stream proves nothing.
     if (response?.stream) return { ...run, blocked: 'the response is an event stream, which the sweep does not test' };
     const results = checkAssertions(step.assert, screen, { raw: driver.lastRaw(), contract });

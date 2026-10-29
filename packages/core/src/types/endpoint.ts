@@ -55,6 +55,8 @@ export type CoverageCell = {
   failed: string[];
   /** Why the case did not run, for example "no known id". A blocked cell proves nothing. */
   blocked?: string;
+  /** The workspace-relative `.exchange.json` file of the checked request. */
+  exchange?: string;
   at: string;
 };
 
@@ -66,5 +68,7 @@ export type CoverageCell = {
 export type CoverageFile = {
   version: 1;
   cells: Record<string, CoverageCell>;
+  /** The case keys that the request policy refused in the last run, with the reason. They send nothing. */
+  skipped?: Record<string, string>;
   cursor?: { specDigest: string; next: string[] };
 };

@@ -26,6 +26,9 @@ const state = {
   selectedScreenId: null,
   routines: [],
   memory: { lessons: [] },
+  hasCoverage: false,
+  coverage: null,
+  selectedCell: null,
   runs: [],
   selectedRunId: null,
   reviews: [],
@@ -74,6 +77,7 @@ async function refresh({ keepSelection = true } = {}) {
   state.runs = snapshot.runs;
   state.live = snapshot.live;
   state.root = snapshot.root;
+  state.hasCoverage = snapshot.hasCoverage;
   state.overview = await getJson('/api/overview');
   projectEl.textContent = state.overview.project.name;
   platformEl.textContent = state.overview.project.platform;
@@ -135,6 +139,10 @@ async function refresh({ keepSelection = true } = {}) {
     }
   }
   if (state.view === 'memory') state.memory = await getJson('/api/memory');
+  if (state.view === 'coverage' && state.hasCoverage) {
+    state.coverage = await getJson('/api/coverage');
+    if (!state.coverage.cells[state.selectedCell]?.exchange) state.selectedCell = null;
+  }
   if (state.view === 'reviews') {
     const reviews = await getJson('/api/reviews');
     if (!reviews.some((review) => review.pr.number === state.selectedReview)) {
@@ -165,9 +173,12 @@ function render() {
   // (native apps have none) does not need the tab.
   const hasChecks = state.runs.length > 0 || state.live?.status === 'running';
   if (state.view === 'checks' && !hasChecks) state.view = 'overview';
+  // Coverage shows the sweep of an API. Before the first sweep, there is nothing to show.
+  if (state.view === 'coverage' && !state.hasCoverage) state.view = 'overview';
   for (const button of tabs.querySelectorAll('button')) {
     button.classList.toggle('active', button.dataset.view === state.view);
     if (button.dataset.view === 'checks') button.hidden = !hasChecks;
+    if (button.dataset.view === 'coverage') button.hidden = !state.hasCoverage;
   }
   // The same page, drawn again with new data, keeps what the reader opened and where they were.
   const page = JSON.stringify([
@@ -177,6 +188,7 @@ function render() {
     state.selectedReview,
     state.selectedRunId,
     state.selectedScreenId,
+    state.selectedCell,
   ]);
   const opened = page === renderedPage ? detailsOpen() : undefined;
   const scroll = window.scrollY;
@@ -194,6 +206,7 @@ function render() {
     screens: renderScreens,
     reviews: renderReviews,
     memory: renderMemory,
+    coverage: renderCoverage,
     checks: renderRuns,
   };
   view.append(renderers[state.view]());
@@ -2114,6 +2127,135 @@ function renderMemory() {
   ]);
 }
 
+const CASE_WORDS = {
+  ok: ['2xx', 'The request as the spec describes it'],
+  'no-auth': ['no-auth', 'The request without credentials'],
+  'invalid-input': ['invalid-input', 'A body or a parameter that the schema rejects'],
+  'missing-id': ['missing-id', 'An id that does not exist'],
+  'other-user': ['other-user', 'The data of one user, read by a second user'],
+  'repeat-delete': ['repeat-delete', 'The same DELETE two times'],
+};
+const CELL_WORDS = {
+  pass: 'Pass',
+  fail: 'Fail',
+  blocked: 'Blocked: the sweep could not run the case',
+  skip: 'Skip: the request policy refuses the case',
+  untested: 'Untested: the case waits in the sweep cursor',
+};
+
+function caseHeader(id) {
+  if (id.startsWith('declared:')) {
+    const code = id.slice('declared:'.length);
+    return [code, `A declared error status. The cell shows the case that got ${code}.`];
+  }
+  return CASE_WORDS[id] ?? [id, id];
+}
+
+const LEGEND = { pass: '200', fail: '500', blocked: 'blocked', skip: 'skip', untested: 'untested' };
+const CELL_BADGE = { pass: 'pass', fail: 'fail', blocked: 'warn' };
+
+/** The exchange behind one cell, as the server formats it. */
+function renderCellExchange(key, cell) {
+  const space = key.lastIndexOf(' ');
+  const label = `${key.slice(0, space)} · ${caseHeader(key.slice(space + 1))[0]}`;
+  const reason = cell.state === 'fail' ? `Failed checks: ${cell.reason}` : cell.reason;
+  return el('section', { class: 'matrix-exchange' }, [
+    el('div', { class: 'section-title' }, [
+      el('h2', { text: label }),
+      el('span', { class: `badge ${CELL_BADGE[cell.state] ?? 'info'}`, text: cell.state }),
+    ]),
+    reason ? el('p', { class: 'muted', text: reason }) : null,
+    image(cell.exchange, label),
+  ]);
+}
+
+/** The endpoint × case matrix of the last sweeps. A cell shows the status that the case got. */
+function renderCoverage() {
+  const data = state.coverage;
+  if (!data) return el('div', { class: 'empty', text: 'Loading coverage…' });
+  const { endpoints, cases, cells } = data;
+  // A `declared:<code>` cell copies the cell of its case, so the totals count the cases only.
+  const own = Object.entries(cells).filter(([key]) => !/ declared:\d+$/.test(key));
+  const tested = own.filter(([, cell]) => cell.state === 'pass' || cell.state === 'fail');
+  const covered = new Set(tested.map(([key]) => key.slice(0, key.lastIndexOf(' '))));
+  const failures = tested.filter(([, cell]) => cell.state === 'fail').length;
+
+  const cellView = (endpoint, id) => {
+    const key = `${endpoint} ${id}`;
+    const cell = cells[key];
+    if (!cell) return el('td', { class: 'matrix-none', title: 'The sweep makes no such case for this endpoint' });
+    const text = cell.status ?? cell.state;
+    const tip = [CELL_WORDS[cell.state], cell.reason, cell.at ? relativeTime(cell.at) : ''].filter(Boolean);
+    const props = { class: `matrix-cell ${cell.state}${state.selectedCell === key ? ' active' : ''}`, text };
+    return el('td', {}, [
+      cell.exchange
+        ? el('button', {
+            ...props,
+            type: 'button',
+            title: [...tip, 'Click to open the exchange'].join('\n'),
+            onclick: () => {
+              state.selectedCell = state.selectedCell === key ? null : key;
+              render();
+            },
+          })
+        : el('span', { ...props, title: tip.join('\n') }),
+    ]);
+  };
+  const declared = cases.filter((id) => id.startsWith('declared:')).length;
+  const table = el('table', { class: 'matrix' }, [
+    el('thead', {}, [
+      // The declared columns repeat a case that got that status, so they get their own group.
+      declared
+        ? el('tr', { class: 'matrix-groups' }, [
+            el('th', {}),
+            el('th', {}),
+            el('th', { colspan: declared, class: 'declared', text: 'Declared error statuses' }),
+            cases.length > declared + 1 ? el('th', { colspan: cases.length - declared - 1, text: 'Cases' }) : null,
+          ])
+        : null,
+      el('tr', {}, [
+        el('th', { text: 'Endpoint' }),
+        ...cases.map((id) => {
+          const [label, tip] = caseHeader(id);
+          return el('th', { class: id.startsWith('declared:') ? 'declared' : '', title: tip, text: label });
+        }),
+      ]),
+    ]),
+    el(
+      'tbody',
+      {},
+      endpoints.map((endpoint) => {
+        const space = endpoint.indexOf(' ');
+        return el('tr', {}, [
+          el('th', { scope: 'row' }, [
+            el('span', { class: 'method', text: endpoint.slice(0, space) }),
+            el('code', { text: endpoint.slice(space + 1) }),
+          ]),
+          ...cases.map((id) => cellView(endpoint, id)),
+        ]);
+      }),
+    ),
+  ]);
+  const selected = state.selectedCell && cells[state.selectedCell];
+  return el('section', { class: 'card panel' }, [
+    title('Coverage', 'Endpoint × case, from the sweep'),
+    el('div', { class: 'matrix-legend' }, [
+      ...Object.entries(LEGEND).map(([name, sample]) =>
+        el('span', {}, [el('span', { class: `matrix-cell ${name}`, text: sample }), name]),
+      ),
+      el('span', { text: 'A blank cell: the sweep makes no such case.' }),
+    ]),
+    el('div', { class: 'matrix-scroll' }, [table]),
+    el('p', {
+      class: 'muted matrix-footer',
+      text:
+        `${covered.size} of ${endpoints.length} endpoints covered · ${tested.length} of ${own.length} cases covered · ` +
+        `${failures} ${failures === 1 ? 'failure' : 'failures'} · ${data.remaining} ${data.remaining === 1 ? 'case waits' : 'cases wait'} for the next sweep`,
+    }),
+    selected ? renderCellExchange(state.selectedCell, selected) : null,
+  ]);
+}
+
 // ---------------------------------------------------------------- lightbox
 
 const lightbox = document.getElementById('lightbox');
@@ -2139,6 +2281,7 @@ tabs.addEventListener('click', async (event) => {
   if (!target) return;
   state.view = target.dataset.view;
   if (state.view === 'screens') state.selectedScreenId = null;
+  if (state.view === 'coverage') state.selectedCell = null;
   await refresh();
 });
 

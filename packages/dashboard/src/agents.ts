@@ -10,6 +10,7 @@ import {
   type BugpatrolConfig,
   type Candidate,
   type ClaimVerdict,
+  type CoverageFile,
   type FixProposal,
   fixerAttempts,
   formatHttpExchange,
@@ -24,6 +25,7 @@ import {
   type TokenUsage,
   usageOf,
 } from '@bugpatrol/core';
+import { type CoverageMatrix, coverageMatrix } from './coverage.js';
 
 const roles: AgentRole[] = ['explorer', 'judge', 'fixer'];
 const severity = { critical: 0, major: 1, minor: 2, cosmetic: 3 };
@@ -149,6 +151,12 @@ export class AgentReader {
         ? { ...value.patrol, state: 'stopped' as const, nextAt: undefined }
         : value.patrol;
     return { ...value, agents, patrol };
+  }
+
+  /** The endpoint × case matrix of the sweep. Absent before the first sweep. */
+  coverage(): CoverageMatrix | undefined {
+    const value = readJson<CoverageFile>(paths.coverage(this.root));
+    return value?.cells ? coverageMatrix(value) : undefined;
   }
 
   appmap(): AppMap {

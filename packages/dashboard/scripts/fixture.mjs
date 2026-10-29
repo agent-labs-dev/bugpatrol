@@ -3,10 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { writeAgentFixture } from '../dist/fixtures/agent-workspace.js';
+import { writeCoverageFixture } from '../dist/fixtures/coverage.js';
 
 const root = resolve(process.argv[2] || '/tmp/bugpatrol-fixture');
 mkdirSync(root, { recursive: true });
 writeAgentFixture(root);
+writeCoverageFixture(root);
 
 // The fixture's recordings are stand-in bytes. With ffmpeg, make them real so they play.
 const claim = join(root, '.bugpatrol/runs/reviews/pr-42/claim-1');
