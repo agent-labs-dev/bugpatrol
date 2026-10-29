@@ -594,7 +594,11 @@ describe('api explorer and judge on the fixture, with a scripted model', () => {
             seen.judge = task.system;
             const sessionId = task.prompt.match(/session\(s\) (\S+)\./)![1]!;
             seen.candidates = await new Workspace(root).readCandidates(sessionId);
-            for (const candidate of seen.candidates) {
+            // Explorer reports first: a sweep finding with the same fingerprint is then decided with them.
+            const order = [...seen.candidates].sort(
+              (a, b) => Number(b.source === 'explorer') - Number(a.source === 'explorer'),
+            );
+            for (const candidate of order) {
               await (candidate.source === 'explorer'
                 ? tool('file_issue').run({
                     candidate_ids: [candidate.id],

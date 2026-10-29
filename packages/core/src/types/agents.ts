@@ -266,11 +266,12 @@ export type Candidate = {
 
 /**
  * A candidate that the judge must still decide: the decider routed it to the
- * judge, and no issue holds it and no decision names it. `decided` holds the
- * candidate ids of every issue and every decision.
+ * judge, and nothing decided it. `decided` holds the candidate ids of every
+ * issue and every decision, and the fingerprints in the triage file: a
+ * finding that a later run found again and the judge decided is decided too.
  */
 export function awaitsJudge(candidate: Candidate, decided: ReadonlySet<string>): boolean {
-  return candidate.route?.to === 'judge' && !decided.has(candidate.id);
+  return candidate.route?.to === 'judge' && !decided.has(candidate.id) && !decided.has(candidate.fingerprint);
 }
 
 export type IssueEvidence = {

@@ -99,6 +99,19 @@ describe('projectSummary', () => {
     );
     expect(summaryOf().waiting).toEqual({ total: 3, repeat: 3 });
   });
+
+  it('stops counting a candidate whose fingerprint the judge decided in a later run', () => {
+    writeProjectFixture(root, 'api');
+    const [first] = new AgentReader(root).waiting();
+    writeFileSync(
+      paths.triage(root),
+      JSON.stringify({
+        version: 1,
+        fingerprints: { [first!.fingerprint]: { decision: 'dismissed', reason: 'found again and judged', at: '' } },
+      }),
+    );
+    expect(summaryOf().waiting.total).toBe(3);
+  });
 });
 
 describe('session report', () => {

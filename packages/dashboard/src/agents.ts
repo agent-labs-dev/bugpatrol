@@ -24,6 +24,7 @@ import {
   type SessionFlow,
   type SessionSummary,
   type TokenUsage,
+  type TriageFile,
   usageOf,
 } from '@bugpatrol/core';
 import { type CoverageMatrix, coverageMatrix } from './coverage.js';
@@ -268,11 +269,14 @@ export class AgentReader {
       this.issues().flatMap((issue) => issue.candidateIds.map((cid) => [cid, issue.id] as const)),
     );
     const dismissed = this.dismissed(id);
+    const triage = this.triage();
     const candidates = this.candidates(id).map((candidate): SessionCandidate => {
-      const issueId = issueOf.get(candidate.id);
+      // A later run can find the same failure again: the judge's decision on its fingerprint counts.
+      const triaged = triage[candidate.fingerprint];
+      const issueId = issueOf.get(candidate.id) ?? (triaged?.decision === 'filed' ? triaged.issueId : undefined);
       const state = issueId
         ? 'filed'
-        : dismissed.has(candidate.id)
+        : dismissed.has(candidate.id) || triaged?.decision === 'dismissed'
           ? 'dismissed'
           : awaitsJudge(candidate, dismissed)
             ? 'waiting'
@@ -300,9 +304,14 @@ export class AgentReader {
     );
   }
 
+  /** The judge's decision on each fingerprint. */
+  private triage(): TriageFile['fingerprints'] {
+    return readJson<TriageFile>(paths.triage(this.root))?.fingerprints ?? {};
+  }
+
   /** Every candidate that waits for the judge, newest first. */
   waiting(): Candidate[] {
-    const filed = this.issues().flatMap((issue) => issue.candidateIds);
+    const filed = [...this.issues().flatMap((issue) => issue.candidateIds), ...Object.keys(this.triage())];
     return this.sessions(Infinity)
       .flatMap((session) => {
         const decided = new Set([...filed, ...this.dismissed(session.id)]);

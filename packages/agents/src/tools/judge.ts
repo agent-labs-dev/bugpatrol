@@ -87,9 +87,10 @@ async function saveRepro(
 export async function pendingCandidates(session: AgentSession, sessionIds: string[]): Promise<Candidate[]> {
   const issues = await session.workspace.listIssues();
   const filed = issues.flatMap((item) => item.candidateIds);
+  const triaged = Object.keys((await session.workspace.readTriage()).fingerprints);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
-    const decided = new Set([...filed, ...(await decisions(session, id))]);
+    const decided = new Set([...filed, ...triaged, ...(await decisions(session, id))]);
     for (const candidate of await session.workspace.readCandidates(id))
       if (awaitsJudge(candidate, decided)) pending.push(candidate);
   }
