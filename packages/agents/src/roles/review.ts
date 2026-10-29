@@ -477,7 +477,7 @@ async function captureBase(
 ): Promise<CaptureTarget[]> {
   const { root, config, workspace, pr, opts } = ctx;
   const targets: CaptureTarget[] = candidates.map((candidate) => ({
-    shot: {
+    capture: {
       screenId: candidate.screenId,
       routineId: candidate.evidence.routineId,
       before: screenshotOf(candidate.evidence.capture),
@@ -513,7 +513,7 @@ async function captureBase(
         steps = outcome.steps;
       } finally {
         review.costUsd += cost;
-        const reached = targets.filter((target) => target.shot.reached).length;
+        const reached = targets.filter((target) => target.capture.reached).length;
         const done = `Reached ${reached} of ${targets.length} flow(s) on the base of PR #${pr.number}`;
         await workspace.endSession(record.id, { summary: done, steps, costUsd: cost });
         session.emit({ kind: 'session-end', summary: done });
@@ -525,9 +525,9 @@ async function captureBase(
     const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
     ctx.log(reason);
     for (const target of targets)
-      if (!target.shot.after) {
-        target.shot.reached = false;
-        target.shot.note = reason;
+      if (!target.capture.after) {
+        target.capture.reached = false;
+        target.capture.note = reason;
       }
   }
   return targets;
@@ -548,7 +548,7 @@ async function judgeFindings(
   opts.onSession?.(session);
   const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
   const baseNote = (index: number) => {
-    const shot = targets[index]!.shot;
+    const shot = targets[index]!.capture;
     return shot.reached ? (shot.note ?? '') : `Not reached on the base build. ${shot.note ?? ''}`.trim();
   };
   const verdicts = new Map<
@@ -565,7 +565,7 @@ async function judgeFindings(
         const candidate = candidates[index];
         if (!candidate) return { ...response('Unknown finding id'), isError: true };
         const head = await beforeParts(root, targets[index]!);
-        const base = await captureParts(root, targets[index]!.shot.after);
+        const base = await captureParts(root, targets[index]!.capture.after);
         return {
           content: [
             {
@@ -650,7 +650,7 @@ async function judgeFindings(
           .map(
             (candidate, index) =>
               `- ${candidate.id} [${candidate.severity}] on ${candidate.screenId ?? 'unknown screen'}: ${candidate.summary}. ` +
-              `Base build: ${targets[index]!.shot.reached ? 'reached' : 'not reached'}.`,
+              `Base build: ${targets[index]!.capture.reached ? 'reached' : 'not reached'}.`,
           )
           .join('\n')}`,
         tools,
@@ -689,7 +689,7 @@ async function judgeFindings(
       ...(candidate.evidence.steps ?? []).map(stepWords),
     ],
     head: screenshotOf(candidate.evidence.capture),
-    base: targets[index]!.shot.after,
+    base: targets[index]!.capture.after,
     baseNote: baseNote(index) || undefined,
   }));
 }

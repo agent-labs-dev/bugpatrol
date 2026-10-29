@@ -11,11 +11,11 @@ describe('Workspace', () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
     const workspace = new Workspace(root);
     try {
-      await workspace.upsertScreen({ id: 'home', links: ['settings'], lastScreenshot: 'first.png' });
+      await workspace.upsertScreen({ id: 'home', links: ['settings'], lastCapture: 'first.png' });
       const screen = await workspace.upsertScreen({ id: 'home', links: ['profile'], visits: 2 });
       expect(screen.links).toEqual(['settings', 'profile']);
       expect(screen.visits).toBe(3);
-      expect(screen.lastScreenshot).toBe('first.png');
+      expect(screen.lastCapture).toBe('first.png');
       const transition = {
         to: 'settings',
         kind: 'tap' as const,

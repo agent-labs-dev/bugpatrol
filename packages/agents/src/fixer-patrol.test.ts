@@ -790,14 +790,14 @@ describe('multi-screen retest', () => {
           },
         }),
       });
-      expect(retest.shots).toMatchObject([
+      expect(retest.captures).toMatchObject([
         { screenId: 'usage', reached: true, note: 'Reached 1' },
         { screenId: 'memories', reached: true, note: 'Reached 2' },
       ]);
-      expect(retest.shots?.every((shot) => Boolean(shot.after))).toBe(true);
-      expect(retest.before).toBe(retest.shots?.[0]?.before);
-      expect(retest.after).toBe(retest.shots?.[0]?.after);
-      expect(retest.note).toBe(retest.shots?.[0]?.note);
+      expect(retest.captures?.every((shot) => Boolean(shot.after))).toBe(true);
+      expect(retest.before).toBe(retest.captures?.[0]?.before);
+      expect(retest.after).toBe(retest.captures?.[0]?.after);
+      expect(retest.note).toBe(retest.captures?.[0]?.note);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -853,8 +853,8 @@ describe('multi-screen retest', () => {
           },
         }),
       });
-      expect(retest.shots?.[1]).toMatchObject({ reached: false, note: 'The explorer did not reach this screen.' });
-      expect(retest.shots?.[1]?.after).toBeUndefined();
+      expect(retest.captures?.[1]).toMatchObject({ reached: false, note: 'The explorer did not reach this screen.' });
+      expect(retest.captures?.[1]?.after).toBeUndefined();
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

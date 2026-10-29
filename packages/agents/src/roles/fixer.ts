@@ -529,8 +529,8 @@ async function runOne(
           .join('\n');
   const steps = (issue.evidence.steps ?? []).map((step, index) => `${index + 1}. ${stepWords(step)}`);
   const repro = `Run the routine ${issue.evidence.routineId ?? '(none)'}, then:\n${steps.join('\n')}`;
-  const after = last?.shots?.length
-    ? last.shots
+  const after = last?.captures?.length
+    ? last.captures
         .map(
           (shot) =>
             `${shot.screenId ?? '(unknown screen)'}: ${shot.after ? resolve(session.root, shot.after) : '(unavailable)'}`,

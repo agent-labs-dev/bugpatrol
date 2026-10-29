@@ -211,7 +211,7 @@ export class Workspace {
       ...(transitions.length ? { transitions } : {}),
       visits: (previous?.visits ?? 0) + (screen.visits ?? 1),
       lastSeenAt: screen.lastSeenAt ?? now,
-      lastScreenshot: screen.lastScreenshot ?? previous?.lastScreenshot,
+      lastCapture: screen.lastCapture ?? previous?.lastCapture,
     };
     const screens = [...(map?.screens ?? []).filter((item) => item.id !== screen.id), merged];
     await atomic(paths.appMap(this.root), {

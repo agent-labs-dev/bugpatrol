@@ -65,7 +65,7 @@ async function explorer() {
       summary: result.meta?.summary ?? name,
       tool: name,
       output: result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n'),
-      screenshot: result.meta?.screenshot,
+      capture: result.meta?.capture,
     });
     return result;
   };
@@ -88,7 +88,7 @@ describe('api evidence', () => {
     const text = login.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
     expect(text).toContain('HTTP 200 OK');
     expect(text).toContain('"token": "[redacted]"');
-    expect(login.meta?.screenshot).toMatch(/\.exchange\.json$/);
+    expect(login.meta?.capture).toMatch(/\.exchange\.json$/);
 
     const dir = paths.session(root, session.sessionId);
     const files = await readdir(dir);

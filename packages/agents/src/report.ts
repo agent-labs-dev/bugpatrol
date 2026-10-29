@@ -61,7 +61,9 @@ export function buildReport(input: ReportInput): string {
       const verdict =
         retest.outcome === 'fixed' ? '✅ Fixed' : retest.outcome === 'not-fixed' ? '⚠️ Not fixed' : '❔ Unclear';
       const rows = (
-        retest.shots?.length ? retest.shots : [{ screenId: issue.screenId, before: retest.before, after: retest.after }]
+        retest.captures?.length
+          ? retest.captures
+          : [{ screenId: issue.screenId, before: retest.before, after: retest.after }]
       ).map(
         (shot) =>
           `| ${shot.screenId ?? 'Screen'} | ${image(shot.before ?? retest.before, 240)} | ${image(shot.after ?? retest.after, 240)} |`,

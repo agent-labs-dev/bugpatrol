@@ -656,7 +656,7 @@ function renderUsage(usage) {
 }
 
 /** A capture file: a screenshot, or the exchange file of an API, which shows as text. */
-function image(path, label, className = '') {
+function captureFile(path, label, className = '') {
   if (!path) return el('div', { class: `image-empty ${className}`, text: 'No capture' });
   if (path.endsWith('.exchange.json')) {
     const small = isThumb(className);
@@ -686,7 +686,7 @@ function image(path, label, className = '') {
 
 /** The capture of an issue: its screenshot, or the HTTP exchange of an API as the server formatted it. */
 function captureView(capture, label, className = '') {
-  if (capture?.kind !== 'http') return image(capture?.screenshot, label, className);
+  if (capture?.kind !== 'http') return captureFile(capture?.screenshot, label, className);
   if (isThumb(className)) return httpThumb(capture.exchange?.response?.status, label, className);
   return el('pre', { class: `http ${className}`, title: label, text: capture.text });
 }
@@ -792,7 +792,7 @@ function renderOverview() {
     title('Live', live ? 'Session running' : 'Quiet now'),
     live
       ? el('div', {}, [
-          image(live.screenshot, 'Newest session capture', 'live-shot'),
+          captureFile(live.capture, 'Newest session capture', 'live-shot'),
           el('div', { class: 'event-list' }, live.events.map(renderEventRow)),
         ])
       : el('div', { class: 'quiet' }, [
@@ -820,7 +820,7 @@ function renderOverview() {
       { class: 'coverage-row' },
       data.screens.map((screen) =>
         el('button', { class: 'coverage-item', onclick: () => openScreen(screen.id) }, [
-          image(screen.lastScreenshot, screen.name),
+          captureFile(screen.lastCapture, screen.name),
           el('span', { text: screen.name }),
         ]),
       ),
@@ -926,7 +926,7 @@ function renderIssueDetail() {
           ['Diff', capture?.diff],
         ]
           .filter(([, path]) => path)
-          .map(([label, path]) => el('figure', {}, [image(path, label), el('figcaption', { text: label })]));
+          .map(([label, path]) => el('figure', {}, [captureFile(path, label), el('figcaption', { text: label })]));
   const steps = evidence.steps ?? detail.routine?.steps ?? [];
   return el('article', { class: 'card panel issue-detail' }, [
     el('div', { class: 'detail-heading' }, [el('h1', { text: issue.title }), severityChip(issue.severity)]),
@@ -1194,16 +1194,16 @@ function retestBlock(retest, issue) {
   const before = retest.before ?? capture?.screenshot;
   // An API issue has no before file: the reported exchange is the before.
   const beforeView = (path) =>
-    !path && capture?.kind === 'http' ? captureView(capture, 'Before') : image(path, 'Before');
+    !path && capture?.kind === 'http' ? captureView(capture, 'Before') : captureFile(path, 'Before');
   const pair = (shot) =>
     el('div', { class: 'retest-shot-pair' }, [
-      retest.shots?.length ? el('h4', { text: screenName(shot.screenId) }) : null,
+      retest.captures?.length ? el('h4', { text: screenName(shot.screenId) }) : null,
       shot.reached === false ? el('span', { class: 'muted', text: 'Not reached' }) : null,
       shot.note ? el('p', { class: 'muted', text: shot.note }) : null,
       el('div', { class: 'retest-shots' }, [
         el('figure', {}, [beforeView(shot.before), el('figcaption', { text: 'Before' })]),
         el('figure', {}, [
-          image(shot.after, 'After (with the fix)'),
+          captureFile(shot.after, 'After (with the fix)'),
           el('figcaption', { text: 'After (with the fix)' }),
         ]),
       ]),
@@ -1211,8 +1211,8 @@ function retestBlock(retest, issue) {
   return el('div', { class: 'retest-block' }, [
     el('h3', { text: `Retest ${retest.attempt}: ${retest.outcome}` }),
     el('p', { text: retest.reason }),
-    retest.shots?.length
-      ? retest.shots.map((shot) => pair(shot))
+    retest.captures?.length
+      ? retest.captures.map((shot) => pair(shot))
       : pair({ before, after: retest.after, note: retest.note }),
   ]);
 }
@@ -1357,7 +1357,7 @@ function renderEventRow(event) {
           text: tokens(event.tokens, ''),
         })
       : null,
-    event.screenshot ? image(event.screenshot, event.summary, 'event-thumb') : null,
+    event.capture ? captureFile(event.capture, event.summary, 'event-thumb') : null,
     event.input !== undefined || event.output !== undefined
       ? el('details', {}, [
           el('summary', { text: 'Tool data' }),
@@ -1435,7 +1435,7 @@ function renderFlowRow(entry) {
     el('span', { class: 'flow-kind', text: entry.kind }),
     el('span', { class: 'grow truncate', text: entry.summary }),
     entry.level ? el('small', { class: 'muted', text: entry.level }) : null,
-    entry.screenshot ? image(entry.screenshot, entry.summary, 'event-thumb') : null,
+    entry.capture ? captureFile(entry.capture, entry.summary, 'event-thumb') : null,
   ]);
 }
 
@@ -1465,7 +1465,7 @@ function renderScreens() {
         },
       }),
       title(selected.name, `${selected.visits} visits · ${relativeTime(selected.lastSeenAt)}`),
-      image(selected.lastScreenshot, selected.name, 'screen-large'),
+      captureFile(selected.lastCapture, selected.name, 'screen-large'),
       el('p', { text: selected.description }),
       title('Routine'),
       el('p', {
@@ -1534,7 +1534,7 @@ function renderScreens() {
                   onclick: () => openScreen(screen.id),
                 },
                 [
-                  image(screen.lastScreenshot, screen.name),
+                  captureFile(screen.lastCapture, screen.name),
                   el('div', { class: 'screen-copy' }, [
                     el('strong', { text: screen.name }),
                     el('p', { class: 'truncate muted', text: screen.description }),
@@ -1645,14 +1645,14 @@ function renderScreenGraph(screens, allEdges) {
       },
     });
     card.append(svgEl('rect', { x: node.x, y: node.y, width: node.w, height: node.h, rx: 9, class: 'graph-card' }));
-    if (screen.lastScreenshot)
+    if (screen.lastCapture)
       card.append(
         svgEl('image', {
           x: node.x + 5,
           y: node.y + 5,
           width: node.w - 10,
           height: 104,
-          href: artifact(screen.lastScreenshot),
+          href: artifact(screen.lastCapture),
           preserveAspectRatio: 'xMidYMin slice',
         }),
       );
@@ -2019,7 +2019,9 @@ function buildEvidence(label, replay, recordings) {
     el(
       'div',
       { class: 'shot-strip' },
-      shots.map((path, index) => image(path, `${label}: ${index ? `after step ${index}` : 'before the first step'}`)),
+      shots.map((path, index) =>
+        captureFile(path, `${label}: ${index ? `after step ${index}` : 'before the first step'}`),
+      ),
     );
   return el('figure', { class: 'build-evidence' }, [
     pick ? recordingView(pick) : shots.length ? strip() : el('div', { class: 'image-empty', text: 'No capture' }),
@@ -2038,7 +2040,10 @@ function recordingView(rec) {
       el('small', { class: 'muted', text: name }),
     ]);
   if (rec.kind === 'image')
-    return el('div', { class: 'recording' }, [image(rec.path, name), el('small', { class: 'muted', text: name })]);
+    return el('div', { class: 'recording' }, [
+      captureFile(rec.path, name),
+      el('small', { class: 'muted', text: name }),
+    ]);
   return castPlayer(rec.path);
 }
 
@@ -2085,8 +2090,11 @@ function findingBlock(finding) {
     el('p', { text: finding.reason }),
     finding.head || finding.base
       ? el('div', { class: 'retest-shots' }, [
-          el('figure', {}, [image(finding.base, 'Base'), el('figcaption', { text: 'Base' })]),
-          el('figure', {}, [image(finding.head, 'This pull request'), el('figcaption', { text: 'This pull request' })]),
+          el('figure', {}, [captureFile(finding.base, 'Base'), el('figcaption', { text: 'Base' })]),
+          el('figure', {}, [
+            captureFile(finding.head, 'This pull request'),
+            el('figcaption', { text: 'This pull request' }),
+          ]),
         ])
       : null,
     finding.baseNote ? el('p', { class: 'muted', text: finding.baseNote }) : null,
@@ -2165,7 +2173,7 @@ function renderCellExchange(key, cell) {
       el('span', { class: `badge ${CELL_BADGE[cell.state] ?? 'info'}`, text: cell.state }),
     ]),
     reason ? el('p', { class: 'muted', text: reason }) : null,
-    image(cell.exchange, label),
+    captureFile(cell.exchange, label),
   ]);
 }
 

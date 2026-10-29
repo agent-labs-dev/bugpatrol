@@ -55,7 +55,7 @@ export function writeAgentFixture(root: string): void {
     firstSeenAt: at(140 - index),
     lastSeenAt: at(index * 4),
     visits: 8 - index,
-    lastScreenshot: shot('ses_live', `00${index + 1}-${id}`),
+    lastCapture: shot('ses_live', `00${index + 1}-${id}`),
   }));
   const map: AppMap = {
     version: 1,
@@ -124,7 +124,7 @@ export function writeAgentFixture(root: string): void {
       input: step % 3 === 0 ? { screen: screens[step % 5]!.id } : undefined,
       output: step % 3 === 0 ? { visible: true } : undefined,
       // One step sent an API request, so its capture is an exchange file, not a PNG.
-      screenshot: step === 10 ? exchangeFile(id) : step % 5 === 0 ? screens[step % 5]!.lastScreenshot : undefined,
+      capture: step === 10 ? exchangeFile(id) : step % 5 === 0 ? screens[step % 5]!.lastCapture : undefined,
       screenId: screens[step % 5]!.id,
       costUsd: 0.002,
     }));
@@ -138,7 +138,7 @@ export function writeAgentFixture(root: string): void {
       fingerprint: `fingerprint-${id}-${number}`,
       summary: number ? 'Settings value is clipped.' : 'Billing total differs from invoice.',
       severity: number ? 'minor' : 'critical',
-      evidence: { capture: { kind: 'image', screenshot: screens[number ? 1 : 2]!.lastScreenshot! } },
+      evidence: { capture: { kind: 'image', screenshot: screens[number ? 1 : 2]!.lastCapture! } },
       route: { to: number ? 'ignore' : 'judge', reason: number ? 'Expected responsive layout.' : 'Incorrect total.' },
       createdAt: at(number + 5),
     }));
@@ -146,7 +146,7 @@ export function writeAgentFixture(root: string): void {
     writeFileSync(join(dir, 'sessions', id, 'candidates.jsonl'), `${candidateLines}\n`);
   }
   for (const screen of screens) {
-    const file = join(root, screen.lastScreenshot!);
+    const file = join(root, screen.lastCapture!);
     writeFileSync(file, Buffer.from(PNG, 'base64'));
   }
   for (const id of ['ses_live', 'ses_done']) writeFileSync(join(root, exchangeFile(id)), JSON.stringify(EXCHANGE));
@@ -200,7 +200,7 @@ export function writeAgentFixture(root: string): void {
     version: 1,
     fingerprint: part.id,
     evidence: {
-      capture: { kind: 'image' as const, screenshot: screens.find((s) => s.id === part.screenId)!.lastScreenshot! },
+      capture: { kind: 'image' as const, screenshot: screens.find((s) => s.id === part.screenId)!.lastCapture! },
       routineId: `open-${part.screenId}`,
       steps: [
         { kind: 'tap', target: { name: 'Settings' } },
@@ -275,8 +275,8 @@ export function writeAgentFixture(root: string): void {
         fixAttempt: 2,
         outcome: 'unclear',
         reason: 'The settings screen did not finish loading.',
-        before: screens[1]!.lastScreenshot,
-        after: screens[1]!.lastScreenshot,
+        before: screens[1]!.lastCapture,
+        after: screens[1]!.lastCapture,
         at: at(6),
       },
     ],

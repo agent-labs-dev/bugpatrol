@@ -468,7 +468,7 @@ export class AgentReader {
     const active = sessions.find((session) => session.status === 'running');
     const detail = active ? this.session(active.id) : undefined;
     const events = detail?.events.filter(isFeedEvent).slice(-12) ?? [];
-    const screenshot = [...(detail?.events ?? [])].reverse().find((event) => event.screenshot)?.screenshot;
+    const capture = [...(detail?.events ?? [])].reverse().find((event) => event.capture)?.capture;
     const openIssues = issues.filter((issue) => open.has(issue.status));
     const fixes = this.fixes();
     // Every open issue, so the list and the "open" count agree while the fixer works.
@@ -507,7 +507,7 @@ export class AgentReader {
       usage: usageReport(sessions, now),
       attention,
       github,
-      live: detail ? { summary: detail.session, events, screenshot } : null,
+      live: detail ? { summary: detail.session, events, capture } : null,
       recentSessions: sessions.slice(0, 6),
       screens: [...appmap.screens].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)).slice(0, 8),
     };

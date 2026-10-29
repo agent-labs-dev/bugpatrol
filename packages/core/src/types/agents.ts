@@ -223,7 +223,7 @@ export type AppMapScreen = {
   lastSeenAt: string;
   visits: number;
   /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
-  lastScreenshot?: string;
+  lastCapture?: string;
   baselineKey?: string;
 };
 
@@ -337,7 +337,7 @@ export function judgedRetests(retests: Retest[] = []): Retest[] {
   return retests.filter((retest) => retest.outcome !== 'error' && retest.outcome !== 'skipped');
 }
 
-export type RetestShot = {
+export type RetestCapture = {
   /** The screen the issue saw the problem on; undefined when unknown. */
   screenId?: string;
   routineId?: string;
@@ -361,7 +361,7 @@ export type Retest = {
   /** Workspace-relative capture files: a PNG, or the exchange JSON of an API. */
   before?: string;
   after?: string;
-  shots?: RetestShot[];
+  captures?: RetestCapture[];
   at: string;
   costUsd?: number;
 };
@@ -693,7 +693,8 @@ export type AgentEvent = {
   tool?: string;
   input?: unknown;
   output?: unknown;
-  screenshot?: string;
+  /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
+  capture?: string;
   screenId?: string;
   costUsd?: number;
   /** The tokens of the model call behind this event. */

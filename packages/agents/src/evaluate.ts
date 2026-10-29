@@ -102,7 +102,7 @@ export async function evaluateScreen(
       route: routeResult,
     });
     await session.workspace.appendCandidate(session.sessionId, candidate);
-    session.emit({ kind: 'candidate', summary: candidate.summary, screenId, screenshot });
+    session.emit({ kind: 'candidate', summary: candidate.summary, screenId, capture: screenshot });
     candidates.push(candidate);
   }
   return candidates;

@@ -174,14 +174,14 @@ function captureEvidence(session: AgentSession): Evidence | undefined {
 
 async function observe(session: AgentSession, label: string, summary?: string): Promise<ToolResult> {
   const observation = await session.driver!.observe();
-  const screenshot = await session.capture(observation, label);
+  const capture = await session.capture(observation, label);
   const contract = session.driver instanceof ApiDriver ? session.driver.policy.contract : undefined;
   return {
     content: [
       ...(observation.capture.kind === 'image' ? [{ type: 'image' as const, png: observation.capture.png }] : []),
       { type: 'text', text: session.vars.redact(observationText(observation, contract)) as string },
     ],
-    meta: { summary: summary ?? `Looked at ${observation.title || observation.location}`, screenshot },
+    meta: { summary: summary ?? `Looked at ${observation.title || observation.location}`, capture },
   };
 }
 
@@ -788,7 +788,7 @@ export function explorerTools(
         await session.activity(`Recording ${name}`);
         await session.driver!.settle();
         const observation = await session.driver!.observe();
-        const screenshot = await session.capture(observation, id);
+        const capture = await session.capture(observation, id);
         const findings = session.config.agents.checks.length
           ? await evaluateScreen(session, {
               screenId: id,
@@ -808,7 +808,7 @@ export function explorerTools(
           location: observation.location,
           screenKey: screenKey(observation),
           routineId,
-          lastScreenshot: screenshot,
+          lastCapture: capture,
         });
         if (previous && previous !== id) {
           await session.workspace.upsertScreen({
@@ -833,7 +833,7 @@ export function explorerTools(
           kind: 'screen',
           summary: `Recorded ${name}${findings.length ? ` (${findings.length} automatic finding(s))` : ''}`,
           screenId: id,
-          screenshot,
+          capture,
         });
         return {
           ...text(
@@ -841,7 +841,7 @@ export function explorerTools(
               `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}`,
             ) as string,
           ),
-          meta: { summary: '', screenshot, screenId: id },
+          meta: { summary: '', capture, screenId: id },
         };
       },
     },
@@ -1000,7 +1000,7 @@ export function explorerTools(
           }
         }
         await session.workspace.appendCandidate(session.sessionId, candidate);
-        session.emit({ kind: 'candidate', summary: title, screenshot: session.lastCapture });
+        session.emit({ kind: 'candidate', summary: title, capture: session.lastCapture });
         return text(`Reported ${candidate.id}: ${title}.${fallback}`);
       },
     },

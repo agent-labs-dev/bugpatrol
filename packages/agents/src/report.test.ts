@@ -36,7 +36,7 @@ const fix: FixProposal = {
       outcome: 'fixed',
       reason: 'Both screens work.',
       at: 'now',
-      shots: [
+      captures: [
         { screenId: 'home', before: 'before1.png', after: 'after1.png' },
         { screenId: 'settings', before: 'before2.png', after: 'after2.png' },
       ],

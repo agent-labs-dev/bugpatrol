@@ -1,4 +1,4 @@
-import { type Evidence, formatHttpExchange, type RetestShot, type RoutineStep } from '@bugpatrol/core';
+import { type Evidence, formatHttpExchange, type RetestCapture, type RoutineStep } from '@bugpatrol/core';
 import { captureParts, evidenceParts } from '../evidence.js';
 import { type replayRoutine, replaySteps } from '../replay.js';
 import type { AgentSession } from '../session.js';
@@ -18,30 +18,30 @@ const response = (value: string) => ({ content: [{ type: 'text' as const, text: 
 
 /**
  * A flow to repeat: `steps` follow the routine. `reported` is what the issue
- * saw there, and `shot.before` is its screenshot file. An API exchange has no
+ * saw there, and `capture.before` is its screenshot file. An API exchange has no
  * file, so only `reported` holds it.
  */
-export type CaptureTarget = { shot: RetestShot; steps: RoutineStep[]; reported?: Evidence };
+export type CaptureTarget = { capture: RetestCapture; steps: RoutineStep[]; reported?: Evidence };
 
 /** What a model sees of a target as it was reported. */
 export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
   return target.reported?.kind === 'http'
     ? evidenceParts(root, target.reported)
-    : captureParts(root, target.shot.before);
+    : captureParts(root, target.capture.before);
 }
 
 export function targetLines(targets: CaptureTarget[]): string {
   return targets
     .map(
       (target, index) =>
-        `${index + 1}. screen ${target.shot.screenId ?? '(unknown)'} — routine ${target.shot.routineId ?? '(none)'} — steps: ${target.steps.map(stepWords).join('; ') || '(none)'}`,
+        `${index + 1}. screen ${target.capture.screenId ?? '(unknown)'} — routine ${target.capture.routineId ?? '(none)'} — steps: ${target.steps.map(stepWords).join('; ') || '(none)'}`,
     )
     .join('\n');
 }
 
 /**
  * The explorer repeats each target's flow on the build that runs now, and
- * captures what it sees in `shot.after`. A retest uses it on a fix build, and
+ * captures what it sees in `capture.after`. A retest uses it on a fix build, and
  * a pull request review on the base build. The caller owns the session and
  * the verdict: the explorer only captures.
  */
@@ -85,7 +85,7 @@ export async function captureTargets(
           return { ...response(`Issue steps failed at ${result.failedStep}: ${result.error}`), isError: true };
         await driver.settle();
         const observation = await driver.observe();
-        const screenshot = await session.capture(observation, `retest-steps-${input.target}`);
+        const file = await session.capture(observation, `retest-steps-${input.target}`);
         const { capture } = observation;
         return {
           content: [
@@ -104,7 +104,7 @@ export async function captureTargets(
               ) as string,
             },
           ],
-          meta: { screenshot, summary: `Replayed steps for screen ${input.target}` },
+          meta: { capture: file, summary: `Replayed steps for screen ${input.target}` },
         };
       },
     },
@@ -116,7 +116,7 @@ export async function captureTargets(
         const target = selected(input);
         if (!target) return { ...response('Choose a valid target number.'), isError: true };
         const content: Awaited<ReturnType<Tool['run']>>['content'] = [
-          { type: 'text', text: `Screen ${input.target}: ${target.shot.screenId ?? '(unknown)'}` },
+          { type: 'text', text: `Screen ${input.target}: ${target.capture.screenId ?? '(unknown)'}` },
         ];
         content.push(...(await beforeParts(session.root, target)));
         return { content };
@@ -135,12 +135,12 @@ export async function captureTargets(
         if (!target) return { ...response('Choose a valid target number.'), isError: true };
         await driver.settle();
         const observation = await driver.observe();
-        target.shot.after = await session.capture(observation, `retest-after-${input.target}`);
-        target.shot.note = String(input.note ?? '');
-        target.shot.reached = input.reached === true;
+        target.capture.after = await session.capture(observation, `retest-after-${input.target}`);
+        target.capture.note = String(input.note ?? '');
+        target.capture.reached = input.reached === true;
         return {
-          ...response(`Captured after screenshot for screen ${input.target}: ${target.shot.after}`),
-          meta: { screenshot: target.shot.after, summary: `Retest capture: ${target.shot.note}` },
+          ...response(`Saved the after capture for screen ${input.target}: ${target.capture.after}`),
+          meta: { capture: target.capture.after, summary: `Retest capture: ${target.capture.note}` },
         };
       },
     },
@@ -149,7 +149,7 @@ export async function captureTargets(
       description: 'Finish after capturing every target.',
       inputSchema: schema({ summary: string }, ['summary']),
       async run(input) {
-        const missing = targets.flatMap((target, index) => (target.shot.after ? [] : [index + 1]));
+        const missing = targets.flatMap((target, index) => (target.capture.after ? [] : [index + 1]));
         if (missing.length && !finishTried) {
           finishTried = true;
           return {
@@ -176,23 +176,23 @@ export async function captureTargets(
       },
       session.emit,
     );
-    if (!finishSummary && !targets.some((target) => target.shot.after))
-      targets[0]!.shot.note = `The explorer stopped without capture_after (${result.stop}).`;
+    if (!finishSummary && !targets.some((target) => target.capture.after))
+      targets[0]!.capture.note = `The explorer stopped without capture_after (${result.stop}).`;
     return result;
   } finally {
-    if (!targets.some((target) => target.shot.after) && targets[0]) {
-      targets[0].shot.note ??= 'The explorer stopped without capture_after.';
-      targets[0].shot.reached = false;
+    if (!targets.some((target) => target.capture.after) && targets[0]) {
+      targets[0].capture.note ??= 'The explorer stopped without capture_after.';
+      targets[0].capture.reached = false;
       try {
-        targets[0].shot.after = await session.capture(await driver.observe(), 'retest-after-1');
+        targets[0].capture.after = await session.capture(await driver.observe(), 'retest-after-1');
       } catch {
         /* no screen */
       }
     }
     for (const target of targets)
-      if (!target.shot.after) {
-        target.shot.reached = false;
-        target.shot.note = 'The explorer did not reach this screen.';
+      if (!target.capture.after) {
+        target.capture.reached = false;
+        target.capture.note = 'The explorer did not reach this screen.';
       }
   }
 }

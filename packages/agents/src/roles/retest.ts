@@ -10,8 +10,8 @@ import {
   type Issue,
   judgedRetests,
   type Retest,
+  type RetestCapture,
   type RetestOutcome,
-  type RetestShot,
   type RoutineStep,
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
@@ -59,7 +59,7 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
     steps: RoutineStep[] = [],
   ) => {
     const before = screenshotOf(reported);
-    const existing = targets.find(({ shot }) =>
+    const existing = targets.find(({ capture: shot }) =>
       shot.screenId && screenId
         ? shot.screenId === screenId
         : shot.routineId && routineId
@@ -69,15 +69,15 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
             : false,
     );
     if (existing) {
-      existing.shot.screenId ??= screenId;
-      existing.shot.routineId ??= routineId;
-      existing.shot.before ??= before;
+      existing.capture.screenId ??= screenId;
+      existing.capture.routineId ??= routineId;
+      existing.capture.before ??= before;
       existing.reported ??= reported;
       if (!existing.steps.length) existing.steps = steps;
       return;
     }
     if (targets.length >= 6) return;
-    targets.push({ shot: { screenId, routineId, before }, steps, reported });
+    targets.push({ capture: { screenId, routineId, before }, steps, reported });
   };
   add(issue.screenId, issue.evidence.routineId, issue.evidence.capture, issue.evidence.steps);
   const ids = new Set(issue.candidateIds);
@@ -98,8 +98,8 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
   return targets;
 }
 
-export async function retestTargets(workspace: Workspace, issue: Issue): Promise<RetestShot[]> {
-  return (await loadRetestTargets(workspace, issue)).map((target) => target.shot);
+export async function retestTargets(workspace: Workspace, issue: Issue): Promise<RetestCapture[]> {
+  return (await loadRetestTargets(workspace, issue)).map((target) => target.capture);
 }
 
 /** The explorer repeats the flow; only the judge decides whether the fix worked. */
@@ -119,8 +119,8 @@ export async function retestFix(
     fixAttempt: [...(fix.attempts ?? [])].reverse().find((item) => item.outcome === 'proposed')?.n,
     outcome: 'unclear',
     reason: '',
-    shots: targets.map((target) => target.shot),
-    before: targets[0]?.shot.before,
+    captures: targets.map((target) => target.capture),
+    before: targets[0]?.capture.before,
     at: new Date().toISOString(),
     costUsd: 0,
     build: options.build,
@@ -136,7 +136,7 @@ export async function retestFix(
   if (!config.agents.explorer.enabled || !config.agents.judge.enabled) {
     return { ...retest, outcome: 'skipped', reason: 'The explorer or judge is disabled.' };
   }
-  if (!targets.some((target) => target.shot.routineId || target.steps.length)) {
+  if (!targets.some((target) => target.capture.routineId || target.steps.length)) {
     return { ...retest, outcome: 'skipped', reason: 'The issue has no replayable flow.' };
   }
   const runtime = deps.createRuntime ?? makeRuntime;
@@ -194,8 +194,8 @@ export async function retestFix(
     } finally {
       const cost = outcome?.costUsd ?? 0;
       const explorerStop = outcome?.stop ?? 'done';
-      retest.after = targets[0]?.shot.after;
-      retest.note = targets[0]?.shot.note;
+      retest.after = targets[0]?.capture.after;
+      retest.note = targets[0]?.capture.note;
       retest.costUsd = (retest.costUsd ?? 0) + cost;
       await workspace.endSession(record.id, {
         summary:
@@ -226,7 +226,7 @@ export async function retestFix(
       }
     }
   }
-  if (!targets.some((target) => target.shot.after)) {
+  if (!targets.some((target) => target.capture.after)) {
     retest.outcome = 'unclear';
     retest.reason = retest.note ?? 'The explorer did not reach the issue screen.';
     return retest;
@@ -252,7 +252,7 @@ export async function retestFix(
             { type: 'text', text: `Issue: ${issue.title}\nFixer: ${fix.summary ?? ''}` },
           ];
           for (const [index, target] of targets.entries()) {
-            const shot = target.shot;
+            const shot = target.capture;
             content.push({
               type: 'text',
               text: `Screen ${index + 1}: ${shot.screenId ?? '(unknown)'} — reached: ${shot.reached === true} — explorer: ${shot.note ?? ''}`,
@@ -284,7 +284,7 @@ export async function retestFix(
         prompt: `Issue: ${issue.title}\n${issue.body}\nFixer summary: ${fix.summary ?? ''}\nScreens:\n${targets
           .map(
             (target, index) =>
-              `${index + 1}. ${target.shot.screenId ?? '(unknown)'} — reached: ${target.shot.reached === true} — explorer: ${target.shot.note ?? ''}`,
+              `${index + 1}. ${target.capture.screenId ?? '(unknown)'} — reached: ${target.capture.reached === true} — explorer: ${target.capture.note ?? ''}`,
           )
           .join('\n')}`,
         tools,

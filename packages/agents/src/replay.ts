@@ -295,8 +295,8 @@ async function runSteps(
 /**
  * Dependencies are replayed once; a failed path is a repair task, never a
  * finding. A step whose assertions fail fails the replay. The `contract` and
- * `schema` assertions need `contract`; without it, the replay loads the
- * contract of the project.
+ * `schema` assertions need `contract`; without it, the replay uses the
+ * contract of the api driver.
  */
 export async function replayRoutine(
   session: AgentSession,

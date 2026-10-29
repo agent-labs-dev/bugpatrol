@@ -210,7 +210,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
         ...(item.fix?.retests ?? []).flatMap((retest) => [
           retest.before,
           retest.after,
-          ...(retest.shots ?? []).flatMap((shot) => [shot.before, shot.after]),
+          ...(retest.captures ?? []).flatMap((shot) => [shot.before, shot.after]),
         ]),
       ].filter((path): path is string => Boolean(path)),
     );
@@ -283,7 +283,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
           const last = item.fix?.retests?.at(-1);
           const text = `${item.issue.title}\n${item.issue.body}\nJudgement: ${item.issue.judgement.reason}\nFix: ${item.fix?.summary ?? '(none)'}\nDiff: ${item.fix?.diffStat ?? '(none)'}\nRetest: ${last?.outcome ?? 'none'} — ${last?.reason ?? ''}`;
           const before = [...pathsFor({ ...item, fix: undefined }, candidates)].slice(0, 4);
-          const after = (last?.shots?.length ? last.shots.map((shot) => shot.after) : [last?.after])
+          const after = (last?.captures?.length ? last.captures.map((shot) => shot.after) : [last?.after])
             .filter((path): path is string => Boolean(path))
             .slice(0, 4);
           const content: Awaited<ReturnType<Tool['run']>>['content'] = [

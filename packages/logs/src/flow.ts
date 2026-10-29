@@ -77,7 +77,7 @@ function actionEntry(event: AgentEvent): FlowEntry {
     kind: 'action',
     summary: clip(event.summary),
     label: event.role,
-    screenshot: event.screenshot,
+    capture: event.capture,
   };
 }
 

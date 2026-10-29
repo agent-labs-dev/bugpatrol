@@ -335,7 +335,7 @@ export class ModelRuntime implements Runtime {
         summary: result.meta?.summary ?? `${call.name}: ${firstLine(output)}`,
         tool: call.name,
         output: output.slice(0, 500),
-        screenshot: result.meta?.screenshot,
+        capture: result.meta?.capture,
         screenId: result.meta?.screenId,
         costUsd: index === 0 ? stepCost : undefined,
         ...(index === 0 ? step : {}),

@@ -227,7 +227,7 @@ describe('AgentReader', () => {
       attention: { id: string; fix?: { status: string } }[];
       agents: unknown[];
       counts: { issuesOpen: number };
-      live: { events: { kind: string }[]; screenshot: string };
+      live: { events: { kind: string }[]; capture: string };
     };
     expect(overview.attention.map((issue) => issue.id)).toEqual([
       'iss-billing',
@@ -247,7 +247,7 @@ describe('AgentReader', () => {
     expect(overview.live.events.length).toBeGreaterThan(0);
     expect(overview.live.events.length).toBeLessThanOrEqual(12);
     expect(overview.live.events.every((event) => event.kind !== 'thought' && event.kind !== 'tool-call')).toBe(true);
-    expect(overview.live.screenshot).toContain('.bugpatrol/runs/sessions/ses_live/');
+    expect(overview.live.capture).toContain('.bugpatrol/runs/sessions/ses_live/');
   });
 
   it('joins an issue to its proposal and candidates', () => {
@@ -439,9 +439,7 @@ describe.skipIf(!canBind)('agent API', () => {
     ].join('\n');
     expect(issue.evidence.capture.text.startsWith(text)).toBe(true);
     const events = (await (await fetch(`${dashboard.url}/api/sessions/ses_live`)).json()).events;
-    const file = events.find((event: { screenshot?: string }) =>
-      event.screenshot?.endsWith('.exchange.json'),
-    ).screenshot;
+    const file = events.find((event: { capture?: string }) => event.capture?.endsWith('.exchange.json')).capture;
     const served = await fetch(`${dashboard.url}/api/exchange?path=${encodeURIComponent(file)}`);
     expect(served.headers.get('content-type')).toBe('text/plain; charset=utf-8');
     expect((await served.text()).startsWith(text)).toBe(true);
