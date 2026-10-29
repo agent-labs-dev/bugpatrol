@@ -175,7 +175,48 @@ What you must know before you run it:
 - When the explorer reaches its step limit, its budget (`agents.explorer.budgetUsd`), or its time limit (`agents.explorer.timeoutMs`) after it tested something, the review still posts what it tested, with a hint to raise that limit. An explorer that runs out of time before its first step fails the review.
 - When the app does not start from the pull request commit, `review` stops with an error and posts no review.
 
-To review each pull request in CI, use the Bugpatrol Action (`action.yml` at the root of this repo). [Review pull requests in CI](../README.md#review-pull-requests-in-ci) shows the workflow and the inputs.
+To review each pull request in CI, use the Bugpatrol Action (`action.yml` at the root of this repo). [Review pull requests in CI](#review-pull-requests-in-ci) shows the workflow and the inputs.
+
+### Review pull requests in CI
+
+The Bugpatrol Action runs `bugpatrol review` on each pull request. Set `agents.github.enabled: true` in `.bugpatrol/bugpatrol.yml`, add the API key of your LLM provider as a secret, and add this workflow:
+
+```yaml
+# .github/workflows/bugpatrol.yml
+name: Bugpatrol
+on: pull_request
+permissions:
+  contents: write        # the screenshots on the assets branch
+  pull-requests: write   # the review
+  checks: write          # only with agents.review.block: the claim check run
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: agent-labs-dev/bugpatrol@v0
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+`@v0` moves to each new release. On a release tag, the Action installs the bugpatrol of that release, so the Action and the CLI always match. For a fixed version, use a full tag such as `@v0.2.0`. `@main` installs `bugpatrol@latest`.
+
+On a Blacksmith runner, change only `runs-on`, for example to `blacksmith-4vcpu-ubuntu-2404`. On your own machine, use `runs-on: self-hosted` or its labels. The Action installs Node, Bugpatrol, and Chromium for a web app. For other apps it uses what the machine has: Xvfb for a Linux desktop app, a booted emulator for Android, a Mac with a simulator for iOS. On a self-hosted Linux machine with no passwordless `sudo`, install the system libraries of Chromium first (`npx playwright install-deps chromium`).
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `pr` | the pull request of the event | The pull request to review |
+| `github-token` | `github.token` | The token for `gh` |
+| `package` | the version of the Action tag | The Bugpatrol that npm installs: a version, a tag, or a tarball |
+| `node-version` | `22` | The Node.js version |
+| `working-directory` | `.` | The folder that holds `.bugpatrol/` |
+| `allow-fork` | `false` | Review a pull request from a fork. Its code runs with the secrets of your app |
+| `force` | `false` | Test the same commit again. Without it, a rerun on the same commit only publishes the last review again |
+| `claims` | `false` | Test what the pull request says it does, also when `agents.review.claims` is off |
+| `steps` | `agents.explorer.maxSteps` | The step limit of the explorer |
+| `args` | | More flags for `bugpatrol review` |
+
+The job passes when the review only comments. With `agents.review.block: true`, a claim that a replay disproved twice fails the job with exit code 1, and the claim check run on the pull request fails too ([Block a merge on a disproved claim](#block-a-merge-on-a-disproved-claim)). When Bugpatrol could not test, for example because the app did not start, the job fails with exit code 4. A refused fork or a config error gives exit code 2.
 
 ### The claim check
 

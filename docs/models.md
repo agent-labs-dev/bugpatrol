@@ -2,6 +2,11 @@
 
 Bugpatrol has three LLM agents. They use the app, decide which reports are real bugs, and write the fixes.
 
+Each agent can use a different LLM:
+
+- A local agent CLI, with your existing login: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [opencode](https://opencode.ai), or [pi](https://github.com/badlogic/pi-mono).
+- An API key: OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint.
+
 ## What each agent does
 
 | Agent | What it does | When it runs |
@@ -13,6 +18,16 @@ Bugpatrol has three LLM agents. They use the app, decide which reports are real 
 ## Which model for each agent
 
 Each agent needs different skills. Give the judge your strongest model. Give the explorer a fast, low-cost model.
+
+We recommend these models:
+
+| Agent | What it needs | Anthropic | OpenAI | Other labs (OpenRouter) |
+| --- | --- | --- | --- | --- |
+| Explorer | Vision, computer use, reliable tool calls, low cost | Claude Sonnet 5 | GPT-6 Luna | Gemini 3.8 Flash |
+| Judge | Precision, fine visual detail, clear writing | Claude Opus 5.5 | GPT-6 Sol | Kimi K3 |
+| Fixer | Strong coding, in an agent CLI | Claude Code with Claude Opus 5.5 | Codex with GPT-6 Astra | Kimi CLI with Kimi K3 |
+
+The tables below give the `use:` config and the price of each model.
 
 - **Explorer.** It runs a long loop of tool calls, with a screenshot after each step. It needs good vision, computer use, and reliable tool calls. It uses the most tokens of the three agents, so cost and speed are important. The judge checks each report, so the explorer does not need your strongest model.
 - **Judge.** It makes fewer calls, but its decisions become GitHub issues and PRs. It needs precision, fine visual detail to compare the screenshots before and after a fix, product sense, and clear writing. Use your strongest model with vision.
