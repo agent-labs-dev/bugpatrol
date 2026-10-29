@@ -130,6 +130,25 @@ describe('runSweep', () => {
     expect(candidate?.route?.reason).toContain('does not repeat');
   }, 30_000);
 
+  it('a dismissed fingerprint stays quiet and does not block', async () => {
+    const { workspace, run } = await sweeper();
+    const first = await run();
+    const schema = first.candidates.find((item) => item.summary.startsWith('GET /items ok'))!;
+    await workspace.recordTriage({
+      [schema.fingerprint]: { decision: 'dismissed', reason: 'The extra field is fine', at: 'now' },
+    });
+    const second = await run();
+    // The same failure on the next run has the same key.
+    expect(second.candidates.map((item) => item.fingerprint).sort()).toEqual(
+      first.candidates
+        .map((item) => item.fingerprint)
+        .filter((print) => print !== schema.fingerprint)
+        .sort(),
+    );
+    const dismissed = second.result.findings.filter((finding) => finding.dismissed).map((finding) => finding.key);
+    expect(dismissed).toEqual(['GET /items ok']);
+  }, 30_000);
+
   it('resumes after interruption', async () => {
     const { workspace, cases, run } = await sweeper();
     const first = await run({}, (session) => {

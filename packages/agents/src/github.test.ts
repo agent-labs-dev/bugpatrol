@@ -6,6 +6,8 @@ import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createIssue, createPr, ensureAssetsBranch, type Gh, listFiled, syncGitHub, uploadImage } from './github.js';
 import { buildReport } from './report.js';
+import { runPublisher } from './roles/publish.js';
+import type { Runtime } from './types.js';
 import { Workspace } from './workspace.js';
 
 let dirs: string[] = [];
@@ -72,10 +74,16 @@ describe('GitHub client', () => {
       expect(args).toContain('bugpatrol');
       return 'https://github.com/o/r/issues/8';
     };
-    expect(await createIssue(gh, { repo: 'o/r', title: 'Broken', body: 'Full report', labels: ['bugpatrol'] })).toEqual(
-      { number: 8, url: 'https://github.com/o/r/issues/8' },
-    );
-    expect(body).toBe('Full report');
+    expect(
+      await createIssue(gh, {
+        repo: 'o/r',
+        title: 'Broken',
+        body: 'Full report',
+        labels: ['bugpatrol'],
+        fingerprint: 'fp1',
+      }),
+    ).toEqual({ number: 8, url: 'https://github.com/o/r/issues/8' });
+    expect(body).toBe('<!-- bugpatrol:fp=fp1 -->\nFull report');
   });
   it('gives an issue body an http block for http evidence', async () => {
     let body = '';
@@ -122,7 +130,13 @@ describe('GitHub client', () => {
       imageUrl: () => undefined,
       redact: (text) => text.replaceAll('planted-secret', '{{TOKEN}}'),
     });
-    await createIssue(gh, { repo: 'o/r', title: issue.title, body: report, labels: [] });
+    await createIssue(gh, {
+      repo: 'o/r',
+      title: issue.title,
+      body: report,
+      labels: [],
+      fingerprint: issue.fingerprint,
+    });
     expect(body).toContain(
       [
         '```http',
@@ -387,5 +401,149 @@ describe('GitHub state sync', () => {
       expect(Object.keys((await f.workspace.readTriage()).fingerprints).sort()).toEqual(['candidate-fp', 'issue-fp']);
       expect((await f.workspace.readMemory()).lessons[0]).toMatchObject({ role: 'judge', source: 'human' });
     }
+  });
+});
+
+describe('fingerprint markers', () => {
+  type Remote = { number: number; url: string; title: string; body: string; state: string; stateReason: string };
+  /** A stubbed `gh` with one repo of issues, which a search finds by the text of the body. */
+  function github(remote: Remote[] = []) {
+    const calls: string[][] = [];
+    const comments: string[] = [];
+    const gh: Gh = async (args) => {
+      calls.push(args);
+      const [command, sub] = args;
+      if (command === 'repo') return 'main';
+      if (command === 'search')
+        return JSON.stringify(
+          remote
+            .filter((item) => item.body.includes(args[2]!))
+            .map(({ number, url, state, body }) => ({ number, url, state, body })),
+        );
+      if (command === 'issue' && sub === 'view')
+        return remote.find((item) => item.number === Number(args[2]))!.stateReason;
+      if (command === 'issue' && sub === 'create') {
+        const number = remote.length + 1;
+        const url = `https://github.com/o/r/issues/${number}`;
+        const body = await readFile(args[args.indexOf('--body-file') + 1]!, 'utf8');
+        remote.push({ number, url, title: args[args.indexOf('--title') + 1]!, body, state: 'OPEN', stateReason: '' });
+        return url;
+      }
+      if (command === 'issue' && sub === 'reopen') {
+        const item = remote.find((entry) => entry.number === Number(args[2]))!;
+        item.state = 'OPEN';
+        item.stateReason = 'REOPENED';
+        comments.push(args[args.indexOf('--comment') + 1]!);
+        return '';
+      }
+      if (command === 'issue' || command === 'pr') return '[]';
+      return '{}';
+    };
+    const created = () => calls.filter((args) => args[0] === 'issue' && args[1] === 'create').length;
+    return { gh, remote, calls, comments, created };
+  }
+  /** One night: a fresh workspace with one judged issue, and a judge that publishes it under `title`. */
+  async function night(gh: Gh, title: string, patch: Partial<Issue> = {}) {
+    const root = await temp();
+    const workspace = new Workspace(root);
+    await writeFile(join(root, 'shot.png'), 'png');
+    const issue: Issue = {
+      version: 1,
+      id: 'iss_1',
+      fingerprint: 'fp-items-500',
+      title,
+      body: 'GET /items/0 returns 500.',
+      severity: 'major',
+      status: 'new',
+      candidateIds: [],
+      evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
+      judgement: { by: 'judge', reason: 'A server error', at: 'now' },
+      occurrences: 1,
+      firstSeenAt: 'now',
+      lastSeenAt: 'now',
+      ...patch,
+    };
+    await workspace.saveIssue(issue);
+    const config = parseConfig({
+      version: 1,
+      app: { source: '.', connect: { url: 'http://localhost' } },
+      agents: { github: { enabled: true, repo: 'o/r' } },
+    });
+    let judged = false;
+    const runtime: Runtime = {
+      label: 'fake',
+      async run(task) {
+        judged = true;
+        const publish = task.tools.find((tool) => tool.name === 'publish')!;
+        await publish.run({ issue_id: 'iss_1', title, summary: 'Reading an item fails.' });
+        return { stop: 'done', steps: 1, costUsd: 0 };
+      },
+    };
+    const outcomes = await runPublisher(root, config, { gh, createRuntime: () => runtime });
+    return { outcomes, judged: () => judged, workspace, issue: (await workspace.readIssue('iss_1'))! };
+  }
+
+  it('second night reuses a closed issue by marker', async () => {
+    const f = github();
+    await night(f.gh, 'Reading an item gives a server error');
+    expect(f.created()).toBe(1);
+    expect(f.remote[0]!.body.startsWith('<!-- bugpatrol:fp=fp-items-500 -->')).toBe(true);
+    f.remote[0]!.state = 'CLOSED';
+    f.remote[0]!.stateReason = 'COMPLETED';
+
+    const second = await night(f.gh, 'Reading an item gives a server error');
+    expect(f.created()).toBe(1);
+    expect(second.judged()).toBe(false);
+    expect(second.issue.github).toMatchObject({ number: 1, state: 'open' });
+    expect(second.issue.status).toBe('filed');
+  });
+
+  it('a title change does not refile', async () => {
+    const f = github();
+    await night(f.gh, 'Reading an item gives a server error');
+    f.remote[0]!.title = 'GET /items/{id} crashes on id 0';
+
+    const second = await night(f.gh, 'Item read fails with 500');
+    expect(f.created()).toBe(1);
+    expect(second.outcomes).toEqual([
+      { issueId: 'iss_1', kind: 'issue', url: f.remote[0]!.url, reason: 'already filed as #1' },
+    ]);
+    expect(f.remote[0]!.title).toBe('GET /items/{id} crashes on id 0');
+    expect(f.comments).toEqual([]);
+  });
+
+  it('completed and failing again reopens', async () => {
+    const f = github();
+    await night(f.gh, 'Reading an item gives a server error');
+    f.remote[0]!.state = 'CLOSED';
+    f.remote[0]!.stateReason = 'COMPLETED';
+
+    // The same machine: the judge reopened its local issue as a regression.
+    const again = await night(f.gh, 'Reading an item gives a server error', {
+      status: 'new',
+      regression: { at: 'now', fromStatus: 'fixed' },
+      github: { number: 1, url: f.remote[0]!.url, at: 'then', state: 'closed', stateReason: 'completed' },
+    });
+    expect(f.created()).toBe(1);
+    expect(f.remote[0]!.state).toBe('OPEN');
+    expect(f.comments).toHaveLength(1);
+    expect(f.comments[0]).toMatch(/saw this failure again/);
+    expect(again.issue.github).toMatchObject({ number: 1, state: 'open', stateReason: 'reopened' });
+  });
+
+  it('not planned stays dismissed', async () => {
+    const f = github();
+    await night(f.gh, 'Reading an item gives a server error');
+    f.remote[0]!.state = 'CLOSED';
+    f.remote[0]!.stateReason = 'NOT_PLANNED';
+
+    const second = await night(f.gh, 'Reading an item gives a server error');
+    expect(f.created()).toBe(1);
+    expect(f.comments).toEqual([]);
+    expect(f.remote[0]!.state).toBe('CLOSED');
+    expect(second.issue.status).toBe('dismissed');
+    expect((await second.workspace.readTriage()).fingerprints['fp-items-500']).toMatchObject({
+      decision: 'dismissed',
+    });
   });
 });

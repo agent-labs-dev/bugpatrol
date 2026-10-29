@@ -13,11 +13,14 @@ import {
   createIssue,
   createPr,
   defaultGh,
+  dismissByGitHub,
   ensureAssetsBranch,
   ensureLabels,
+  findIssueByFingerprint,
   type Gh,
   ghReady,
   listFiled,
+  reopenIssue,
   resolveRepo,
   uploadImage,
 } from '../github.js';
@@ -71,13 +74,82 @@ async function candidatesFor(workspace: Workspace, issue: Issue): Promise<Candid
   return issue.candidateIds.flatMap((id) => found.get(id) ?? []);
 }
 
+/** A local regression of an issue that GitHub closed as completed. */
+const reopens = (issue: Issue) =>
+  Boolean(issue.regression) &&
+  issue.github?.state === 'closed' &&
+  issue.github.stateReason !== 'not_planned' &&
+  !['fixed', 'dismissed'].includes(issue.status);
+
+/**
+ * Runs before the judge writes a title. An issue that GitHub already has,
+ * found by its fingerprint marker, is linked and not filed again. A closed
+ * issue as not planned stays a dismissal. An issue closed in another way
+ * fails again, so it reopens with a comment. Returns the ids that it handled:
+ * a failed lookup also counts, so the item waits for the next run and is not
+ * filed two times.
+ */
+async function reuseFiled(
+  gh: Gh,
+  repo: string,
+  workspace: Workspace,
+  issues: Issue[],
+  outcomes: PublishOutcome[],
+  onLog?: (message: string) => void,
+): Promise<Set<string>> {
+  const handled = new Set<string>();
+  for (const issue of issues) {
+    handled.add(issue.id);
+    try {
+      const found = issue.github
+        ? { ...issue.github, stateReason: issue.github.stateReason ?? null }
+        : await findIssueByFingerprint(gh, repo, issue.fingerprint);
+      if (!found) {
+        handled.delete(issue.id);
+        continue;
+      }
+      const at = new Date().toISOString();
+      const link = { number: found.number, url: found.url, at: issue.github?.at ?? at, checkedAt: at };
+      if (found.state === 'closed' && found.stateReason === 'not_planned') {
+        issue.github = { ...link, state: 'closed', stateReason: 'not_planned' };
+        await dismissByGitHub(workspace, issue, at);
+        outcomes.push({ issueId: issue.id, kind: 'skipped', reason: `#${found.number} was closed as not planned` });
+      } else {
+        if (found.state === 'closed')
+          await reopenIssue(
+            gh,
+            repo,
+            found.number,
+            `Bugpatrol saw this failure again on ${at.slice(0, 10)}, so it reopened this issue.`,
+          );
+        issue.github = {
+          ...link,
+          state: 'open',
+          stateReason: found.state === 'closed' ? 'reopened' : found.stateReason,
+        };
+        issue.status = 'filed';
+        outcomes.push({
+          issueId: issue.id,
+          kind: 'issue',
+          url: found.url,
+          reason: found.state === 'closed' ? `reopened #${found.number}` : `already filed as #${found.number}`,
+        });
+      }
+      await workspace.saveIssue(issue);
+    } catch (error) {
+      onLog?.(`GitHub lookup of ${issue.id} failed, so it waits for the next run: ${String(error)}`);
+    }
+  }
+  return handled;
+}
+
 export async function runPublisher(root: string, config: BugpatrolConfig, deps: Deps = {}): Promise<PublishOutcome[]> {
   if (!config.agents.github.enabled && !deps.dryRun) return [];
   const workspace = new Workspace(root);
   const gh = deps.gh ?? defaultGh;
   const fixes = new Map((await workspace.listFixes()).map((fix) => [fix.issueId, fix]));
-  const items: Item[] = (await workspace.listIssues()).flatMap((issue): Item[] => {
-    if (deps.issueIds && !deps.issueIds.includes(issue.id)) return [];
+  const issues = (await workspace.listIssues()).filter((issue) => !deps.issueIds || deps.issueIds.includes(issue.id));
+  let items: Item[] = issues.flatMap((issue): Item[] => {
     if (issue.status === 'dismissed' || issue.publishSkipped || issue.fixRejected) return [];
     // Bugpatrol opens no PR for an external fix; for publish, the issue has no fix of its own.
     const found = fixes.get(issue.id);
@@ -93,7 +165,10 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
       return [{ kind: 'issue' as const, issue, fix }];
     return [];
   });
-  if (!items.length) return [];
+  const regressions = deps.dryRun ? [] : issues.filter(reopens);
+  if (!items.length && !regressions.length) return [];
+  const outcomes: PublishOutcome[] = [];
+  let resolved: Awaited<ReturnType<typeof resolveRepo>> | undefined;
   if (!deps.dryRun) {
     const ready = await ghReady(gh);
     if (!ready.ok) {
@@ -102,19 +177,28 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
       deps.onLog?.(ready.reason);
       return [];
     }
+    resolved = await resolveRepo(gh, config, resolve(root, config.app.source));
+    const handled = await reuseFiled(
+      gh,
+      resolved.repo,
+      workspace,
+      [...regressions, ...items.filter((item) => item.kind === 'issue').map((item) => item.issue)],
+      outcomes,
+      deps.onLog,
+    );
+    items = items.filter((item) => item.kind === 'pr' || !handled.has(item.issue.id));
+    if (!items.length) return outcomes;
   }
 
   const vars = new Vars(config.app.secrets);
   const record = await workspace.startSession('judge');
   const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, deps.onLog);
   deps.onSession?.(session);
-  const outcomes: PublishOutcome[] = [];
   const done = new Set<string>();
   const runtime = (deps.createRuntime ?? makeRuntime)(config.agents.judge.use);
   let steps = 0;
   let costUsd = 0;
   let status: 'finished' | 'failed' = 'finished';
-  let resolved: Awaited<ReturnType<typeof resolveRepo>> | undefined;
   let assetsReady = false;
   let labelsReady = false;
   const get = (id: string) => items.find((item) => item.issue.id === id && !done.has(id));
@@ -134,9 +218,8 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   // The repo's own recent titles teach the judge its types and scopes.
   let recentTitles: string[] = [];
   let filed: string[] = [];
-  if (!deps.dryRun) {
+  if (resolved) {
     try {
-      resolved ??= await resolveRepo(gh, config, resolve(root, config.app.source));
       recentTitles = (
         await gh([
           'pr',
@@ -160,7 +243,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
       /* Style hints are optional. */
     }
     try {
-      if (resolved) filed = await listFiled(gh, resolved.repo, config);
+      filed = await listFiled(gh, resolved.repo, config);
     } catch {
       /* Without the list, the judge compares only the local items. */
     }
@@ -335,6 +418,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
                 title,
                 body,
                 labels: config.agents.github.labels,
+                fingerprint: item.issue.fingerprint,
               });
               url = opened.url;
               item.issue.github = { ...opened, at: new Date().toISOString() };

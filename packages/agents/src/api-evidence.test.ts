@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
 import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
-import { parseConfig, paths } from '@bugpatrol/core';
+import { type EndpointKey, fingerprint, parseConfig, paths } from '@bugpatrol/core';
 import { ApiDriver, Pacer } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentSession } from './session.js';
@@ -131,5 +131,22 @@ describe('api evidence', () => {
     expect(shown).toContain('Health reports the database down');
     expect(shown).toContain('GET /health\n\nHTTP 200 OK');
     expect(shown).toContain('"db": "down"');
+  });
+
+  it('keys an api report on the endpoint and the check, not on the title', async () => {
+    const { session, call, workspace } = await explorer();
+    await call('request', { method: 'GET', url: '/health' });
+    for (const title of ['Health reports the database down', 'GET /health hides a db outage'])
+      await call('report_bug', {
+        screen_id: 'unrecorded',
+        title,
+        what_is_wrong: 'GET /health says db is down with status 200.',
+        expected: 'A 503, or db up.',
+        severity: 'major',
+      });
+    const prints = (await workspace.readCandidates(session.sessionId)).map((candidate) => candidate.fingerprint);
+    // The contract passes, so only the judge can call it a bug.
+    const key = { endpoint: 'GET /health' as EndpointKey, case: 'ok' as const, assertionId: 'judge:explorer' };
+    expect(prints).toEqual([fingerprint(key), fingerprint(key)]);
   });
 });

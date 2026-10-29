@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { CaseId, EndpointKey } from './types/endpoint.js';
 
 export function sha256(input: string | Uint8Array): string {
   return createHash('sha256').update(input).digest('hex');
@@ -39,16 +40,32 @@ export function normalizeRegionSignature(regions: RegionBox[] = [], grid = REGIO
   return [...buckets].sort().join('|');
 }
 
+/**
+ * The key of an api failure: the endpoint, the case, and the failed check.
+ * `assertionId` is an `assertionId()`, or `judge:<rule>` for a bug that only
+ * the judge sees. `endpoint: 'spec'` with `case: 'spec'` is a finding on the
+ * whole spec. A title is never part of the key, because it changes each run.
+ */
+export type ApiFingerprintInput = {
+  endpoint: EndpointKey | 'spec';
+  case: CaseId | 'spec';
+  assertionId: string;
+};
+
 const FIELD_SEPARATOR = String.fromCharCode(0);
 
 /**
- * fingerprint = hash(screenId, ruleId, normalizedRegionSignature, domNodeSignature)
+ * fingerprint = hash(screenId, ruleId, normalizedRegionSignature, domNodeSignature),
+ * or for an api, hash(endpoint, case, assertionId).
  *
  * The one property that matters: it must survive across runs. Everything
- * downstream -- the Intent Ledger, clustering, flake quarantine -- is keyed on
- * it, so instability here silently degrades all three.
+ * downstream -- the Intent Ledger, clustering, flake quarantine, the GitHub
+ * issue marker -- is keyed on it, so instability here silently degrades all
+ * of them.
  */
-export function fingerprint(input: FingerprintInput): string {
+export function fingerprint(input: FingerprintInput | ApiFingerprintInput): string {
+  if ('endpoint' in input)
+    return shortHash(['api', input.endpoint, input.case, input.assertionId].join(FIELD_SEPARATOR), 16);
   const parts = [
     input.screenId,
     input.ruleId,

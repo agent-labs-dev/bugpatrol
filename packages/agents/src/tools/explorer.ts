@@ -27,6 +27,7 @@ import { ApiDriver, type DriverAction, type Observation, type UiElement } from '
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
 import { bugMisses, replayRoutine } from '../replay.js';
 import type { AgentSession } from '../session.js';
+import { reportFingerprint } from '../sweep.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
 
@@ -772,11 +773,9 @@ export function explorerTools(
           sessionId: session.sessionId,
           screenId,
           source: 'explorer',
-          fingerprint: fingerprint({
-            screenId: screenId ?? 'unknown',
-            ruleId: 'explorer',
-            domNodeSignature: title.toLowerCase(),
-          }),
+          fingerprint:
+            reportFingerprint(session) ??
+            fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
           detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
           severity: input.severity as Candidate['severity'],

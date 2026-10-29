@@ -34,7 +34,8 @@ export function parseSweepFlags(args: string[]): SweepFlags {
  * `bugpatrol sweep [--json] [--max-requests N] [--dry-run]`
  *
  * Runs the deterministic sweep of an api app with no model, and prints the
- * endpoint × case table. Exit 1 when a failure repeats on a second replay.
+ * endpoint × case table. Exit 1 when a failure repeats on a second replay,
+ * unless the judge dismissed its fingerprint before.
  * `--dry-run` runs no setup, sends nothing, and writes nothing: it prints
  * the planned requests and why each other case does not run.
  */
@@ -88,7 +89,7 @@ export async function runSweepCommand(
     session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
     const cases = sweepCases(driver.policy.contract, { credentials: ['self'] });
     const result = await runSweep(session, cases, budget);
-    const blocking = result.findings.filter((finding) => finding.repeats).length;
+    const blocking = result.findings.filter((finding) => finding.repeats && !finding.dismissed).length;
     await workspace.endSession(record.id, {
       summary: `Sweep: ${result.requests} request(s), ${result.findings.length} finding(s), ${blocking} that repeat`,
     });
@@ -169,7 +170,10 @@ function printResult(
   }
   if (result.findings.length) log('\nFindings:');
   for (const finding of result.findings)
-    log(`${finding.repeats ? 'BLOCKS' : 'flaky '}  ${finding.summary}${finding.repeats ? '' : ' (did not repeat)'}`);
+    log(
+      `${finding.dismissed ? 'known ' : finding.repeats ? 'BLOCKS' : 'flaky '}  ${finding.summary}` +
+        `${finding.dismissed ? ' (dismissed before)' : finding.repeats ? '' : ' (did not repeat)'}`,
+    );
   for (const item of result.skipped) log(`skipped  ${item.key}: ${item.reason}`);
   log(
     `\n${result.requests} request(s), ${result.cells.length} cell(s) written, ${result.remaining} case(s) left for the next run` +

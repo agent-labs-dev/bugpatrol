@@ -35,6 +35,8 @@ export type SweepFinding = {
   status?: number;
   /** The failure came back on a second replay. Only such a failure blocks (ADR 0007). */
   repeats: boolean;
+  /** The judge dismissed this fingerprint before, so the finding does not block. */
+  dismissed?: true;
 };
 
 export type SweepResult = {
@@ -273,9 +275,40 @@ const outcome = (run: CaseRun): ReplayOutcome => ({
 });
 
 /**
+ * The key of a finding. A case with more than one failed check takes the
+ * first one, in the order of the case's assertions.
+ */
+const findingFingerprint = (finding: SweepFinding) =>
+  fingerprint({ endpoint: finding.endpoint ?? 'spec', case: finding.case, assertionId: finding.failed[0]! });
+
+/**
+ * The key of an explorer report on an api: the same key as a sweep failure of
+ * the same check on the same case, so both go to one issue. A report that no
+ * contract check confirms is a bug that only the judge sees, `judge:explorer`.
+ */
+export function reportFingerprint(session: AgentSession): string | undefined {
+  const { driver, lastObservation: screen } = session;
+  if (!(driver instanceof ApiDriver) || screen?.capture.kind !== 'http' || !screen.capture.exchange) return undefined;
+  const { request } = screen.capture.exchange;
+  const { contract } = driver.policy;
+  const endpoint = contract.match(request.method, request.path);
+  const failed =
+    endpoint &&
+    checkAssertions([{ kind: 'contract' }], screen, { raw: driver.lastRaw(), contract }).find((result) => !result.ok);
+  const step = session.trail.findLast((item) => item.kind === 'request');
+  const as = step?.kind === 'request' ? step.as : undefined;
+  return fingerprint({
+    // A read outside the spec keeps its own method and path as its name.
+    endpoint: endpoint?.key ?? (`${request.method} ${request.path.split('?')[0]}` as EndpointKey),
+    case: as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok',
+    assertionId: failed ? assertionId(failed.assertion) : 'judge:explorer',
+  });
+}
+
+/**
  * A finding as a candidate for the judge. A fingerprint that the judge
- * dismissed stays quiet, and one that it filed adds an occurrence to its
- * issue, until the issue is fixed.
+ * dismissed stays quiet and marks the finding as dismissed, and one that it
+ * filed adds an occurrence to its issue, until the issue is fixed.
  */
 async function propose(
   session: AgentSession,
@@ -284,13 +317,12 @@ async function propose(
   item: SweepCase | undefined,
   route: { blocking: boolean; reason: string },
 ): Promise<void> {
-  const print = fingerprint({
-    screenId: finding.endpoint ?? 'spec',
-    ruleId: `sweep:${finding.case}`,
-    domNodeSignature: finding.failed.join(','),
-  });
+  const print = findingFingerprint(finding);
   const decided = (await session.workspace.readTriage()).fingerprints[print];
-  if (decided?.decision === 'dismissed') return;
+  if (decided?.decision === 'dismissed') {
+    finding.dismissed = true;
+    return;
+  }
   if (decided?.decision === 'filed' && decided.issueId) {
     const issue = await session.workspace.readIssue(decided.issueId);
     if (issue && issue.status !== 'fixed') return addOccurrence(session, issue.id);

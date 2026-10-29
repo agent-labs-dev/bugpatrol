@@ -65,6 +65,7 @@ function fakeGh(calls: string[][]): Gh {
     if (args[0] === 'repo') return 'main';
     if (args[0] === 'issue' && args[1] === 'create') return 'https://github.com/o/r/issues/8';
     if (args[0] === 'pr' && args[1] === 'create') return 'https://github.com/o/r/pull/4';
+    if (args[0] === 'search') return '[]';
     return '{}';
   };
 }
