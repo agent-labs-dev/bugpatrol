@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Bugpatrol</title>
 <link rel="stylesheet" href="/style.css">
+<script>
+  {
+    // Before the first paint: the saved choice, or else the system setting. app.js owns the toggle.
+    const saved = localStorage.getItem('bugpatrol-theme');
+    const system = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : system;
+  }
+</script>
 </head>
 <body>
 <header class="topbar">
@@ -27,6 +35,7 @@
     <span id="live" class="live" title="Live connection to the local watcher">live</span>
     <span id="surfaces" class="surfaces"></span>
     <span id="patrol" class="pill"></span>
+    <button type="button" id="theme" class="theme-toggle"></button>
   </div>
 </header>
 

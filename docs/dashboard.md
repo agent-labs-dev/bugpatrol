@@ -8,6 +8,8 @@ npx bugpatrol dashboard --config .bugpatrol/api.yml
 
 The dashboard shows agent activity and results. It reads the files under `.bugpatrol/runs/` and updates live. You can keep it open while a patrol runs.
 
+The theme follows the system setting. The **Theme** button in the top bar changes it to Light, then Dark, then back to System. The browser keeps your choice.
+
 ## Surfaces
 
 A surface is a part of the project that Bugpatrol tests: a client app (web, Electron, desktop, iOS, Android, CLI), which has screens, or an API, which has endpoints. Each config file in `.bugpatrol/` tests one surface. A monorepo can have two, for example `bugpatrol.yml` for the web app and `api.yml` for its backend. All configs write to the same `.bugpatrol/runs/`, so the dashboard shows the data of all surfaces.

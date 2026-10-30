@@ -10,6 +10,31 @@ const liveEl = document.getElementById('live');
 const projectEl = document.getElementById('project-name');
 const surfacesEl = document.getElementById('surfaces');
 const patrolEl = document.getElementById('patrol');
+const themeEl = document.getElementById('theme');
+
+// ---------- theme ----------
+// The choice cycles system → light → dark. "System" follows the OS setting, also when it changes.
+const THEMES = ['system', 'light', 'dark'];
+const lightQuery = matchMedia('(prefers-color-scheme: light)');
+let themeChoice = THEMES.includes(localStorage.getItem('bugpatrol-theme'))
+  ? localStorage.getItem('bugpatrol-theme')
+  : 'system';
+function applyTheme() {
+  const theme = themeChoice === 'system' ? (lightQuery.matches ? 'light' : 'dark') : themeChoice;
+  document.documentElement.dataset.theme = theme;
+  const next = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
+  const label = { system: 'System', light: 'Light', dark: 'Dark' };
+  themeEl.textContent = `Theme: ${label[themeChoice]}`;
+  themeEl.title = `Change the theme to ${label[next]}`;
+}
+themeEl.addEventListener('click', () => {
+  themeChoice = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
+  if (themeChoice === 'system') localStorage.removeItem('bugpatrol-theme');
+  else localStorage.setItem('bugpatrol-theme', themeChoice);
+  applyTheme();
+});
+lightQuery.addEventListener('change', applyTheme);
+applyTheme();
 
 const state = {
   view: 'overview',

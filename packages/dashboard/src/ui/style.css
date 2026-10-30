@@ -15,19 +15,22 @@
   --gh-merged: #b197fc;
   --gh-closed: #ff6b6b;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f7f9;
-    --panel: #fff;
-    --panel-2: #f0f2f6;
-    --line: #dfe3ea;
-    --fg: #14171c;
-    --muted: #5b6270;
-    --accent: #2b59d8;
-    --gh-open: #237a36;
-    --gh-merged: #7042b8;
-    --gh-closed: #b73535;
-  }
+/* The theme comes from data-theme on <html>: the user's choice, or else the system setting (index.html). */
+:root {
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #fff;
+  --panel-2: #f0f2f6;
+  --line: #dfe3ea;
+  --fg: #14171c;
+  --muted: #5b6270;
+  --accent: #2b59d8;
+  --gh-open: #237a36;
+  --gh-merged: #7042b8;
+  --gh-closed: #b73535;
 }
 
 * {
@@ -535,6 +538,16 @@ h1 {
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
   color: var(--muted);
+}
+.theme-toggle {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  background: none;
+  color: var(--muted);
+}
+.theme-toggle:hover {
+  color: var(--fg);
 }
 .pill.running {
   color: var(--accent);
@@ -1617,16 +1630,14 @@ button.stat:hover {
 .stat.tone-pass .stat-value {
   color: var(--ok);
 }
-@media (prefers-color-scheme: light) {
-  .stat.tone-fail .stat-value {
-    color: #b73535;
-  }
-  .stat.tone-warn .stat-value {
-    color: #a35300;
-  }
-  .stat.tone-pass .stat-value {
-    color: #237a36;
-  }
+:root[data-theme="light"] .stat.tone-fail .stat-value {
+  color: #b73535;
+}
+:root[data-theme="light"] .stat.tone-warn .stat-value {
+  color: #a35300;
+}
+:root[data-theme="light"] .stat.tone-pass .stat-value {
+  color: #237a36;
 }
 .session-detail .band {
   margin: 0.25rem 0 0.85rem;
