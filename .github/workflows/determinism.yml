@@ -7,12 +7,14 @@
 #
 # So it runs on every commit, not nightly, and a failure here is treated as a
 # product defect rather than a flake to be retried.
+#
+# CI calls it, and its required `build` check passes only when this does: a
+# merge queue waits for required checks alone, so a separate workflow here
+# would be advisory.
 name: Determinism
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read

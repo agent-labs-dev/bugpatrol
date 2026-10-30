@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,3 +37,24 @@ jobs:
       # The recording tests encode real video.
       - run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pnpm test
+
+  determinism:
+    uses: ./.github/workflows/determinism.yml
+
+  # The branch ruleset requires `build` and nothing else, and Mergepatrol merges
+  # once required checks pass, so this job carries every check that must hold.
+  # It runs on `always()` and fails unless each need succeeded: a job skipped
+  # after a failed need counts as passed, to GitHub and to Mergepatrol alike.
+  build:
+    needs: [checks, determinism]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"] | join(", ")')
+          if [ -n "$failed" ]; then
+            echo "::error::Required jobs did not succeed: $failed"
+            exit 1
+          fi
