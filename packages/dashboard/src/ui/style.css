@@ -540,11 +540,20 @@ h1 {
   color: var(--muted);
 }
 .theme-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 0.15rem 0.6rem;
+  padding: 0;
   background: none;
   color: var(--muted);
+}
+.theme-toggle svg,
+.surface svg {
+  width: 15px;
+  height: 15px;
 }
 .theme-toggle:hover {
   color: var(--fg);
@@ -1516,9 +1525,12 @@ button.matrix-cell:hover,
   gap: 0.35rem;
 }
 .surface {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 0.1rem 0.55rem;
   color: var(--muted);
 }
 .surface.active {

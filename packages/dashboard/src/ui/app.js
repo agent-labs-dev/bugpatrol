@@ -19,13 +19,23 @@ const lightQuery = matchMedia('(prefers-color-scheme: light)');
 let themeChoice = THEMES.includes(localStorage.getItem('bugpatrol-theme'))
   ? localStorage.getItem('bugpatrol-theme')
   : 'system';
+// Line icons for the top bar. The theme button and the surfaces show icons, and their labels hold the words.
+const MONITOR_ICON = '<rect x="2" y="3" width="12" height="8" rx="1"/><path d="M6 14h4M8 11v3"/>';
+const PHONE_ICON = '<rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/><path d="M7 12.5h2"/>';
+const themeIcons = {
+  system: MONITOR_ICON,
+  light:
+    '<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/>',
+  dark: '<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z"/>',
+};
 function applyTheme() {
   const theme = themeChoice === 'system' ? (lightQuery.matches ? 'light' : 'dark') : themeChoice;
   document.documentElement.dataset.theme = theme;
   const next = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
   const label = { system: 'System', light: 'Light', dark: 'Dark' };
-  themeEl.textContent = `Theme: ${label[themeChoice]}`;
-  themeEl.title = `Change the theme to ${label[next]}`;
+  themeEl.innerHTML = iconSvg(themeIcons[themeChoice]);
+  themeEl.setAttribute('aria-label', `Theme: ${label[themeChoice]}. Change the theme to ${label[next]}`);
+  themeEl.title = `Theme: ${label[themeChoice]}. Click for ${label[next]}.`;
 }
 themeEl.addEventListener('click', () => {
   themeChoice = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
@@ -604,12 +614,17 @@ const roleIcons = {
   decider: '<path d="m3 8 3 3 7-7"/>',
 };
 
+/** A 16×16 line icon from trusted path markup in this file. */
+function iconSvg(paths) {
+  return (
+    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`
+  );
+}
+
 function roleIcon(role) {
   const icon = roleIcons[role] ?? roleIcons.system;
-  const svg =
-    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" ` +
-    `stroke-width="1.4" aria-hidden="true">${icon}</svg>`;
-  return el('span', { class: 'role-icon', title: role, 'aria-label': role, html: svg });
+  return el('span', { class: 'role-icon', title: role, 'aria-label': role, html: iconSvg(icon) });
 }
 
 function relativeTime(value) {
@@ -753,6 +768,16 @@ const PLATFORM_WORDS = {
   cli: 'CLI app',
 };
 
+const PLATFORM_ICONS = {
+  api: '<path d="M5.5 3C4 3 4 4 4 5.5S3 8 2.5 8C3 8 4 8.5 4 10.5S4 13 5.5 13M10.5 3C12 3 12 4 12 5.5S13 8 13.5 8C13 8 12 8.5 12 10.5S12 13 10.5 13"/>',
+  web: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
+  electron: MONITOR_ICON,
+  desktop: MONITOR_ICON,
+  ios: PHONE_ICON,
+  android: PHONE_ICON,
+  cli: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="m4.5 6 2 2-2 2M8 10h3.5"/>',
+};
+
 const surfaceName = (surface) => PLATFORM_WORDS[surface.platform] ?? surface.platform;
 const fileName = (path) => path?.split('/').pop() ?? '';
 
@@ -765,16 +790,19 @@ function renderHeader() {
   const summary = state.summary;
   projectEl.textContent = summary.name;
   surfacesEl.replaceChildren(
-    ...summary.surfaces.map((surface) =>
-      el('span', {
+    ...summary.surfaces.map((surface) => {
+      const configs = surface.configs.length
+        ? `${surface.active ? 'The dashboard reads' : 'Config'}: ${surface.configs.join(', ')}`
+        : 'From the data. No config file tests it now.';
+      const name = surfaceName(surface);
+      return el('span', {
         class: `surface${surface.active ? ' active' : ''}`,
-        title: surface.configs.length
-          ? `${surface.active ? 'The dashboard reads' : 'Config'}: ${surface.configs.join(', ')}`
-          : 'From the data. No config file tests it now.',
-        text: surfaceName(surface),
-      }),
-    ),
-    summary.config ? el('span', { class: 'muted', title: summary.config, text: fileName(summary.config) }) : null,
+        role: 'img',
+        'aria-label': `${name}. ${configs}`,
+        title: `${name}. ${configs}`,
+        html: iconSvg(PLATFORM_ICONS[surface.platform] ?? PLATFORM_ICONS.web),
+      });
+    }),
   );
 }
 
