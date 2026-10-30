@@ -149,7 +149,7 @@ the branch before each cycle and pushes it after the cycle. A dev machine with
 the same setting shares the state with CI. No run commits to `main`.
 
 The Bugpatrol Action with `mode: patrol` runs one cycle in this mode. Refer to
-[Patrol on a schedule](../README.md#patrol-on-a-schedule).
+[Patrol on a schedule](github.md#patrol-on-a-schedule).
 
 ### The coverage matrix
 

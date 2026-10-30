@@ -2,11 +2,13 @@
 
 ```bash
 npx bugpatrol dashboard            # http://127.0.0.1:4311
-npx bugpatrol dashboard --port 5000
-npx bugpatrol dashboard --config .bugpatrol/api.yml
+npx bugpatrol dashboard --port 5000  # use a different port
+npx bugpatrol dashboard --config .bugpatrol/api.yml  # read another config
 ```
 
-The dashboard shows agent activity and results. It reads the files under `.bugpatrol/runs/` and updates live. You can keep it open while a patrol runs.
+<img src="../assets/dashboard.png" alt="The Bugpatrol dashboard: the agent cards, the issues that need attention, and the live screen." width="100%">
+
+The dashboard shows agent activity and results. Start it in the repo that has `.bugpatrol/`. It reads the files under `.bugpatrol/runs/` and updates live, so it works during a patrol and after it.
 
 The theme follows the system setting. The theme button in the top bar (a monitor, sun, or moon icon) changes it to Light, then Dark, then back to System. The browser keeps your choice.
 
@@ -40,15 +42,17 @@ The cost on the dashboard counts only the API calls that Bugpatrol makes: the ag
 
 ## Pages
 
-- **Overview**: the status of the project and its numbers: the open issues, the findings that wait for the judge, the coverage of each surface, and the last session. Then the issues and findings that need attention, the recent sessions, the coverage of each surface, what each agent does now, and the token usage.
-- **Issues**: each issue with its screenshots and steps, the judge's reason, the fix with its diff, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so.
-- **Reviews**: each pull request that `bugpatrol review` reviewed, with its head and base commits. A review page lists each claim with its verdict, the evidence source, the reason, and what Bugpatrol saw on the base build and on the pull request build. The problems that the pull request introduced follow, with base and head screenshots.
-- **Activity**: each session with its numbers first: the duration, the steps or the cases that it ran, and its findings. The findings follow in groups of the same failure, with a count. Open a finding to see its HTTP exchange or its screenshot. The timeline of the session is last.
-- **Flow**: agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes. Refer to [Flow](#flow).
-- **Screens**: a graph shows how the screens of a client app connect. Switch to the grid to see each latest screenshot. An API has no screens: the page then points to Coverage.
-- **Memory**: the lessons that the agents learned.
-- **Coverage**: for each surface, the numbers at the top, then the details. For an API: the endpoints tested, the cases that passed, failed, were blocked, were skipped, or wait in the sweep cursor, and the endpoint × case matrix. The failures come first. Search the paths, or show the failed endpoints only. Click a cell to see its HTTP exchange. For a client app: the screens found and the open issues of each screen.
-- **Checks**: the results of `bugpatrol run` (shown only when there are runs).
+| Page | What it shows |
+| --- | --- |
+| Overview | The status of the project and its numbers: the open issues, the findings that wait for the judge, the coverage of each surface, and the last session. Then the issues and findings that need attention, the recent sessions, the coverage of each surface, what each agent does now, and the token usage |
+| Issues | Each issue with its screenshots and steps, the judge's reason, the fix with its diff, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so |
+| Reviews | Each pull request that `bugpatrol review` reviewed, with its head and base commits. A review page lists each claim with its verdict, the evidence source, the reason, and what Bugpatrol saw on the base build and on the pull request build. The problems that the pull request introduced follow, with base and head screenshots |
+| Activity | Each session with its numbers first: the duration, the steps or the cases that it ran, and its findings. The findings follow in groups of the same failure, with a count. Open a finding to see its HTTP exchange or its screenshot. The timeline of the session is last |
+| Flow | Agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes. Refer to [Flow](#flow) |
+| Screens | A graph shows how the screens of a client app connect. Switch to the grid to see each latest screenshot. An API has no screens: the page then points to Coverage |
+| Memory | The lessons that the agents learned |
+| Coverage | For each surface, the numbers at the top, then the details. For an API: the endpoints tested, the cases that passed, failed, were blocked, were skipped, or wait in the sweep cursor, and the endpoint × case matrix. The failures come first. Search the paths, or show the failed endpoints only. Click a cell to see its HTTP exchange. For a client app: the screens found and the open issues of each screen |
+| Checks | The results of `bugpatrol run` (shown only when there are runs) |
 
 A page with no data says what it shows, why it is empty now, and the command to run next.
 
