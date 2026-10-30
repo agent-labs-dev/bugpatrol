@@ -52,7 +52,7 @@ flowchart TB
 
 [How it works](docs/how-it-works.md#the-patrol) tells when the patrol runs, and shows each step of the explore loop.
 
-<img src="assets/dashboard.png" alt="The Bugpatrol dashboard: the agent cards, the issues that need attention, and the live screen." width="100%">
+<img src="assets/dashboard.png" alt="The Bugpatrol dashboard: the status band, the issues and findings that need attention, and the live screen." width="100%">
 
 <p align="center"><em>The dashboard (<code>npx bugpatrol dashboard</code>) shows what each agent does, live.</em></p>
 

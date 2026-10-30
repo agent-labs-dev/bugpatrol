@@ -6,7 +6,7 @@ npx bugpatrol dashboard --port 5000  # use a different port
 npx bugpatrol dashboard --config .bugpatrol/api.yml  # read another config
 ```
 
-<img src="../assets/dashboard.png" alt="The Bugpatrol dashboard: the agent cards, the issues that need attention, and the live screen." width="100%">
+<img src="../assets/dashboard.png" alt="The Bugpatrol dashboard: the status band, the issues and findings that need attention, and the live screen." width="100%">
 
 The dashboard shows agent activity and results. Start it in the repo that has `.bugpatrol/`. It reads the files under `.bugpatrol/runs/` and updates live, so it works during a patrol and after it.
 
