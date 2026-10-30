@@ -1,4 +1,12 @@
-import type { HttpMethod, Locator, Platform, RoutineStep, SampleFile } from '@bugpatrol/core';
+import type {
+  CredentialSet,
+  HttpExchange,
+  HttpMethod,
+  Locator,
+  Platform,
+  RoutineStep,
+  SampleFile,
+} from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 
 /**
@@ -32,8 +40,12 @@ export type Observation = {
   /** URL, route, window title, or activity. */
   location: string;
   title?: string;
-  /** PNG bytes of what is on screen now. */
-  screenshot: Buffer;
+  /**
+   * What the app shows now: PNG bytes of the screen, or for an API the last
+   * request and its answer as redacted text. An API has no pixels (ADR 0008).
+   * `exchange` is absent before the first request.
+   */
+  capture: { kind: 'image'; png: Buffer } | { kind: 'http'; exchange?: HttpExchange };
   /** The logical size of the screen the element boxes are in. */
   viewport: { width: number; height: number; scale: number };
   elements: UiElement[];
@@ -60,8 +72,6 @@ export type Observation = {
    */
   leftApp?: string[];
   at: string;
-  /** API only: sanitized response evidence, also rendered in the screenshot. */
-  http?: { method: HttpMethod; status: number; body: string; contentType: string | null };
   /**
    * CLI only: the last command, redacted, and what it printed as a terminal
    * shows it. `exitCode` is absent while no command ran to its end.
@@ -91,8 +101,12 @@ export type DriverAction =
       headers?: Record<string, string>;
       body?: string;
       capture?: Record<string, string>;
+      as?: CredentialSet;
     }
   | { kind: 'run'; command: string; input?: string };
+
+/** A response before redaction. See `Driver.lastRaw`. */
+export type RawResponse = { status: number; headers: Record<string, string>; json?: unknown; text: string };
 
 export type ActResult = {
   ok: boolean;
@@ -124,6 +138,11 @@ export interface Driver {
   /** Connect to an app that `app.setup` already started. */
   connect(): Promise<void>;
   observe(): Promise<Observation>;
+  /**
+   * API only: the last response as it came, before redaction, for checks that
+   * run in this process. It never goes into a tool result, a log, or a file.
+   */
+  lastRaw?(): RawResponse | undefined;
   act(action: DriverAction): Promise<ActResult>;
   /**
    * Wait until the screen stops changing: two identical screenshots in a row,

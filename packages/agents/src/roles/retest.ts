@@ -4,16 +4,19 @@ import { promisify } from 'node:util';
 import {
   type BugpatrolConfig,
   type Candidate,
+  type Evidence,
   type FixProposal,
   fixerAttempts,
   type Issue,
   judgedRetests,
   type Retest,
+  type RetestCapture,
   type RetestOutcome,
-  type RetestShot,
   type RoutineStep,
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { externalBackend } from '../deploy.js';
+import { captureParts, screenshotOf } from '../evidence.js';
 import { closeOnGitHub } from '../github.js';
 import { readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -24,7 +27,7 @@ import { lessonTools } from '../tools/memory.js';
 import type { RoleOutcome, Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
-import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { linkEnvFiles, runFixer } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
 import { reflectOnSession } from './reflect.js';
@@ -44,7 +47,7 @@ type Deps = {
   onLog?: (message: string) => void;
   onSession?: (session?: AgentSession) => void;
   isInterrupted?: () => boolean;
-  isMerged?: (fix: FixProposal) => Promise<boolean>;
+  findMerge?: (fix: FixProposal) => Promise<Merge | undefined>;
 };
 
 async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<CaptureTarget[]> {
@@ -52,10 +55,11 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
   const add = (
     screenId: string | undefined,
     routineId: string | undefined,
-    before: string | undefined,
+    reported: Evidence,
     steps: RoutineStep[] = [],
   ) => {
-    const existing = targets.find(({ shot }) =>
+    const before = screenshotOf(reported);
+    const existing = targets.find(({ capture: shot }) =>
       shot.screenId && screenId
         ? shot.screenId === screenId
         : shot.routineId && routineId
@@ -65,17 +69,17 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
             : false,
     );
     if (existing) {
-      existing.shot.screenId ??= screenId;
-      existing.shot.routineId ??= routineId;
-      existing.shot.before ??= before;
+      existing.capture.screenId ??= screenId;
+      existing.capture.routineId ??= routineId;
+      existing.capture.before ??= before;
+      existing.reported ??= reported;
       if (!existing.steps.length) existing.steps = steps;
       return;
     }
     if (targets.length >= 6) return;
-    targets.push({ shot: { screenId, routineId, before }, steps });
+    targets.push({ capture: { screenId, routineId, before }, steps, reported });
   };
-  if (issue.screenId || issue.evidence.routineId || issue.evidence.screenshot || issue.evidence.steps?.length)
-    add(issue.screenId, issue.evidence.routineId, issue.evidence.screenshot, issue.evidence.steps);
+  add(issue.screenId, issue.evidence.routineId, issue.evidence.capture, issue.evidence.steps);
   const ids = new Set(issue.candidateIds);
   if (ids.size && targets.length < 6) {
     const found = new Map<string, Candidate>();
@@ -88,14 +92,14 @@ async function loadRetestTargets(workspace: Workspace, issue: Issue): Promise<Ca
     for (const id of issue.candidateIds) {
       const candidate = found.get(id);
       if (!candidate) continue;
-      add(candidate.screenId, candidate.evidence.routineId, candidate.evidence.screenshot, candidate.evidence.steps);
+      add(candidate.screenId, candidate.evidence.routineId, candidate.evidence.capture, candidate.evidence.steps);
     }
   }
   return targets;
 }
 
-export async function retestTargets(workspace: Workspace, issue: Issue): Promise<RetestShot[]> {
-  return (await loadRetestTargets(workspace, issue)).map((target) => target.shot);
+export async function retestTargets(workspace: Workspace, issue: Issue): Promise<RetestCapture[]> {
+  return (await loadRetestTargets(workspace, issue)).map((target) => target.capture);
 }
 
 /** The explorer repeats the flow; only the judge decides whether the fix worked. */
@@ -115,16 +119,24 @@ export async function retestFix(
     fixAttempt: [...(fix.attempts ?? [])].reverse().find((item) => item.outcome === 'proposed')?.n,
     outcome: 'unclear',
     reason: '',
-    shots: targets.map((target) => target.shot),
-    before: targets[0]?.shot.before,
+    captures: targets.map((target) => target.capture),
+    before: targets[0]?.capture.before,
     at: new Date().toISOString(),
     costUsd: 0,
     build: options.build,
   };
+  // Bugpatrol cannot run a fix branch on a backend that it does not start (T6).
+  if (!options.build && externalBackend(config.app)) {
+    return {
+      ...retest,
+      outcome: 'skipped',
+      reason: 'The backend is external: Bugpatrol checks the fix after a deploy that contains the merge.',
+    };
+  }
   if (!config.agents.explorer.enabled || !config.agents.judge.enabled) {
     return { ...retest, outcome: 'skipped', reason: 'The explorer or judge is disabled.' };
   }
-  if (!targets.some((target) => target.shot.routineId || target.steps.length)) {
+  if (!targets.some((target) => target.capture.routineId || target.steps.length)) {
     return { ...retest, outcome: 'skipped', reason: 'The issue has no replayable flow.' };
   }
   const runtime = deps.createRuntime ?? makeRuntime;
@@ -154,6 +166,7 @@ export async function retestFix(
       vars.resolve.bind(vars),
       (value) => vars.redact(value) as string,
       options.build === 'main' ? resolve(root, config.app.source) : fix.worktree,
+      app.contract,
     );
     await driver.connect();
     const record = await workspace.startSession('explorer');
@@ -181,8 +194,8 @@ export async function retestFix(
     } finally {
       const cost = outcome?.costUsd ?? 0;
       const explorerStop = outcome?.stop ?? 'done';
-      retest.after = targets[0]?.shot.after;
-      retest.note = targets[0]?.shot.note;
+      retest.after = targets[0]?.capture.after;
+      retest.note = targets[0]?.capture.note;
       retest.costUsd = (retest.costUsd ?? 0) + cost;
       await workspace.endSession(record.id, {
         summary:
@@ -213,7 +226,7 @@ export async function retestFix(
       }
     }
   }
-  if (!targets.some((target) => target.shot.after)) {
+  if (!targets.some((target) => target.capture.after)) {
     retest.outcome = 'unclear';
     retest.reason = retest.note ?? 'The explorer did not reach the issue screen.';
     return retest;
@@ -232,19 +245,19 @@ export async function retestFix(
     const tools: Tool[] = [
       {
         name: 'view_retest',
-        description: 'View issue details and before and after screenshots.',
+        description: 'View issue details and the before and after captures: screenshots, or HTTP exchanges for an API.',
         inputSchema: schema(),
         async run() {
           const content: Awaited<ReturnType<Tool['run']>>['content'] = [
             { type: 'text', text: `Issue: ${issue.title}\nFixer: ${fix.summary ?? ''}` },
           ];
           for (const [index, target] of targets.entries()) {
-            const shot = target.shot;
+            const shot = target.capture;
             content.push({
               type: 'text',
               text: `Screen ${index + 1}: ${shot.screenId ?? '(unknown)'} — reached: ${shot.reached === true} — explorer: ${shot.note ?? ''}`,
             });
-            content.push(...(await image(root, shot.before)), ...(await image(root, shot.after)));
+            content.push(...(await beforeParts(root, target)), ...(await captureParts(root, shot.after)));
           }
           return { content };
         },
@@ -271,7 +284,7 @@ export async function retestFix(
         prompt: `Issue: ${issue.title}\n${issue.body}\nFixer summary: ${fix.summary ?? ''}\nScreens:\n${targets
           .map(
             (target, index) =>
-              `${index + 1}. ${target.shot.screenId ?? '(unknown)'} — reached: ${target.shot.reached === true} — explorer: ${target.shot.note ?? ''}`,
+              `${index + 1}. ${target.capture.screenId ?? '(unknown)'} — reached: ${target.capture.reached === true} — explorer: ${target.capture.note ?? ''}`,
           )
           .join('\n')}`,
         tools,
@@ -341,13 +354,27 @@ async function defaultBranch(repo: string): Promise<string> {
   }
 }
 
-async function merged(fix: FixProposal, branch: string): Promise<boolean> {
+/** A merged fix, and the commit on the default branch that holds it, when known. */
+type Merge = { commit?: string };
+
+async function ancestor(repo: string, commit: string, of: string): Promise<boolean> {
+  try {
+    await exec('git', ['-C', repo, 'merge-base', '--is-ancestor', commit, of]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findMerge(fix: FixProposal, branch: string): Promise<Merge | undefined> {
   if (fix.pr) {
     try {
-      const { stdout } = await exec('gh', ['pr', 'view', fix.pr.url, '--json', 'state', '-q', '.state'], {
+      const { stdout } = await exec('gh', ['pr', 'view', fix.pr.url, '--json', 'state,mergeCommit'], {
         cwd: fix.repo,
       });
-      return stdout.trim() === 'MERGED';
+      const pr = JSON.parse(stdout) as { state?: string; mergeCommit?: { oid?: string } | null };
+      // A squash merge gives its own commit here, which holds the fix.
+      return pr.state === 'MERGED' ? { commit: pr.mergeCommit?.oid || undefined } : undefined;
     } catch {
       /* gh is unavailable; check git below. */
     }
@@ -355,17 +382,35 @@ async function merged(fix: FixProposal, branch: string): Promise<boolean> {
   // The branch head is no proof: a branch with no commit of its own sits on
   // its base, which is always on the default branch. Only the fix commit is.
   // A squash merge leaves no ancestor either; the PR state above covers it.
-  if (!fix.commit) return false;
+  if (!fix.commit) return undefined;
   try {
     await exec('git', ['-C', fix.repo, 'fetch', '-q', 'origin']);
-    await exec('git', ['-C', fix.repo, 'merge-base', '--is-ancestor', fix.commit, `origin/${branch}`]);
-    return true;
   } catch {
-    return false;
+    return undefined;
   }
+  return (await ancestor(fix.repo, fix.commit, `origin/${branch}`)) ? { commit: fix.commit } : undefined;
 }
 
-/** Recheck merged fixes against the main checkout; return issue ids for later GitHub sync. */
+/**
+ * Whether the external backend runs the merge, by the last probe of
+ * `app.connect.version`. Without a version endpoint Bugpatrol cannot tell,
+ * so each cycle checks, and only a pass counts.
+ */
+async function deployed(root: string, config: BugpatrolConfig, fix: FixProposal): Promise<boolean> {
+  if (!config.app.connect.version) return true;
+  const commit = (await new Workspace(root).readDeploy())?.commit;
+  if (!commit || !fix.mergeCommit) return false;
+  // The deployed commit can be newer than the last fetch.
+  await exec('git', ['-C', fix.repo, 'fetch', '-q', 'origin']).catch(() => {});
+  return ancestor(fix.repo, fix.mergeCommit, commit);
+}
+
+/**
+ * Recheck merged fixes against the main checkout, or for an external backend
+ * against the deploy that contains the merge. Until that deploy is live, the
+ * issue is `waits-for-deploy`: never a failure, and each cycle checks again.
+ * Returns issue ids for later GitHub sync.
+ */
 export async function recheckMerged(
   root: string,
   config: BugpatrolConfig,
@@ -374,16 +419,44 @@ export async function recheckMerged(
   const workspace = new Workspace(root);
   const closed: string[] = [];
   if (!config.agents.explorer.enabled || !config.agents.judge.enabled) return { closed };
+  const external = externalBackend(config.app);
   for (const fix of await workspace.listFixes()) {
     if (deps.isInterrupted?.()) break;
     if (!fix.pr && !fix.branch) continue;
-    if (fix.retests?.some((item) => item.build === 'main' && ['fixed', 'not-fixed'].includes(item.outcome))) continue;
-    const issue = await workspace.readIssue(fix.issueId);
-    if (!issue || !['new', 'filed', 'fixing', 'fix-proposed'].includes(issue.status)) continue;
+    let issue = await workspace.readIssue(fix.issueId);
+    if (!issue || !['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy'].includes(issue.status)) continue;
+    // The first verdict on the main build is final. A waiting issue has no verdict that counts.
+    if (
+      issue.status !== 'waits-for-deploy' &&
+      fix.retests?.some((item) => item.build === 'main' && ['fixed', 'not-fixed'].includes(item.outcome))
+    )
+      continue;
     const branch = await defaultBranch(fix.repo);
     // GitHub sync only follows Bugpatrol's labeled PRs, so the stored state of an external PR goes stale.
     const known = fix.pr?.state && (!fix.external || fix.pr.state === 'merged');
-    if (!(known ? fix.pr?.state === 'merged' : await (deps.isMerged?.(fix) ?? merged(fix, branch)))) continue;
+    if (known && fix.pr?.state !== 'merged') continue;
+    // An external backend needs the merge commit, to find the deploy that contains it.
+    if (!fix.mergeCommit && (!known || external)) {
+      const merge = await (deps.findMerge ?? ((item: FixProposal) => findMerge(item, branch)))(fix);
+      if (!merge && !known) continue;
+      if (merge?.commit) {
+        fix.mergeCommit = merge.commit;
+        await workspace.saveFix(fix);
+      }
+    }
+    if (external) {
+      const live = await deployed(root, config, fix);
+      // Without a version endpoint, the issue waits also while each cycle checks it.
+      const status = live && config.app.connect.version ? 'fix-proposed' : 'waits-for-deploy';
+      if (issue.status !== status) {
+        issue = { ...issue, status };
+        await workspace.saveIssue(issue);
+      }
+      if (!live) {
+        deps.onLog?.(`${issue.title}: the fix merged, and it waits for a deploy that contains it.`);
+        continue;
+      }
+    }
     const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, deps, { build: 'main' });
     fix.retests = [...(fix.retests ?? []), result];
     await workspace.saveFix(fix);
@@ -394,7 +467,9 @@ export async function recheckMerged(
         status: 'fixed',
         closedBy: {
           by: 'Bugpatrol',
-          reason: `The fix merged, and a recheck on ${branch} did not find the problem.`,
+          reason: external
+            ? 'The fix merged, and a recheck on the deployed backend did not find the problem.'
+            : `The fix merged, and a recheck on ${branch} did not find the problem.`,
           at,
         },
       };
@@ -402,7 +477,8 @@ export async function recheckMerged(
       await closeOnGitHub(root, config, fixedIssue, undefined, deps.onLog);
       closed.push(issue.id);
     }
-    if (result.outcome === 'fixed' || result.outcome === 'not-fixed') {
+    // A waiting issue that is not fixed yet is no news: the next cycle checks it again.
+    if (result.outcome === 'fixed' || (result.outcome === 'not-fixed' && issue.status !== 'waits-for-deploy')) {
       const record = await workspace.startSession('judge');
       await workspace.appendEvent(record.id, {
         sessionId: record.id,

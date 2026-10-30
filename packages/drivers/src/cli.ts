@@ -163,7 +163,7 @@ export class CliDriver implements Driver {
       platform: 'cli',
       location: 'terminal',
       ...(this.last ? { title: this.last.command } : {}),
-      screenshot: terminalPng(this.screen),
+      capture: { kind: 'image', png: terminalPng(this.screen) },
       viewport: { width: COLS * 8, height: ROWS * 16, scale: 1 },
       elements: [],
       volatileRegions: [],

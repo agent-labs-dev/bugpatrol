@@ -178,7 +178,7 @@ export class WebDriver implements Driver {
       platform: this.platform,
       location: page.url(),
       title,
-      screenshot,
+      capture: { kind: 'image', png: screenshot },
       viewport: { ...size, scale: 1 },
       elements,
       windows,

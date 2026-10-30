@@ -1,3 +1,5 @@
+import type { Endpoint } from './endpoint.js';
+import type { Evidence } from './evidence.js';
 import type { Severity } from './finding.js';
 import type { TokenUsage } from './usage.js';
 
@@ -48,6 +50,9 @@ export type Platform = 'web' | 'electron' | 'ios' | 'android' | 'api' | 'desktop
 
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+/** The credentials an API request sends: the configured user, the second user (3b), or none. */
+export type CredentialSet = 'self' | 'other' | 'none';
+
 /**
  * How Bugpatrol finds an element again on a later run. The locator is tried
  * first; the point is the last resort, and a replay that needed it is
@@ -92,10 +97,16 @@ export type RoutineStep = (
       headers?: Record<string, string>;
       body?: string;
       capture?: Record<string, string>;
+      /** The credentials of the request. Default: `self`. */
+      as?: CredentialSet;
     }
   /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
   | { kind: 'run'; command: string; input?: string }
-) & { at?: string };
+) & {
+  at?: string;
+  /** Exact checks on the result of this step. A routine replay fails at the first step whose checks fail. */
+  assert?: Assertion[];
+};
 
 export type Routine = {
   version: 1;
@@ -127,8 +138,6 @@ export type Routine = {
   expect?: { elements: string[] };
   /** Repro routines only: how a replay tells, with no model, that the bug shows at the end. */
   bug?: BugCheck;
-  /** Claim routines only: exact checks on the last command or response, after the steps ran. */
-  assert?: Assertion[];
   /**
    * Claim routines only: the claim says that the pull request keeps a
    * behavior, so each command or request must give the same output on both
@@ -138,17 +147,36 @@ export type Routine = {
 };
 
 /**
- * An exact check at the end of a routine: on the last command of a CLI app,
- * its exit code or a text in its output, or on the last response of an API,
- * its status or a text in its body.
+ * An exact check on the result of one step: on a command of a CLI app, its
+ * exit code or a text in its output, or on a response of an API, its status,
+ * a text in its body, a JSON value, a header, or its conformance to the spec.
+ * The API kinds other than `status` and the body texts read the response
+ * before redaction.
  */
 export type Assertion =
   | { kind: 'exit-code'; value: number }
   | { kind: 'output-includes'; value: string }
   | { kind: 'output-excludes'; value: string }
-  | { kind: 'status'; value: number }
+  /** The status, or with a list, one of its statuses. */
+  | { kind: 'status'; value: number | number[] }
   | { kind: 'body-includes'; value: string }
-  | { kind: 'body-excludes'; value: string };
+  | { kind: 'body-excludes'; value: string }
+  /**
+   * The response conforms to the operation that the request matches: a
+   * declared status, a body that the strict schema accepts, a declared
+   * content type, and no 5xx. One check gives one result for each part, and
+   * each result names its part in `check`.
+   */
+  | { kind: 'contract'; check?: ContractCheck }
+  /** The JSON value at an RFC 6901 pointer equals `equals`, or with no `equals`, exists. */
+  | { kind: 'pointer'; pointer: string; equals?: unknown }
+  | { kind: 'pointer'; pointer: string; exists: true }
+  /** The header is present, and its value matches the regular expression `matches`. */
+  | { kind: 'header'; name: string; matches: string }
+  /** The JSON body conforms to the strict schema at `ref`, a pointer into the spec such as `#/components/schemas/Item`. */
+  | { kind: 'schema'; ref: string };
+
+export type ContractCheck = 'status' | 'schema' | 'content-type' | 'no-5xx';
 
 /** One assertion after one replay. `actual` is what the command or the API gave, when the check is on a value. */
 export type AssertionResult = { assertion: Assertion; ok: boolean; actual?: string };
@@ -195,8 +223,8 @@ export type AppMapScreen = {
   firstSeenAt: string;
   lastSeenAt: string;
   visits: number;
-  /** Relative to the workspace root. */
-  lastScreenshot?: string;
+  /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
+  lastCapture?: string;
   baselineKey?: string;
 };
 
@@ -205,6 +233,8 @@ export type AppMap = {
   platform: Platform;
   summary?: string;
   screens: AppMapScreen[];
+  /** Api apps: the endpoints of the contract. Only `buildContract()` computes them. */
+  endpoints?: Endpoint[];
   updatedAt: string;
 };
 
@@ -216,7 +246,7 @@ export type Candidate = {
   id: string;
   sessionId: string;
   screenId?: string;
-  source: 'invariant' | 'pixel-diff' | 'explorer' | 'decider';
+  source: 'invariant' | 'pixel-diff' | 'explorer' | 'decider' | 'sweep';
   ruleId?: string;
   fingerprint: string;
   summary: string;
@@ -225,13 +255,28 @@ export type Candidate = {
   evidence: IssueEvidence;
   /** Where the decider routed it, and why. */
   route?: { to: 'judge' | 'issue' | 'ignore'; reason: string; confidence?: number };
+  /**
+   * Sweep candidates: true when the failure repeated on a second replay (ADR
+   * 0007), false when it did not. Explorer candidates come from the model
+   * alone, so they are always false.
+   */
+  blocking?: boolean;
   createdAt: string;
 };
 
+/**
+ * A candidate that the judge must still decide: the decider routed it to the
+ * judge, and nothing decided it. `decided` holds the candidate ids of every
+ * issue and every decision, and the fingerprints in the triage file: a
+ * finding that a later run found again and the judge decided is decided too.
+ */
+export function awaitsJudge(candidate: Candidate, decided: ReadonlySet<string>): boolean {
+  return candidate.route?.to === 'judge' && !decided.has(candidate.id) && !decided.has(candidate.fingerprint);
+}
+
 export type IssueEvidence = {
-  screenshot?: string;
-  baseline?: string;
-  diff?: string;
+  /** What the app showed: a screenshot, or for an API the exchange as text. */
+  capture: Evidence;
   /** How to get there, as routine ids and then steps. */
   routineId?: string;
   steps?: RoutineStep[];
@@ -242,7 +287,11 @@ export type IssueEvidence = {
   console?: string[];
 };
 
-export type IssueStatus = 'new' | 'filed' | 'fixing' | 'fix-proposed' | 'fixed' | 'dismissed';
+/**
+ * `waits-for-deploy`: the fix merged, and the backend that Bugpatrol tests
+ * does not run it yet (or cannot tell). It is never a failure.
+ */
+export type IssueStatus = 'new' | 'filed' | 'fixing' | 'fix-proposed' | 'waits-for-deploy' | 'fixed' | 'dismissed';
 
 export type Issue = {
   version: 1;
@@ -299,7 +348,7 @@ export function judgedRetests(retests: Retest[] = []): Retest[] {
   return retests.filter((retest) => retest.outcome !== 'error' && retest.outcome !== 'skipped');
 }
 
-export type RetestShot = {
+export type RetestCapture = {
   /** The screen the issue saw the problem on; undefined when unknown. */
   screenId?: string;
   routineId?: string;
@@ -320,10 +369,10 @@ export type Retest = {
   note?: string;
   explorerSessionId?: string;
   judgeSessionId?: string;
-  /** Workspace-relative screenshot paths, same form as Issue.evidence.screenshot. */
+  /** Workspace-relative capture files: a PNG, or the exchange JSON of an API. */
   before?: string;
   after?: string;
-  shots?: RetestShot[];
+  captures?: RetestCapture[];
   at: string;
   costUsd?: number;
 };
@@ -392,6 +441,8 @@ export type FixProposal = {
   diff?: string;
   /** The fix commit on the branch. A merge check trusts only this commit. */
   commit?: string;
+  /** The commit that the merge made on the default branch, for example a squash commit. */
+  mergeCommit?: string;
   summary?: string;
   /** The `verify` command that passed on this change. */
   checks?: string;
@@ -653,7 +704,8 @@ export type AgentEvent = {
   tool?: string;
   input?: unknown;
   output?: unknown;
-  screenshot?: string;
+  /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
+  capture?: string;
   screenId?: string;
   costUsd?: number;
   /** The tokens of the model call behind this event. */
@@ -687,7 +739,7 @@ export type AgentsFile = {
     startedAt: string;
     nextAt?: string;
     pid?: number;
-    /** The source commit that the last full cycle tested. */
+    /** The commit that the last full cycle tested: the source commit, or the deployed commit of an external backend. */
     commit?: string;
   };
   agents: AgentStatus[];
@@ -712,6 +764,14 @@ export type SessionSummary = {
   screensFound: string[];
   candidates: number;
   issues: string[];
+};
+
+/** `deploy.json`. The last answer of `app.connect.version`: the live commit, or why it is not known. */
+export type DeployFile = {
+  version: 1;
+  commit?: string;
+  pending?: string;
+  checkedAt: string;
 };
 
 /**

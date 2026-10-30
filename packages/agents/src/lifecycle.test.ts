@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { startFixtureApi } from '@bugpatrol/api-fixture';
 import { appSchema, InfrastructureError } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import { startApp } from './lifecycle.js';
@@ -27,6 +28,27 @@ describe('startApp', () => {
       expect(emitted.some((line) => line.includes('failed'))).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads the contract of an api app from the running app, after setup', async () => {
+    const fixture = await startFixtureApi();
+    try {
+      const port = new URL(fixture.url).port;
+      const app = appSchema.parse({
+        platform: 'api',
+        setup: [{ run: `echo "listening on ${port}"`, capture: { API_PORT: 'listening on (\\d+)' } }],
+        connect: { url: 'http://127.0.0.1:{{API_PORT}}', spec: '/openapi.json' },
+      });
+      const running = await startApp(app, { root: process.cwd(), vars: new Vars() });
+      expect(running.contract?.endpoints.map((endpoint) => endpoint.key)).toContain('POST /admin/wipe');
+      expect(fixture.hits()).toEqual([{ method: 'GET', path: '/openapi.json' }]);
+      // No spec and no inventory: a contract without endpoints, so only reads go out.
+      const bare = appSchema.parse({ platform: 'api', connect: { url: fixture.url } });
+      expect((await startApp(bare, { root: process.cwd(), vars: new Vars() })).contract?.endpoints).toEqual([]);
+      expect((await startApp(appSchema.parse({}), { root: process.cwd(), vars: new Vars() })).contract).toBeUndefined();
+    } finally {
+      await fixture.close();
     }
   });
 

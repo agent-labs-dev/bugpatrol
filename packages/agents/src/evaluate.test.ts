@@ -52,7 +52,7 @@ describe('evaluateScreen', () => {
       const taps = candidates.filter((item) => item.ruleId === 'usability/tap-target');
       expect(taps).toHaveLength(1);
       expect(taps[0]!.summary).toMatch(/^3 elements/);
-      expect(taps[0]!.evidence.baseline).toBeUndefined();
+      expect(taps[0]!.evidence.capture).toEqual({ kind: 'image', screenshot: expect.stringMatching(/\.png$/) });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -222,7 +222,7 @@ describe('file_issue with issue_id', () => {
         status: 'fixed' as const,
         screenId: 'home',
         candidateIds: [],
-        evidence: {},
+        evidence: { capture: { kind: 'image' as const, screenshot: 'old.png' } },
         judgement: { by: 'test', reason: 'Real', at: 'now' },
         occurrences: 1,
         firstSeenAt: 'now',
@@ -258,7 +258,7 @@ describe('judge prompts', () => {
       severity: 'minor' as const,
       status: 'dismissed' as const,
       candidateIds: [],
-      evidence: {},
+      evidence: { capture: { kind: 'image' as const, screenshot: 'old.png' } },
       judgement: { by: 'test', reason: 'Noise', at: 'now' },
       occurrences: 1,
       firstSeenAt: '2026-01-01',

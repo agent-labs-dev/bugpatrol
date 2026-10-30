@@ -11,11 +11,11 @@ describe('Workspace', () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
     const workspace = new Workspace(root);
     try {
-      await workspace.upsertScreen({ id: 'home', links: ['settings'], lastScreenshot: 'first.png' });
+      await workspace.upsertScreen({ id: 'home', links: ['settings'], lastCapture: 'first.png' });
       const screen = await workspace.upsertScreen({ id: 'home', links: ['profile'], visits: 2 });
       expect(screen.links).toEqual(['settings', 'profile']);
       expect(screen.visits).toBe(3);
-      expect(screen.lastScreenshot).toBe('first.png');
+      expect(screen.lastCapture).toBe('first.png');
       const transition = {
         to: 'settings',
         kind: 'tap' as const,
@@ -44,8 +44,17 @@ describe('Workspace', () => {
         kind: 'thought',
         summary: 'next',
       });
-      const screenshot = await workspace.saveScreenshot(session.id, Buffer.from('png'), 'home');
+      const screenshot = await workspace.saveCapture(session.id, { kind: 'image', png: Buffer.from('png') }, 'home');
       expect(screenshot).toMatch(/^\.bugpatrol\/runs\/sessions\/.*\/001-home\.png$/);
+      const exchange = {
+        request: { method: 'GET' as const, path: '/health', headers: {} },
+        latencyMs: 1,
+        at: '2026-10-29T12:00:00.000Z',
+        error: 'TimeoutError',
+      };
+      const file = await workspace.saveCapture(session.id, { kind: 'http', exchange }, 'health');
+      expect(file).toMatch(/\/002-health\.exchange\.json$/);
+      expect(JSON.parse(await readFile(join(root, file), 'utf8'))).toEqual(exchange);
       await new Promise((done) => setTimeout(done, 20));
       const events = await readFile(join(paths.session(root, session.id), 'events.jsonl'), 'utf8');
       expect(events).toContain('{{TOKEN}}');
@@ -70,7 +79,7 @@ describe('Workspace', () => {
         severity: 'minor',
         status: 'new',
         candidateIds: [],
-        evidence: {},
+        evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
         judgement: { by: 'judge', reason: 'visible', at: 'now' },
         occurrences: 1,
         firstSeenAt: 'now',

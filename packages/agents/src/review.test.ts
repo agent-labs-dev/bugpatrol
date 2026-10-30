@@ -2331,7 +2331,7 @@ describe('API claim', { timeout: 60_000 }, () => {
         gh: github.gh,
         createRuntime: () => runtime,
         // Tells the API which build sends the request. Headers stay out of the recording.
-        createDriver: (config, vars, redact, source) =>
+        createDriver: (config, vars, redact, source, contract) =>
           createDriver(
             {
               ...config,
@@ -2343,6 +2343,7 @@ describe('API claim', { timeout: 60_000 }, () => {
             vars,
             redact,
             source,
+            contract,
           ),
       });
       expect(tasks.map((task) => task.role)).toEqual(['judge', 'explorer']);
@@ -2433,7 +2434,7 @@ describe('API same-behavior claim', { timeout: 60_000 }, () => {
       const review = await reviewPullRequest(f.root, config, 7, {
         gh: github.gh,
         createRuntime: () => runtime,
-        createDriver: (config, vars, redact, source) =>
+        createDriver: (config, vars, redact, source, contract) =>
           createDriver(
             {
               ...config,
@@ -2442,6 +2443,7 @@ describe('API same-behavior claim', { timeout: 60_000 }, () => {
             vars,
             redact,
             source,
+            contract,
           ),
       });
       expect(review.claims![0]).toMatchObject({
@@ -2585,6 +2587,29 @@ describe('review rendering', () => {
     expect(body).toContain('| _Not reached on the base build. The screen is new._ | <img src="https://img/head.png"');
     expect(body).toContain('<details><summary>Screenshots and steps</summary>');
     expect(body).toContain('1. Run the routine enter-app\n2. Tap Save');
+  });
+
+  it('shows an API capture as an http block under the table', () => {
+    const exchange = (status: number) => ({
+      request: { method: 'GET' as const, path: '/items/0', headers: {} },
+      response: { status, headers: {}, contentType: null, body: '{}', bytes: 2 },
+      latencyMs: 1,
+      at: 'now',
+    });
+    const { comments } = renderReview(
+      review,
+      (path) => `https://img/${path}`,
+      (file, line) => file === 'src/a.ts' && line === 11,
+      undefined,
+      new Map([
+        ['base2.png', exchange(200)],
+        ['head2.png', exchange(500)],
+      ]),
+    );
+    expect(comments[0]!.body).toContain('| _The HTTP exchange is below._ | _The HTTP exchange is below._ |');
+    expect(comments[0]!.body).toContain('Base `bbbbbbb`:\n\n```http\nGET /items/0\n\nHTTP 200 OK (1 ms)\n\n{}\n```');
+    expect(comments[0]!.body).toContain('This pull request `aaaaaaa`:\n\n```http\nGET /items/0\n\nHTTP 500');
+    expect(comments[0]!.body).not.toContain('<img');
   });
 
   it('says when nothing was introduced', () => {

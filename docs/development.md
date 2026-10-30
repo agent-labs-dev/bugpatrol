@@ -77,6 +77,7 @@ A maintainer runs the **Release** workflow in GitHub Actions and selects `patch`
 - [ADR 0005: agents, drivers, and the patrol](adr/0005-agents-drivers-and-the-patrol.md): the agent design
 - [ADR 0006: commit the routines and the app map](adr/0006-commit-the-routines.md): what Bugpatrol commits, and why
 - [ADR 0007: only a repeated replay can block a pull request](adr/0007-only-a-repeated-replay-blocks.md): the evidence sources and the blocking rule of the claim check
+- [ADR 0008: API evidence is text](adr/0008-api-evidence-is-text.md): the evidence union and the api driver without a browser
 - [Architecture decisions](adr/): all ADRs
 - [Technical specification](spec/bugpatrol-technical-spec.md): the deterministic gate
 - [Competitive landscape](research/oss-visual-testing-landscape-2026.md): the research behind the design

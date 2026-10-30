@@ -48,7 +48,7 @@ export class FakeDriver implements Driver {
     const record = options.record;
     if (!record) return;
     this.startRecording = async () => {
-      this.frames = [{ data: (await this.observe()).screenshot, at: Date.now() }];
+      this.frames = [{ data: await this.png(), at: Date.now() }];
     };
     this.stopRecording = async (name) => {
       const file = `${name}.mp4`;
@@ -79,7 +79,7 @@ export class FakeDriver implements Driver {
       platform: this.platform,
       location: `fake://${this.current}`,
       title: this.current,
-      screenshot: PNG.sync.write(png),
+      capture: { kind: 'image', png: PNG.sync.write(png) },
       viewport: { width: 100, height: 100, scale: 1 },
       elements: screen.elements,
       volatileRegions: [],
@@ -89,9 +89,15 @@ export class FakeDriver implements Driver {
     };
   }
 
+  private async png(): Promise<Buffer> {
+    const { capture } = await this.observe();
+    if (capture.kind !== 'image') throw new Error('The fake driver draws screens');
+    return capture.png;
+  }
+
   async act(action: DriverAction): Promise<ActResult> {
     const result = await this.step(action);
-    this.frames?.push({ data: (await this.observe()).screenshot, at: Date.now() });
+    this.frames?.push({ data: await this.png(), at: Date.now() });
     return result;
   }
 

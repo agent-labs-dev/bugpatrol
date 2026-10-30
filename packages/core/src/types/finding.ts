@@ -26,7 +26,7 @@ export type NetworkFailure = {
   error?: string;
 };
 
-export type Evidence = {
+export type FindingEvidence = {
   before?: ArtifactRef;
   after?: ArtifactRef;
   diff?: ArtifactRef;
@@ -62,7 +62,7 @@ export type Finding = {
    * fails this test; "the primary action is no longer reachable" passes it.
    */
   summary: string;
-  evidence: Evidence;
+  evidence: FindingEvidence;
   suspectedFiles: FileRef[];
   status: FindingStatus;
   issueNumber?: number;

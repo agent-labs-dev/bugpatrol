@@ -19,6 +19,7 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
+import { captureParts, readExchanges, screenshotOf } from '../evidence.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -50,7 +51,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
-import { type CaptureTarget, captureTargets, image, targetLines } from './capture.js';
+import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { ClaimBudget, claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
@@ -352,6 +353,7 @@ async function withBuild<T>(
           vars.resolve.bind(vars),
           (value) => vars.redact(value) as string,
           worktree,
+          app?.contract,
         );
         driver = next;
         await next.connect();
@@ -475,12 +477,13 @@ async function captureBase(
 ): Promise<CaptureTarget[]> {
   const { root, config, workspace, pr, opts } = ctx;
   const targets: CaptureTarget[] = candidates.map((candidate) => ({
-    shot: {
+    capture: {
       screenId: candidate.screenId,
       routineId: candidate.evidence.routineId,
-      before: candidate.evidence.screenshot,
+      before: screenshotOf(candidate.evidence.capture),
     },
     steps: candidate.evidence.steps ?? [],
+    reported: candidate.evidence.capture,
   }));
   try {
     await withBuild(ctx, 'base', pr.base, async (driver, vars) => {
@@ -510,7 +513,7 @@ async function captureBase(
         steps = outcome.steps;
       } finally {
         review.costUsd += cost;
-        const reached = targets.filter((target) => target.shot.reached).length;
+        const reached = targets.filter((target) => target.capture.reached).length;
         const done = `Reached ${reached} of ${targets.length} flow(s) on the base of PR #${pr.number}`;
         await workspace.endSession(record.id, { summary: done, steps, costUsd: cost });
         session.emit({ kind: 'session-end', summary: done });
@@ -522,9 +525,9 @@ async function captureBase(
     const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
     ctx.log(reason);
     for (const target of targets)
-      if (!target.shot.after) {
-        target.shot.reached = false;
-        target.shot.note = reason;
+      if (!target.capture.after) {
+        target.capture.reached = false;
+        target.capture.note = reason;
       }
   }
   return targets;
@@ -545,7 +548,7 @@ async function judgeFindings(
   opts.onSession?.(session);
   const runtime = (opts.createRuntime ?? makeRuntime)(config.agents.judge.use);
   const baseNote = (index: number) => {
-    const shot = targets[index]!.shot;
+    const shot = targets[index]!.capture;
     return shot.reached ? (shot.note ?? '') : `Not reached on the base build. ${shot.note ?? ''}`.trim();
   };
   const verdicts = new Map<
@@ -561,8 +564,8 @@ async function judgeFindings(
         const index = candidates.findIndex((candidate) => candidate.id === input.id);
         const candidate = candidates[index];
         if (!candidate) return { ...response('Unknown finding id'), isError: true };
-        const head = await image(root, candidate.evidence.screenshot);
-        const base = await image(root, targets[index]!.shot.after);
+        const head = await beforeParts(root, targets[index]!);
+        const base = await captureParts(root, targets[index]!.capture.after);
         return {
           content: [
             {
@@ -647,7 +650,7 @@ async function judgeFindings(
           .map(
             (candidate, index) =>
               `- ${candidate.id} [${candidate.severity}] on ${candidate.screenId ?? 'unknown screen'}: ${candidate.summary}. ` +
-              `Base build: ${targets[index]!.shot.reached ? 'reached' : 'not reached'}.`,
+              `Base build: ${targets[index]!.capture.reached ? 'reached' : 'not reached'}.`,
           )
           .join('\n')}`,
         tools,
@@ -685,8 +688,8 @@ async function judgeFindings(
       ...(candidate.evidence.routineId ? [`Run the routine ${candidate.evidence.routineId}`] : []),
       ...(candidate.evidence.steps ?? []).map(stepWords),
     ],
-    head: candidate.evidence.screenshot,
-    base: targets[index]!.shot.after,
+    head: screenshotOf(candidate.evidence.capture),
+    base: targets[index]!.capture.after,
     baseNote: baseNote(index) || undefined,
   }));
 }
@@ -708,8 +711,7 @@ async function settleCandidates(ctx: ReviewContext, sessionId: string, findings:
         at: new Date().toISOString(),
       }),
     );
-  if (lines.length)
-    await appendFile(join(paths.session(ctx.root, sessionId), 'decisions.jsonl'), `${lines.join('\n')}\n`);
+  if (lines.length) await appendFile(paths.sessionDecisions(ctx.root, sessionId), `${lines.join('\n')}\n`);
 }
 
 /**
@@ -1094,9 +1096,16 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   const { root, config, repo, pr } = ctx;
   const redact = (text: string) => new Vars(config.app.secrets).redact(text) as string;
   const inDiff = (file: string, line: number) => pr.lines.get(file)?.has(line) ?? false;
+  const shown = [
+    ...review.findings
+      .filter((finding) => finding.verdict === 'introduced')
+      .flatMap((finding) => [finding.head, finding.base]),
+    ...claimMedia(review),
+  ].filter((path): path is string => Boolean(path));
+  const exchanges = await readExchanges(root, shown);
   if (ctx.opts.dryRun) {
     const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
-    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name);
+    const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name, exchanges);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(
       file,
@@ -1119,14 +1128,10 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   }
   const branch = config.agents.github.assetsBranch;
   const urls = new Map<string, string>();
-  const shown = [
-    ...review.findings
-      .filter((finding) => finding.verdict === 'introduced')
-      .flatMap((finding) => [finding.head, finding.base]),
-    ...claimMedia(review),
-  ].filter((path): path is string => Boolean(path));
-  if (shown.length) await ensureAssetsBranch(gh, repo, branch);
-  for (const path of new Set(shown)) {
+  // An exchange is text in the body, not an uploaded file.
+  const uploads = new Set(shown.filter((path) => !exchanges.has(path)));
+  if (uploads.size) await ensureAssetsBranch(gh, repo, branch);
+  for (const path of uploads) {
     try {
       const { size } = await stat(resolve(root, path));
       if (size > UPLOAD_LIMIT) {
@@ -1140,7 +1145,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
       ctx.log(`Could not upload ${path}: ${String(error).split('\n')[0]}`);
     }
   }
-  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name);
+  const rendered = renderReview(review, (path) => urls.get(path), inDiff, config.agents.review.name, exchanges);
   const body = limitBody(redact(rendered.body));
   const name = config.agents.review.name;
   const posted = await saveSticky(gh, repo, pr.number, reviewMarker(name), body);

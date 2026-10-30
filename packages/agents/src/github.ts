@@ -219,19 +219,7 @@ export async function syncGitHub(
     if (transition) {
       changed.add(issue.id);
       if (state === 'closed' && stateReason === 'not_planned') {
-        const reason = 'Closed on GitHub as not planned.';
-        const at = remote.closedAt ?? now;
-        issue.status = 'dismissed';
-        issue.closedBy = { by: 'GitHub', reason, at };
-        await workspace.recordTriage(await dismissedFingerprints(workspace, issue, reason, at));
-        await workspace.upsertLessons([
-          {
-            role: 'judge',
-            source: 'human',
-            scope: issue.screenId,
-            text: fitLesson(`Not a bug: ${issue.title} — ${reason}`),
-          },
-        ]);
+        await dismissByGitHub(workspace, issue, remote.closedAt ?? now);
       } else if (state === 'closed' && stateReason === 'completed') {
         issue.status = 'fixed';
         issue.closedBy = { by: 'GitHub', reason: 'Closed on GitHub as completed.', at: remote.closedAt ?? now };
@@ -243,6 +231,87 @@ export async function syncGitHub(
     if (save) await workspace.saveIssue(issue);
   }
   return { changed: [...changed] };
+}
+
+/**
+ * A team that closes an issue as not planned dismisses its fingerprints, so
+ * the same failure does not come back as a new issue.
+ */
+export async function dismissByGitHub(workspace: Workspace, issue: Issue, at: string): Promise<void> {
+  const reason = 'Closed on GitHub as not planned.';
+  issue.status = 'dismissed';
+  issue.closedBy = { by: 'GitHub', reason, at };
+  await workspace.recordTriage(await dismissedFingerprints(workspace, issue, reason, at));
+  await workspace.upsertLessons([
+    {
+      role: 'judge',
+      source: 'human',
+      scope: issue.screenId,
+      text: fitLesson(`Not a bug: ${issue.title} — ${reason}`),
+    },
+  ]);
+}
+
+/** The hidden line in an issue body that holds the fingerprint, so a title change does not lose the issue. */
+export const fingerprintMarker = (fp: string) => `<!-- bugpatrol:fp=${fp} -->`;
+
+export type FoundIssue = {
+  number: number;
+  url: string;
+  state: 'open' | 'closed';
+  stateReason: 'completed' | 'not_planned' | 'reopened' | null;
+};
+
+/**
+ * The GitHub issue, open or closed, whose body holds the marker of `fp`. A
+ * search with no `--state` gives both states, and `gh` pages through the
+ * results up to the limit. Only an exact marker in the body counts.
+ */
+export async function findIssueByFingerprint(gh: Gh, repo: string, fp: string): Promise<FoundIssue | undefined> {
+  type Hit = { number: number; url: string; state: string; body: string };
+  const hits = JSON.parse(
+    await gh([
+      'search',
+      'issues',
+      // The bare hash: `bugpatrol:` would read as a search qualifier.
+      fp,
+      '--repo',
+      repo,
+      '--match',
+      'body',
+      '--limit',
+      '1000',
+      '--json',
+      'number,url,state,body',
+    ]),
+  ) as Hit[];
+  const marker = fingerprintMarker(fp);
+  // The oldest issue is the first one that Bugpatrol filed.
+  const hit = hits.filter((item) => item.body.includes(marker)).sort((a, b) => a.number - b.number)[0];
+  if (!hit) return undefined;
+  const state = hit.state.toLowerCase() as FoundIssue['state'];
+  if (state === 'open') return { number: hit.number, url: hit.url, state, stateReason: null };
+  const reason = await gh([
+    'issue',
+    'view',
+    String(hit.number),
+    '--repo',
+    repo,
+    '--json',
+    'stateReason',
+    '-q',
+    '.stateReason',
+  ]);
+  return {
+    number: hit.number,
+    url: hit.url,
+    state,
+    stateReason: (reason.toLowerCase() || null) as FoundIssue['stateReason'],
+  };
+}
+
+export async function reopenIssue(gh: Gh, repo: string, number: number, comment: string): Promise<void> {
+  await gh(['issue', 'reopen', String(number), '--repo', repo, '--comment', comment]);
 }
 
 export async function ensureAssetsBranch(gh: Gh, repo: string, branch: string): Promise<void> {
@@ -387,11 +456,12 @@ export async function createPr(
   );
 }
 
+/** The body starts with the fingerprint marker, so a cut of a long body keeps it. */
 export async function createIssue(
   gh: Gh,
-  input: { repo: string; title: string; body: string; labels: string[] },
+  input: { repo: string; title: string; body: string; labels: string[]; fingerprint: string },
 ): Promise<{ number: number; url: string }> {
-  return withBody(input.body, async (file) =>
+  return withBody(`${fingerprintMarker(input.fingerprint)}\n${input.body}`, async (file) =>
     fromUrl(
       await gh([
         'issue',

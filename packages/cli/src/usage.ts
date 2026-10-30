@@ -30,6 +30,8 @@ Agents
   bugpatrol worktrees clean
   bugpatrol [--once] [--force]            the patrol: explore, judge, fix, retest, publish (= bugpatrol patrol)
   bugpatrol replay <routine-id>
+  bugpatrol endpoints [--spec URL|file] [--json]   the endpoints of the api contract
+  bugpatrol sweep [--json] [--max-requests N] [--dry-run]   test each api endpoint × case, no model
   bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
   bugpatrol memory list [--role r] | add --role r "text" [--scope s]
   bugpatrol memory remove <id> | retire <id> --reason "..."
@@ -73,7 +75,8 @@ export const COMMAND_HELP: Record<string, string> = {
   --yes, -y              use the detected values, with no questions
   --platform <p>         web | electron | ios | android | api | desktop | cli
   --start "<command>"    the command that starts the app
-  --url <url>            web: the app URL
+  --url <url>            web, api: the app URL
+  --spec <spec>          api: the OpenAPI spec, a URL, a path on the app URL, or a file
   --app-id <id>          ios, android: the bundle ID or the package name
   --agent <a>            the LLM for all agents: claude | codex | kimi | opencode | pi | openrouter | vercel | openai | anthropic
   --explorer, --judge, --fixer <a>   the LLM for one agent
@@ -151,6 +154,23 @@ export const COMMAND_HELP: Record<string, string> = {
   publish, and CI checks run in each cycle.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
+  --state <s>     local | branch: share the state on the bugpatrol-state branch (default: agents.patrol.state)
+`,
+  endpoints: `bugpatrol endpoints [--spec URL|file] [--json]
+  Print the endpoints of the api contract, and each operation that Bugpatrol skips, with the reason.
+  With no --spec, read app.connect.spec, or .bugpatrol/endpoints.yml when there is no spec,
+  and write the endpoints to .bugpatrol/appmap.json. Bugpatrol never uses the servers value of a spec.
+  --spec URL|file   read this spec, and write nothing
+  --json            print JSON
+`,
+  sweep: `bugpatrol sweep [--json] [--max-requests N] [--dry-run]
+  Build requests from the api spec for each endpoint and case (ok, each declared error, no-auth,
+  invalid-input, missing-id, other-user, repeat-delete), send them with no model, and check each
+  response against the spec. A run stops at agents.sweep.maxRequests, and the next run resumes there.
+  A failure that repeats on a second replay exits 1. Coverage goes to .bugpatrol/runs/coverage.json.
+  --max-requests N  the most requests in this run (default: agents.sweep.maxRequests)
+  --dry-run         list the planned requests and the skip reasons, send nothing, write nothing
+  --json            print JSON
 `,
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.

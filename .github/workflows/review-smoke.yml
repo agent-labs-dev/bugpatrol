@@ -4,6 +4,8 @@
 #   - fixture-app: the fixture app, a stand-in for a team's app
 #   - dashboard:   Bugpatrol's dashboard, built from each side of the change
 #   - cli:         Bugpatrol's command line, built from each side of the change
+# The api job runs no review. It starts examples/api-fixture, a backend with
+# planted bugs, and checks that the sweep and one patrol cycle find them.
 name: Review smoke
 
 on:
@@ -11,10 +13,12 @@ on:
     paths:
       - action.yml
       - .github/workflows/review-smoke.yml
+      - examples/api-fixture/**
       - examples/fixture-app/**
       - examples/review-smoke/**
       - examples/review-smoke-dashboard/**
       - examples/review-smoke-cli/**
+      - examples/review-smoke-api/**
       - packages/**
       - pnpm-lock.yaml
 
@@ -69,3 +73,81 @@ jobs:
           working-directory: ${{ matrix.dir }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+  api:
+    runs-on: ubuntu-latest
+    # The sweep sends no PR comment and pushes nothing.
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: examples/review-smoke-api
+    env:
+      BUGPATROL: node ${{ github.workspace }}/packages/bugpatrol/dist/bin.js
+      # The six planted bugs that the sweep finds. Bug 6 (a 200 with db down) needs the explorer.
+      PLANTED: >-
+        ["GET /items ok", "POST /items invalid-input", "GET /items/{id} invalid-input",
+        "GET /items/{id} missing-id", "GET /items/{id} other-user", "DELETE /items/{id} repeat-delete"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - run: pnpm build
+        working-directory: .
+      - run: pnpm --filter bugpatrol build
+        working-directory: .
+      # Bugpatrol never starts a backend: it tests one that runs (examples/review-smoke-api/.bugpatrol/bugpatrol.yml).
+      - name: Start the fixture API
+        working-directory: .
+        run: |
+          nohup node examples/api-fixture/dist/start.js > "$RUNNER_TEMP/fixture.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3400/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/fixture.log"
+          exit 1
+      - name: Sweep the fixture
+        run: |
+          status=0
+          $BUGPATROL sweep --json > "$RUNNER_TEMP/sweep.json" || status=$?
+          # 1: a failure that repeats. The fixture has planted bugs, so 0 is a failure of this test.
+          if [ "$status" -ne 1 ]; then
+            echo "::error::bugpatrol sweep exited $status, not 1"
+            exit 1
+          fi
+          jq -r '.findings[] | "\(.key)  \(.failed | join(", "))"' "$RUNNER_TEMP/sweep.json"
+          jq -e --argjson planted "$PLANTED" \
+            '[.findings[] | select(.repeats) | .key] | sort == ($planted | sort)' "$RUNNER_TEMP/sweep.json" > /dev/null \
+            || { echo "::error::The sweep findings are not the planted bugs"; exit 1; }
+      # The explorer and the judge need a model, so a pull request without the
+      # secrets (a fork, Dependabot) stops after the sweep.
+      - name: Run one patrol cycle
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          $BUGPATROL patrol --once
+          # The patrol sweeps again in the explorer session. The judge must decide
+          # each planted bug, and must file each one that gives a 5xx.
+          cat .bugpatrol/runs/sessions/*/candidates.jsonl \
+            | jq -s '[.[] | select(.source == "sweep") | {fingerprint, severity, summary}] | unique_by(.fingerprint)' \
+            > "$RUNNER_TEMP/sweep-candidates.json"
+          jq -r --slurpfile candidates "$RUNNER_TEMP/sweep-candidates.json" \
+            '. as $triage | $candidates[0][] | "\($triage.fingerprints[.fingerprint].decision // "undecided")  \(.summary)"' \
+            .bugpatrol/runs/triage.json
+          jq -e --slurpfile candidates "$RUNNER_TEMP/sweep-candidates.json" --argjson planted "$PLANTED" '
+            . as $triage | $candidates[0] as $c
+            | ($c | length) == ($planted | length)
+              and all($c[]; $triage.fingerprints[.fingerprint] != null)
+              and all($c[] | select(.severity == "major"); $triage.fingerprints[.fingerprint].decision == "filed")
+          ' .bugpatrol/runs/triage.json > /dev/null \
+            || { echo "::error::The judge did not decide each planted bug, or dismissed a 5xx"; exit 1; }

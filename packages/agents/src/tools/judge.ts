@@ -1,14 +1,17 @@
 import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
+  awaitsJudge,
   type Candidate,
   fitLesson,
+  formatHttpExchange,
   type Issue,
   paths,
   type Routine,
   shortHash,
   type TriageFile,
 } from '@bugpatrol/core';
+import { evidenceParts } from '../evidence.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -36,7 +39,7 @@ function issueTitle(value: string): string {
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
   try {
-    const lines = await readFile(join(paths.session(session.root, sessionId), 'decisions.jsonl'), 'utf8');
+    const lines = await readFile(paths.sessionDecisions(session.root, sessionId), 'utf8');
     return new Set(
       lines
         .trim()
@@ -83,26 +86,15 @@ async function saveRepro(
 /** Excludes candidates already accepted or dismissed in the requested sessions. */
 export async function pendingCandidates(session: AgentSession, sessionIds: string[]): Promise<Candidate[]> {
   const issues = await session.workspace.listIssues();
-  const filed = new Set(issues.flatMap((item) => item.candidateIds));
+  const filed = issues.flatMap((item) => item.candidateIds);
+  const triaged = Object.keys((await session.workspace.readTriage()).fingerprints);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
-    const dismissed = await decisions(session, id);
-    for (const candidate of await session.workspace.readCandidates(id)) {
-      if (candidate.route?.to === 'judge' && !filed.has(candidate.id) && !dismissed.has(candidate.id)) {
-        pending.push(candidate);
-      }
-    }
+    const decided = new Set([...filed, ...triaged, ...(await decisions(session, id))]);
+    for (const candidate of await session.workspace.readCandidates(id))
+      if (awaitsJudge(candidate, decided)) pending.push(candidate);
   }
   return pending;
-}
-
-async function image(session: AgentSession, file: string | undefined): Promise<ToolResult['content']> {
-  if (!file) return [];
-  try {
-    return [{ type: 'image', png: await readFile(resolve(session.root, file)) }];
-  } catch {
-    return [];
-  }
 }
 
 /** Pixel diffs are left out: an accepted visual change moves the baseline instead. */
@@ -151,17 +143,22 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
     },
     {
       name: 'view_candidate',
-      description: 'Inspect a candidate and its screenshot, baseline, and diff before deciding.',
+      description:
+        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, or for an API the HTTP exchange.',
       inputSchema: schema({ id: string }, ['id']),
       async run(input) {
         const candidate = (await pendingCandidates(session, sessionIds)).find((item) => item.id === input.id);
         if (!candidate) return { ...response('Unknown or decided candidate'), isError: true };
+        const { capture, ...evidence } = candidate.evidence;
+        if (capture.kind === 'http') {
+          // The exchange is text, so the model reads it as the server sent it, in the one part.
+          const record = JSON.stringify({ ...candidate, evidence }, null, 2);
+          return response(`${record}\n\n${formatHttpExchange(capture.exchange)}`);
+        }
         return {
           content: [
             { type: 'text', text: JSON.stringify(candidate, null, 2) },
-            ...(await image(session, candidate.evidence.screenshot)),
-            ...(await image(session, candidate.evidence.baseline)),
-            ...(await image(session, candidate.evidence.diff)),
+            ...(await evidenceParts(session.root, capture)),
           ],
         };
       },
@@ -285,9 +282,10 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
         for (const candidate of candidates) {
-          if (input.update_baseline && candidate.screenId && candidate.evidence.screenshot) {
+          const { capture } = candidate.evidence;
+          if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
             await copyFile(
-              resolve(session.root, candidate.evidence.screenshot),
+              resolve(session.root, capture.screenshot),
               paths.agentBaseline(session.root, candidate.screenId),
             );
             const snapshot = join(
@@ -301,7 +299,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             }
           }
           await appendFile(
-            join(paths.session(session.root, candidate.sessionId), 'decisions.jsonl'),
+            paths.sessionDecisions(session.root, candidate.sessionId),
             `${JSON.stringify({
               candidateId: candidate.id,
               decision: 'dismiss',

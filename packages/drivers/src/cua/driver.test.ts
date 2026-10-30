@@ -70,7 +70,7 @@ native('isolated Cua desktop (real native input)', () => {
     const post = (path: string, data: unknown) =>
       fetch(`${origin}${path}`, { method: 'POST', headers, body: JSON.stringify(data) });
     const observed = await driver.observe();
-    expect(observed.screenshot.readUInt32BE(16)).toBe(observed.viewport.width);
+    expect(observed.capture.kind === 'image' && observed.capture.png.readUInt32BE(16)).toBe(observed.viewport.width);
     const name = observed.elements.find((element) => element.name === 'Name' && element.role === 'textbox');
     expect(name).toBeDefined();
     expect((await fetch(`${origin}/frame`, { headers })).status).toBe(200);

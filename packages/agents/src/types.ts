@@ -15,9 +15,10 @@ export type ToolResult = {
   /**
    * What the activity feed shows for this call. The text content is written
    * for the model and is long; `summary` is one sentence for a human, and
-   * `screenshot` links the step to what the app looked like after it.
+   * `capture` links the step to what the app showed after it: a screenshot,
+   * or the exchange file of an API.
    */
-  meta?: { summary?: string; screenshot?: string; screenId?: string };
+  meta?: { summary?: string; capture?: string; screenId?: string };
 };
 
 export type Tool = {

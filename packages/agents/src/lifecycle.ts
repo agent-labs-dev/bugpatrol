@@ -1,12 +1,25 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import { type Contract, loadContract } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
 import type { Vars } from './vars.js';
 
 type Options = { root: string; vars: Vars; emit?: (summary: string) => void; source?: string };
 
+type RunningApp = {
+  vars: Vars;
+  /**
+   * An api app: its contract, loaded one time when setup is done, because
+   * the spec can come from the running app. The driver, the sweep, and the
+   * explorer of this run all use this one object. Without a spec or an
+   * endpoint inventory it has no endpoints, so only reads can go out.
+   */
+  contract?: Contract;
+  stop(): Promise<void>;
+};
+
 /** Shell commands belong to the app configuration. A source override swaps commands rooted at app.source into the worktree; every command receives BUGPATROL_SOURCE (and BUGHUNTERS_SOURCE, its name before the rename). Output is redacted. */
-export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: Vars; stop(): Promise<void> }> {
+export async function startApp(app: AppConfig, opts: Options): Promise<RunningApp> {
   const children: ChildProcess[] = [];
   const report = (message: string) => opts.emit?.(opts.vars.redact(message) as string);
   const configuredSource = resolve(opts.root, app.source);
@@ -103,10 +116,13 @@ export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: V
     }
   }
 
+  let contract: Contract | undefined;
   try {
     for (const command of app.setup) {
       await run(command, 'Setup');
     }
+    if (app.platform === 'api')
+      contract = await loadContract(opts.root, app.connect, opts.vars.resolve.bind(opts.vars));
   } catch (error) {
     // A setup that fails halfway may already hold resources (a test run, an
     // identity). Teardown undoes what it can before the error goes up.
@@ -124,6 +140,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<{ vars: V
   }
   return {
     vars: opts.vars,
+    ...(contract ? { contract } : {}),
     async stop() {
       for (const command of app.teardown) {
         try {

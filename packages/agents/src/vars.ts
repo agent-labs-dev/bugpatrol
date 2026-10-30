@@ -1,3 +1,4 @@
+import { missingId } from '@bugpatrol/contract';
 import type { AppConfig } from '@bugpatrol/core';
 
 /** Captures and allowlisted secrets share one redaction and interpolation path. */
@@ -62,21 +63,25 @@ export class Vars {
     return this.interpolate(text, true);
   }
 
+  /** `{{NAME|missing}}` gives an id of the same shape as the value that does not exist (see `missingId`). */
   private interpolate(text: string, trusted: boolean): string {
-    const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
-    return text.replace(placeholder, (match, strict: string | undefined, env: string | undefined) => {
-      const name = strict ?? env ?? '';
-      const value = this.values.get(name);
-      if (value !== undefined) {
-        return value;
-      }
-      if (trusted && env !== undefined) {
-        const configured = this.env[name];
-        if (configured !== undefined) this.configValues.set(name, configured);
-        return configured ?? match;
-      }
-      throw new Error(`Unknown variable ${name}. Available: ${this.names().join(', ') || '(none)'}`);
-    });
+    const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
+    return text.replace(
+      placeholder,
+      (match, strict: string | undefined, missing: string | undefined, env: string | undefined) => {
+        const name = strict ?? env ?? '';
+        const value = this.values.get(name);
+        if (value !== undefined) {
+          return missing ? missingId(value) : value;
+        }
+        if (trusted && env !== undefined) {
+          const configured = this.env[name];
+          if (configured !== undefined) this.configValues.set(name, configured);
+          return configured ?? match;
+        }
+        throw new Error(`Unknown variable ${name}. Available: ${this.names().join(', ') || '(none)'}`);
+      },
+    );
   }
 
   redact(value: unknown): unknown {

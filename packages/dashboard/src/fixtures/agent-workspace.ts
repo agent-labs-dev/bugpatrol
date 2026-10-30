@@ -6,6 +6,7 @@ import type {
   AppMap,
   Candidate,
   FixProposal,
+  HttpExchange,
   Issue,
   PrReview,
   Routine,
@@ -14,6 +15,22 @@ import type {
 
 // A valid one-pixel PNG keeps the fixture self-contained, with no image package.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=';
+
+/** An API request of the fixture: a planted 500 with a JSON error body. */
+const EXCHANGE: HttpExchange = {
+  request: { method: 'GET', path: '/items/0', headers: { 'x-workspace-id': 'ws-a' } },
+  response: {
+    status: 500,
+    headers: { 'content-type': 'application/json', 'x-request-id': 'req-7f3a' },
+    contentType: 'application/json',
+    body: '{\n  "error": {\n    "code": "internal",\n    "message": "Division by zero."\n  }\n}',
+    bytes: 62,
+  },
+  latencyMs: 14,
+  at: '2026-10-29T12:00:00.000Z',
+};
+const EXCHANGE_STEP = { kind: 'request', method: 'GET', url: '/items/0' } as const;
+const exchangeFile = (session: string): string => `.bugpatrol/runs/sessions/${session}/006-request.exchange.json`;
 
 /** Write a complete desktop patrol workspace for human UI review and API tests. */
 export function writeAgentFixture(root: string): void {
@@ -38,7 +55,7 @@ export function writeAgentFixture(root: string): void {
     firstSeenAt: at(140 - index),
     lastSeenAt: at(index * 4),
     visits: 8 - index,
-    lastScreenshot: shot('ses_live', `00${index + 1}-${id}`),
+    lastCapture: shot('ses_live', `00${index + 1}-${id}`),
   }));
   const map: AppMap = {
     version: 1,
@@ -106,7 +123,8 @@ export function writeAgentFixture(root: string): void {
       tool: step % 3 === 0 ? 'driver.observe' : undefined,
       input: step % 3 === 0 ? { screen: screens[step % 5]!.id } : undefined,
       output: step % 3 === 0 ? { visible: true } : undefined,
-      screenshot: step % 5 === 0 ? screens[step % 5]!.lastScreenshot : undefined,
+      // One step sent an API request, so its capture is an exchange file, not a PNG.
+      capture: step === 10 ? exchangeFile(id) : step % 5 === 0 ? screens[step % 5]!.lastCapture : undefined,
       screenId: screens[step % 5]!.id,
       costUsd: 0.002,
     }));
@@ -118,9 +136,13 @@ export function writeAgentFixture(root: string): void {
       screenId: number ? 'settings' : 'billing',
       source: 'explorer',
       fingerprint: `fingerprint-${id}-${number}`,
-      summary: number ? 'Settings value is clipped.' : 'Billing total differs from invoice.',
+      summary: number
+        ? 'Settings value is clipped.'
+        : live
+          ? 'Billing total differs from invoice.'
+          : 'Billing tax rounds down.',
       severity: number ? 'minor' : 'critical',
-      evidence: { screenshot: screens[number ? 1 : 2]!.lastScreenshot },
+      evidence: { capture: { kind: 'image', screenshot: screens[number ? 1 : 2]!.lastCapture! } },
       route: { to: number ? 'ignore' : 'judge', reason: number ? 'Expected responsive layout.' : 'Incorrect total.' },
       createdAt: at(number + 5),
     }));
@@ -128,9 +150,10 @@ export function writeAgentFixture(root: string): void {
     writeFileSync(join(dir, 'sessions', id, 'candidates.jsonl'), `${candidateLines}\n`);
   }
   for (const screen of screens) {
-    const file = join(root, screen.lastScreenshot!);
+    const file = join(root, screen.lastCapture!);
     writeFileSync(file, Buffer.from(PNG, 'base64'));
   }
+  for (const id of ['ses_live', 'ses_done']) writeFileSync(join(root, exchangeFile(id)), JSON.stringify(EXCHANGE));
   const issues: Issue[] = [
     {
       id: 'iss-billing',
@@ -181,7 +204,7 @@ export function writeAgentFixture(root: string): void {
     version: 1,
     fingerprint: part.id,
     evidence: {
-      screenshot: screens.find((s) => s.id === part.screenId)!.lastScreenshot,
+      capture: { kind: 'image' as const, screenshot: screens.find((s) => s.id === part.screenId)!.lastCapture! },
       routineId: `open-${part.screenId}`,
       steps: [
         { kind: 'tap', target: { name: 'Settings' } },
@@ -195,6 +218,21 @@ export function writeAgentFixture(root: string): void {
     severity: part.severity as Issue['severity'],
     status: part.status as Issue['status'],
   }));
+  issues.push({
+    version: 1,
+    id: 'iss-api-item',
+    fingerprint: 'iss-api-item',
+    title: 'Reading item 0 returns a server error',
+    body: '`GET /items/0` returns **500**. The contract declares 200 and 404 only.',
+    severity: 'major',
+    status: 'new',
+    candidateIds: [],
+    evidence: { capture: { kind: 'http', exchange: EXCHANGE }, steps: [EXCHANGE_STEP] },
+    judgement: { by: 'model: judge', reason: 'A server error on a documented route.', confidence: 0.95, at: at(2) },
+    occurrences: 2,
+    firstSeenAt: at(40),
+    lastSeenAt: at(2),
+  });
   for (const issue of issues) save(`issues/${issue.id}.json`, issue);
   const fix: FixProposal = {
     version: 1,
@@ -241,8 +279,8 @@ export function writeAgentFixture(root: string): void {
         fixAttempt: 2,
         outcome: 'unclear',
         reason: 'The settings screen did not finish loading.',
-        before: screens[1]!.lastScreenshot,
-        after: screens[1]!.lastScreenshot,
+        before: screens[1]!.lastCapture,
+        after: screens[1]!.lastCapture,
         at: at(6),
       },
     ],

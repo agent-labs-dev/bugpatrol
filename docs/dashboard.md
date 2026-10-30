@@ -3,11 +3,20 @@
 ```bash
 npx bugpatrol dashboard            # http://127.0.0.1:4311
 npx bugpatrol dashboard --port 5000  # use a different port
+npx bugpatrol dashboard --config .bugpatrol/api.yml  # read another config
 ```
 
 <img src="../assets/dashboard.png" alt="The Bugpatrol dashboard: the agent cards, the issues that need attention, and the live screen." width="100%">
 
 The dashboard shows agent activity and results. Start it in the repo that has `.bugpatrol/`. It reads the files under `.bugpatrol/runs/` and updates live, so it works during a patrol and after it.
+
+The theme follows the system setting. The theme button in the top bar (a monitor, sun, or moon icon) changes it to Light, then Dark, then back to System. The browser keeps your choice.
+
+## Surfaces
+
+A surface is a part of the project that Bugpatrol tests: a client app (web, Electron, desktop, iOS, Android, CLI), which has screens, or an API, which has endpoints. Each config file in `.bugpatrol/` tests one surface. A monorepo can have two, for example `bugpatrol.yml` for the web app and `api.yml` for its backend. All configs write to the same `.bugpatrol/runs/`, so the dashboard shows the data of all surfaces.
+
+The top bar shows an icon for each surface: braces for an API, a globe for a web app, a monitor for a desktop app, a phone for a mobile app, and a terminal for a CLI app. Hold the pointer on an icon to see its name and config. The surface of the config that the dashboard reads has a stronger border. `--config` selects that config. The dashboard uses it for the agent settings and the `logs:` sources, and each command that a page shows includes the same `--config`.
 
 ## Token usage
 
@@ -35,16 +44,31 @@ The cost on the dashboard counts only the API calls that Bugpatrol makes: the ag
 
 | Page | What it shows |
 | --- | --- |
-| Overview | Each agent and its task now, with its token usage and what it spent. The issues that need a human, the live screen, and the screens found so far |
-| Issues | Each issue with its screenshots and steps, the judge's reason, the fix with its diff, the retest, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so |
+| Overview | The status of the project and its numbers: the open issues, the findings that wait for the judge, the coverage of each surface, and the last session. Then the issues and findings that need attention, the recent sessions, the coverage of each surface, what each agent does now, and the token usage |
+| Issues | Each issue with its screenshots and steps, the judge's reason, the fix with its diff, and the PR or issue on GitHub with its state. The fix attempts follow, oldest first. Each shows its kind, outcome, and reason, with its diff and verify output one click away and its retests (before and after screenshots) under it. When the fixer reaches `agents.fixer.attempts` on an issue, the page says so |
 | Reviews | Each pull request that `bugpatrol review` reviewed, with its head and base commits. A review page lists each claim with its verdict, the evidence source, the reason, and what Bugpatrol saw on the base build and on the pull request build. The problems that the pull request introduced follow, with base and head screenshots |
-| Activity | Each session as a timeline, with one line for each action |
-| Flow | Agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes |
-| Screens | A graph of how the screens connect. Switch to the grid to see the latest screenshot of each screen |
+| Activity | Each session with its numbers first: the duration, the steps or the cases that it ran, and its findings. The findings follow in groups of the same failure, with a count. Open a finding to see its HTTP exchange or its screenshot. The timeline of the session is last |
+| Flow | Agent actions, failed requests and backend logs in time order. Nearby log entries are marked as correlated, rather than proven causes. Refer to [Flow](#flow) |
+| Screens | A graph shows how the screens of a client app connect. Switch to the grid to see each latest screenshot. An API has no screens: the page then points to Coverage |
 | Memory | The lessons that the agents learned |
-| Checks | The results of `bugpatrol run`. The page shows only when there are runs |
+| Coverage | For each surface, the numbers at the top, then the details. For an API: the endpoints tested, the cases that passed, failed, were blocked, were skipped, or wait in the sweep cursor, and the endpoint × case matrix. The failures come first. Search the paths, or show the failed endpoints only. Click a cell to see its HTTP exchange. For a client app: the screens found and the open issues of each screen |
+| Checks | The results of `bugpatrol run` (shown only when there are runs) |
+
+A page with no data says what it shows, why it is empty now, and the command to run next.
 
 The dashboard listens on 127.0.0.1 only, because the screenshots can show real data. It is read-only.
+
+## Flow
+
+Flow needs a `logs:` source in the config. A patrol, `explore`, and `review` read the sources while a session runs, then write the flow of the session. `bugpatrol sweep` reads no logs, so a sweep session has no flow.
+
+```yaml
+logs:
+  - name: api
+    kind: file          # or stream (a command), or webhook
+    path: logs/api.log
+    match: 'ERROR|WARN' # optional: keep only the lines that match
+```
 
 ## The files behind it
 

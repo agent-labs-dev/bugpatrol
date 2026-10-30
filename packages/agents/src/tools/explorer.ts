@@ -1,18 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
-
-const apiRequestSchema = z.object({
-  method: z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']),
-  url: z.string().min(1),
-  headers: z.record(z.string()).optional(),
-  body: z.string().optional(),
-  capture: z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string()).optional(),
-});
-
+import { type Contract, caseKey, coverageCells, expectedContract, type SweepCaseId } from '@bugpatrol/contract';
 import {
+  type Assertion,
+  assertionId,
   type BugCheck,
+  CASE_IDS,
   type Candidate,
+  type Evidence,
   fingerprint,
+  formatHttpExchange,
+  type HttpExchange,
   type Locator,
   type Routine,
   type RoutineStep,
@@ -20,12 +17,62 @@ import {
   type ScreenTransition,
   shortHash,
 } from '@bugpatrol/core';
-import type { DriverAction, Observation, UiElement } from '@bugpatrol/drivers';
+import { ApiDriver, type DriverAction, type Observation, type RawResponse, type UiElement } from '@bugpatrol/drivers';
+import { z } from 'zod';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
-import { bugMisses, replayRoutine } from '../replay.js';
+import { assertionWords, bugMisses, checkAssertions, replayRoutine } from '../replay.js';
 import type { AgentSession } from '../session.js';
+import { reportFingerprint } from '../sweep.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
+
+/** The cases that an explorer request can cover. A no-auth request needs no credentials, which the tool never drops. */
+type RequestCase = Exclude<SweepCaseId, 'no-auth'>;
+const REQUEST_CASES = CASE_IDS.filter((id): id is RequestCase => id !== 'declared' && id !== 'no-auth') as [
+  RequestCase,
+  ...RequestCase[],
+];
+
+/** The judge rules of map section 3, by name. An api bug report can name the one that it breaks. */
+export const API_RULES = [
+  'undeclared-status',
+  'undeclared-field',
+  'other-user-data',
+  'body-contradicts-status',
+  'repeat-delete',
+  'latency',
+  'http-rule',
+  'account-enumeration',
+] as const;
+
+const apiRequestSchema = z.object({
+  method: z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']),
+  url: z.string().min(1),
+  headers: z.record(z.string()).optional(),
+  body: z.string().optional(),
+  capture: z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string()).optional(),
+  as: z.enum(['self', 'other']).optional(),
+});
+
+/** The slice 05 kinds: what a saved api routine can check on a request. */
+const assertionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('status'), value: z.number().int() }),
+  z.object({ kind: z.literal('contract'), check: z.enum(['status', 'schema', 'content-type', 'no-5xx']).optional() }),
+  z.object({ kind: z.literal('pointer'), pointer: z.string().regex(/^(?:\/.*)?$/), equals: z.unknown().optional() }),
+  z.object({ kind: z.literal('header'), name: z.string().min(1), matches: z.string() }),
+  z.object({ kind: z.literal('schema'), ref: z.string().startsWith('#/') }),
+  z.object({ kind: z.literal('body-includes'), value: z.string().min(1) }),
+  z.object({ kind: z.literal('body-excludes'), value: z.string().min(1) }),
+]);
+const stepAssertionsSchema = z.array(z.object({ request: z.number().int().positive() }).and(assertionSchema));
+
+/**
+ * What each explorer request got and the case that it tests. save_routine
+ * saves an assertion only when it holds on the response that the explorer
+ * saw, and report_bug keys a report by the case. Keyed by the trail step, so
+ * a reset trail drops it.
+ */
+const responses = new WeakMap<RoutineStep, { observation: Observation; raw?: RawResponse; case: SweepCaseId }>();
 
 const text = (value: string): ToolResult => ({ content: [{ type: 'text', text: value }] });
 const schema = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -78,7 +125,16 @@ export function errorLines(observation: Observation): string[] {
   ];
 }
 
-function observationText(observation: Observation): string {
+/** The exchange, and the contract of the endpoint that it matches (decision 2). */
+function exchangeText(exchange: HttpExchange, contract?: Contract): string {
+  if (!contract) return formatHttpExchange(exchange);
+  const endpoint = contract.match(exchange.request.method, exchange.request.path);
+  return `${formatHttpExchange(exchange)}\n\n${
+    endpoint ? expectedContract(endpoint, contract) : 'No endpoint of the contract matches this request.'
+  }`;
+}
+
+function observationText(observation: Observation, contract?: Contract): string {
   const windows =
     observation.windows
       ?.map((window) => `${window.active ? '*' : ' '} ${window.title} (${window.location})`)
@@ -87,11 +143,9 @@ function observationText(observation: Observation): string {
     `Location: ${observation.location}`,
     `Windows: ${windows}`,
     ...errorLines(observation),
-    ...(observation.http
-      ? [
-          `HTTP ${observation.http.status} (${observation.http.contentType ?? 'no content type'})`,
-          observation.http.body,
-        ]
+    // One entry, so the line cap below never cuts an exchange: its body has its own cap.
+    ...(observation.capture.kind === 'http'
+      ? [observation.capture.exchange ? exchangeText(observation.capture.exchange, contract) : 'No request yet.']
       : []),
     ...(observation.terminal
       ? [
@@ -110,15 +164,24 @@ function observationText(observation: Observation): string {
     .join('\n');
 }
 
+/** The evidence of the last capture: its PNG, or the redacted exchange of an API. */
+function captureEvidence(session: AgentSession): Evidence | undefined {
+  const capture = session.lastObservation?.capture;
+  if (capture?.kind === 'http')
+    return capture.exchange && { kind: 'http', exchange: session.vars.redact(capture.exchange) as HttpExchange };
+  return session.lastCapture ? { kind: 'image', screenshot: session.lastCapture } : undefined;
+}
+
 async function observe(session: AgentSession, label: string, summary?: string): Promise<ToolResult> {
   const observation = await session.driver!.observe();
-  const screenshot = await session.capture(observation, label);
+  const capture = await session.capture(observation, label);
+  const contract = session.driver instanceof ApiDriver ? session.driver.policy.contract : undefined;
   return {
     content: [
-      { type: 'image', png: observation.screenshot },
-      { type: 'text', text: session.vars.redact(observationText(observation)) as string },
+      ...(observation.capture.kind === 'image' ? [{ type: 'image' as const, png: observation.capture.png }] : []),
+      { type: 'text', text: session.vars.redact(observationText(observation, contract)) as string },
     ],
-    meta: { summary: summary ?? `Looked at ${observation.title || observation.location}`, screenshot },
+    meta: { summary: summary ?? `Looked at ${observation.title || observation.location}`, capture },
   };
 }
 
@@ -303,10 +366,13 @@ async function saveRoutine(
   id: string,
   description: string,
   screenId?: string,
+  assertions = new Map<RoutineStep, Assertion[]>(),
 ): Promise<{ routine: Routine; flattenedFrom?: number }> {
   const prior = await session.workspace.readRoutine(id);
   const now = new Date().toISOString();
-  let steps = session.trail.slice(session.anchor.index);
+  let steps = session.trail
+    .slice(session.anchor.index)
+    .map((step) => (assertions.has(step) ? { ...step, assert: assertions.get(step) } : step));
   let requires = session.anchor.routineId && session.anchor.routineId !== id ? [session.anchor.routineId] : [];
   const chain: Routine[] = [];
   const seen = new Set([id]);
@@ -408,6 +474,70 @@ function stepSignature(step: RoutineStep): string {
   return step.kind;
 }
 
+/** The case that the last request of the explorer tests, as it named it. */
+function testedCase(session: AgentSession): SweepCaseId | undefined {
+  const step = session.trail.findLast((item) => item.kind === 'request');
+  return step && responses.get(step)?.case;
+}
+
+/** The request steps since the last anchor: the ones that save_routine numbers from 1. */
+const pendingRequests = (session: AgentSession) =>
+  session.trail.slice(session.anchor.index).filter((step) => step.kind === 'request');
+
+/**
+ * The assertions of save_routine on the requests since the last anchor. Each
+ * one must hold on the response that the explorer saw, so a saved routine
+ * does not fail on its first replay. Returns the reason when one does not.
+ */
+function stepAssertions(session: AgentSession, input: unknown): Map<RoutineStep, Assertion[]> | string {
+  const parsed = stepAssertionsSchema.safeParse(input ?? []);
+  if (!parsed.success) return `the assertions are not valid: ${parsed.error.issues[0]?.message}`;
+  const requests = pendingRequests(session);
+  const contract = session.driver instanceof ApiDriver ? session.driver.policy.contract : undefined;
+  const assertions = new Map<RoutineStep, Assertion[]>();
+  for (const { request, ...rest } of parsed.data) {
+    const assertion = rest as Assertion;
+    const step = requests[request - 1];
+    const seen = step && responses.get(step);
+    if (!step || !seen) return `request ${request} is not one of the ${requests.length} request(s) of this routine`;
+    const failed = checkAssertions([assertion], seen.observation, { raw: seen.raw, contract }).find((r) => !r.ok);
+    if (failed) return `request ${request}: ${assertionWords(failed, true)}`;
+    assertions.set(step, [...(assertions.get(step) ?? []), assertion]);
+  }
+  return assertions;
+}
+
+/**
+ * The coverage cell of an explorer request: the contract verdict of the
+ * response, under the case that the explorer names, with the saved exchange.
+ * A declared error status also covers its own column, as in the sweep. A
+ * failure keeps the `repeats` of the sweep cell that it replaces. An event
+ * stream, or a request that matches no endpoint, records nothing.
+ */
+async function recordCell(session: AgentSession, api: ApiDriver, url: string, id: SweepCaseId): Promise<void> {
+  const observation = session.lastObservation;
+  const exchange = observation?.capture.kind === 'http' ? observation.capture.exchange : undefined;
+  const response = exchange?.response;
+  const { contract } = api.policy;
+  const endpoint = exchange && contract.match(exchange.request.method, url);
+  if (!observation || !response || response.stream || !endpoint) return;
+  const results = checkAssertions([{ kind: 'contract' }], observation, { raw: api.lastRaw(), contract });
+  const failed = [...new Set(results.filter((result) => !result.ok).map((result) => assertionId(result.assertion)))];
+  const coverage = (await session.workspace.readCoverage()) ?? { version: 1, cells: {} };
+  const cells = coverageCells({
+    endpoint: endpoint.key,
+    case: id,
+    status: response.status,
+    declared: results.some((r) => r.assertion.kind === 'contract' && r.assertion.check === 'status' && r.ok),
+    failed,
+    repeats: coverage.cells[caseKey(endpoint.key, id)]?.repeats,
+    exchange: session.lastCapture,
+    at: new Date().toISOString(),
+  });
+  for (const cell of cells) coverage.cells[caseKey(cell.endpoint, cell.case)] = cell;
+  await session.workspace.writeCoverage(coverage);
+}
+
 /**
  * Tool calls operate on refs; only replayable locators and placeholders enter routines.
  * `replay` goes to each run_routine replay: a build that is not the main build
@@ -417,6 +547,7 @@ export function explorerTools(
   session: AgentSession,
   opts: { replay?: Parameters<typeof replayRoutine>[2] } = {},
 ): Tool[] {
+  const api = session.driver instanceof ApiDriver ? session.driver : undefined;
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -434,15 +565,15 @@ export function explorerTools(
           },
         ]
       : []),
-    ...(session.driver?.platform === 'api'
+    ...(api
       ? [
           {
             name: 'request',
             description:
-              'Send an HTTP request to the configured API origin. Use {{NAME}} placeholders for credentials. Only repository-allowed methods can run; redirects are not followed. Returns status and response evidence, not an application screenshot.',
+              'Send an HTTP request to the configured API origin. The configured credentials go with it. Use {{NAME}} placeholders for other secrets. Only the listed methods can run, and denied endpoints are refused; redirects are not followed. Returns the HTTP exchange and the expected contract of the endpoint, not an application screenshot.',
             inputSchema: schema(
               {
-                method: { type: 'string', enum: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+                method: { type: 'string', enum: api.policy.allowedMethods },
                 url: string,
                 headers: { type: 'object', additionalProperties: string },
                 body: string,
@@ -452,11 +583,29 @@ export function explorerTools(
                   description:
                     'Map RESPONSE_NAME variables to JSON pointers in the response, e.g. {RESPONSE_THREAD_ID: "/result/id"}. Use explicit {{RESPONSE_NAME}} placeholders in later URLs/bodies; literals remain literal on replay. Credential fields cannot be captured.',
                 },
+                case: {
+                  type: 'string',
+                  enum: REQUEST_CASES,
+                  description:
+                    'The case that this request tests, for the coverage of the endpoint. Default: other-user when as is other, else ok.',
+                },
+                ...(api.credentialSets.includes('other')
+                  ? {
+                      as: {
+                        type: 'string',
+                        enum: ['self', 'other'],
+                        description:
+                          'Whose credentials to send. other is a second user: use it on data of the first user. Default: self.',
+                      },
+                    }
+                  : {}),
               },
               ['method', 'url'],
             ),
             async run(input: Record<string, unknown>) {
-              const parsed = apiRequestSchema.parse(input);
+              const { case: given, ...request } = input;
+              const id = z.enum(REQUEST_CASES).optional().parse(given);
+              const parsed = apiRequestSchema.parse(request);
               const resolved = apiRequestSchema.parse(session.vars.redact(parsed));
               const action: Extract<DriverAction, { kind: 'request' }> = {
                 kind: 'request',
@@ -469,7 +618,21 @@ export function explorerTools(
                   : undefined,
                 body: parsed.body === undefined ? undefined : session.vars.resolve(parsed.body),
               };
-              return act(session, action, { kind: 'request', ...resolved });
+              const length = session.trail.length;
+              const result = await act(session, action, { kind: 'request', ...resolved });
+              if (result.isError || session.trail.length === length) return result;
+              const named = id ?? (parsed.as === 'other' ? 'other-user' : 'ok');
+              responses.set(session.trail.at(-1)!, {
+                observation: session.lastObservation!,
+                raw: api.lastRaw(),
+                case: named,
+              });
+              await recordCell(session, api, action.url, named);
+              result.content.push({
+                type: 'text',
+                text: `This is request ${pendingRequests(session).length} of the routine in progress.`,
+              });
+              return result;
             },
           },
         ]
@@ -625,7 +788,7 @@ export function explorerTools(
         await session.activity(`Recording ${name}`);
         await session.driver!.settle();
         const observation = await session.driver!.observe();
-        const screenshot = await session.capture(observation, id);
+        const capture = await session.capture(observation, id);
         const findings = session.config.agents.checks.length
           ? await evaluateScreen(session, {
               screenId: id,
@@ -645,7 +808,7 @@ export function explorerTools(
           location: observation.location,
           screenKey: screenKey(observation),
           routineId,
-          lastScreenshot: screenshot,
+          lastCapture: capture,
         });
         if (previous && previous !== id) {
           await session.workspace.upsertScreen({
@@ -670,7 +833,7 @@ export function explorerTools(
           kind: 'screen',
           summary: `Recorded ${name}${findings.length ? ` (${findings.length} automatic finding(s))` : ''}`,
           screenId: id,
-          screenshot,
+          capture,
         });
         return {
           ...text(
@@ -678,17 +841,59 @@ export function explorerTools(
               `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}`,
             ) as string,
           ),
-          meta: { summary: '', screenshot, screenId: id },
+          meta: { summary: '', capture, screenId: id },
         };
       },
     },
     {
       name: 'save_routine',
-      description: 'Save actions since the last anchor; use enter-app after sign-in or onboarding.',
-      inputSchema: schema({ id: string, description: string }, ['id', 'description']),
+      description: api
+        ? 'Save the requests since the last anchor as a routine. assert: exact checks that a replay runs on a request, ' +
+          'by its number in the routine (each request result names it). Kinds: status {value}, contract {check?}, ' +
+          'pointer {pointer, equals?} (with no equals: the value exists), header {name, matches (a regular ' +
+          'expression)}, schema {ref (a #/components/schemas/... pointer of the spec)}, body-includes and ' +
+          'body-excludes {value}. Each check must hold on the response that you saw. A check that fails again on ' +
+          'a second replay blocks, so assert only what the contract or the app guide promises.'
+        : 'Save actions since the last anchor; use enter-app after sign-in or onboarding.',
+      inputSchema: schema(
+        {
+          id: string,
+          description: string,
+          ...(api
+            ? {
+                assert: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      request: { type: 'integer', minimum: 1 },
+                      kind: {
+                        type: 'string',
+                        enum: ['status', 'contract', 'pointer', 'header', 'schema', 'body-includes', 'body-excludes'],
+                      },
+                      value: { type: ['integer', 'string'] },
+                      check: { type: 'string', enum: ['status', 'schema', 'content-type', 'no-5xx'] },
+                      pointer: string,
+                      equals: { description: 'Any JSON value.' },
+                      name: string,
+                      matches: string,
+                      ref: string,
+                    },
+                    required: ['request', 'kind'],
+                    additionalProperties: false,
+                  },
+                },
+              }
+            : {}),
+        },
+        ['id', 'description'],
+      ),
       async run(input) {
         const id = slug(arg(input, 'id'));
-        const { routine, flattenedFrom } = await saveRoutine(session, id, arg(input, 'description'));
+        const assertions = stepAssertions(session, input.assert);
+        if (typeof assertions === 'string') return { ...text(`Not saved: ${assertions}.`), isError: true };
+        const description = arg(input, 'description');
+        const { routine, flattenedFrom } = await saveRoutine(session, id, description, undefined, assertions);
         return text(
           `Saved ${routine.id} (requires ${routine.requires?.join(', ') || 'none'}, ${routine.steps.length} steps${flattenedFrom ? `, flattened from a chain of ${flattenedFrom}` : ''}).`,
         );
@@ -730,14 +935,21 @@ export function explorerTools(
           shows: string,
           lacks: string,
           error: string,
+          ...(api
+            ? { rule: { type: 'string', enum: API_RULES, description: 'The API rule that the bug breaks.' } }
+            : {}),
         },
         ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
-        if (!session.lastScreenshot || !session.lastObservation) {
+        const rule = api ? z.enum(API_RULES).optional().parse(input.rule) : undefined;
+        if (!session.lastCapture || !session.lastObservation) {
           await session.capture(await session.driver!.observe(), 'reported-bug');
         }
+        const capture = captureEvidence(session);
+        if (!capture)
+          return { ...text('Not reported: send a request first, so the issue has evidence.'), isError: true };
         const bug: BugCheck = {};
         for (const key of ['shows', 'lacks', 'error'] as const) {
           const value = session.vars.redact(arg(input, key).trim()) as string;
@@ -759,21 +971,22 @@ export function explorerTools(
           sessionId: session.sessionId,
           screenId,
           source: 'explorer',
-          fingerprint: fingerprint({
-            screenId: screenId ?? 'unknown',
-            ruleId: 'explorer',
-            domNodeSignature: title.toLowerCase(),
-          }),
+          ...(rule ? { ruleId: `judge:${rule}` } : {}),
+          fingerprint:
+            reportFingerprint(session, testedCase(session), rule) ??
+            fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
           detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
           severity: input.severity as Candidate['severity'],
           evidence: {
-            screenshot: session.lastScreenshot,
+            capture,
             routineId: session.anchor.routineId,
             steps: session.trail.slice(session.anchor.index).map(({ at: _at, ...step }) => step as RoutineStep),
             ...(Object.keys(bug).length ? { bug } : {}),
           },
           route: { to: 'judge', reason: 'Explorer reported a visible bug' },
+          // The model alone found it, so it never blocks (decision 3).
+          blocking: false,
           createdAt: new Date().toISOString(),
         };
         const decided = (await session.workspace.readTriage()).fingerprints[candidate.fingerprint];
@@ -787,7 +1000,7 @@ export function explorerTools(
           }
         }
         await session.workspace.appendCandidate(session.sessionId, candidate);
-        session.emit({ kind: 'candidate', summary: title, screenshot: session.lastScreenshot });
+        session.emit({ kind: 'candidate', summary: title, capture: session.lastCapture });
         return text(`Reported ${candidate.id}: ${title}.${fallback}`);
       },
     },

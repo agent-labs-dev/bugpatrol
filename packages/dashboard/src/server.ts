@@ -1,11 +1,12 @@
-import { createReadStream, existsSync, type FSWatcher, realpathSync, statSync, watch } from 'node:fs';
+import { createReadStream, existsSync, type FSWatcher, readFileSync, realpathSync, statSync, watch } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, paths } from '@bugpatrol/core';
+import { formatHttpExchange, type HttpExchange, loadConfig, paths } from '@bugpatrol/core';
 import { AgentReader } from './agents.js';
 import { buildGraph } from './graph.js';
 import { ProjectReader } from './project.js';
+import { projectSummary } from './summary.js';
 
 export type DashboardOptions = {
   root: string;
@@ -53,7 +54,7 @@ export async function startDashboard(options: DashboardOptions): Promise<Dashboa
   const clients = new Set<ServerResponse>();
 
   const server = createServer((req, res) => {
-    handle(req, res, { root, reader, agents, clients }).catch((error) => {
+    handle(req, res, { root, configFile: options.configFile, reader, agents, clients }).catch((error) => {
       send(res, 500, { 'content-type': 'application/json' }, JSON.stringify({ error: String(error) }));
     });
   });
@@ -76,13 +77,20 @@ export async function startDashboard(options: DashboardOptions): Promise<Dashboa
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  ctx: { root: string; reader: ProjectReader; agents: AgentReader; clients: Set<ServerResponse> },
+  ctx: {
+    root: string;
+    configFile?: string;
+    reader: ProjectReader;
+    agents: AgentReader;
+    clients: Set<ServerResponse>;
+  },
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
 
   if (path === '/api/events') return streamEvents(res, ctx.clients);
 
+  if (path === '/api/summary') return json(res, projectSummary(ctx.agents, ctx.root, ctx.configFile));
   if (path === '/api/overview') return json(res, ctx.agents.overview());
   if (path === '/api/memory') return json(res, ctx.agents.memory());
   if (path === '/api/issues') return json(res, ctx.agents.issues());
@@ -110,6 +118,10 @@ async function handle(
     return detail ? json(res, detail) : json(res, { error: 'no such review' }, 404);
   }
   if (path === '/api/appmap') return json(res, ctx.agents.screens());
+  if (path === '/api/coverage') {
+    const coverage = ctx.agents.coverage();
+    return coverage ? json(res, coverage) : json(res, { error: 'no sweep yet' }, 404);
+  }
   if (path === '/api/routines')
     return json(
       res,
@@ -156,6 +168,19 @@ async function handle(
     const requested = url.searchParams.get('path');
     if (!requested) return json(res, { error: 'path is required' }, 400);
     return serveArtifact(res, ctx.root, requested, req.headers.range);
+  }
+
+  // An API capture shows as text, and the one renderer of an exchange is on this side.
+  if (path === '/api/exchange') {
+    const file = resolveArtifactPath(ctx.root, url.searchParams.get('path') ?? '');
+    if (!file?.endsWith('.exchange.json')) return json(res, { error: 'not found' }, 404);
+    const exchange = JSON.parse(readFileSync(file, 'utf8')) as HttpExchange;
+    return send(
+      res,
+      200,
+      { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache' },
+      formatHttpExchange(exchange, { maxBodyChars: Number.POSITIVE_INFINITY }),
+    );
   }
 
   return serveUi(res, path);

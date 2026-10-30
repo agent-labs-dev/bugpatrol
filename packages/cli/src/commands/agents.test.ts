@@ -57,6 +57,7 @@ describe('agent command flags', () => {
       worktree: '../wt',
     });
     expect(parseAgentFlags('patrol', ['--once'])).toEqual({ once: true });
+    expect(parseAgentFlags('patrol', ['--once', '--state', 'branch'])).toEqual({ once: true, state: 'branch' });
     expect(parseAgentFlags('replay', ['enter-app'])).toEqual({ id: 'enter-app' });
     expect(parseAgentFlags('review', ['12', '--dry-run', '--steps', '40'])).toEqual({
       pr: 12,
@@ -74,6 +75,7 @@ describe('agent command flags', () => {
   it('rejects unknown flags and invalid step counts', () => {
     expect(() => parseAgentFlags('explore', ['--steps', '0'])).toThrow();
     expect(() => parseAgentFlags('patrol', ['--bad'])).toThrow();
+    expect(() => parseAgentFlags('patrol', ['--state', 'remote'])).toThrow(/local or branch/);
     expect(() => parseAgentFlags('replay', [])).toThrow();
     expect(() => parseAgentFlags('review', [])).toThrow(/pull request number or URL/);
     expect(() => parseAgentFlags('review', ['--dry-run'])).toThrow(/pull request number or URL/);

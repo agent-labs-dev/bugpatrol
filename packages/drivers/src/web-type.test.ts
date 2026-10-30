@@ -23,7 +23,7 @@ describe('web text actions', () => {
         this.lastObservation = {
           platform: 'web',
           location: '',
-          screenshot: Buffer.alloc(0),
+          capture: { kind: 'image', png: Buffer.alloc(0) },
           viewport: { width: 100, height: 100, scale: 1 },
           volatileRegions: [],
           consoleErrors: [],

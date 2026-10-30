@@ -251,6 +251,8 @@ export type InitAnswers = {
   /** The command that starts the app. Empty: the user starts it. */
   start?: string;
   url?: string;
+  /** API: the OpenAPI spec. Empty: the API has no spec. */
+  spec?: string;
   appId?: string;
   cdpPort?: number;
   ready?: string;
@@ -286,6 +288,31 @@ function useLine(role: AgentRole, provider: Provider, piPermissionModes = false)
   return provider;
 }
 
+const API_URL = 'http://localhost:8000';
+
+/**
+ * The connect block of an api app. Bugpatrol never starts a backend (it
+ * tests one that runs), so only the URL and the spec are asked. The other
+ * keys are comments that the user turns on.
+ */
+function apiConnect(answers: InitAnswers): string[] {
+  return [
+    `    url: ${answers.url ?? API_URL}`,
+    answers.spec
+      ? `    spec: ${answers.spec}`
+      : '    # spec: /openapi.json             # the OpenAPI spec: a URL, a path on url, or a file',
+    "    deny: []                         # endpoints never to request, e.g. ['POST /admin/**']",
+    '    # errors:                        # the error statuses that every endpoint may return, and their body',
+    '    #   statuses: [401, 403]',
+    '    #   schema: { type: object, required: [error] }',
+    '    # version: { path: /version, pointer: /commit }   # the deployed commit: explore again after each deploy',
+    '    # credentials:                   # two users, so Bugpatrol tests that one cannot read the data of the other',
+    "    #   self: { headers: { Authorization: 'Bearer ${API_TOKEN}' } }     # list API_TOKEN in secrets",
+    "    #   other: { headers: { Authorization: 'Bearer ${OTHER_TOKEN}' } }",
+    '    # disposable: true               # the data can be lost: allow writes also when url is not loopback',
+  ];
+}
+
 /** The starter bugpatrol.yml. Every value that init could not know has a comment. */
 export function renderConfig(answers: InitAnswers): string {
   const { platform } = answers;
@@ -314,7 +341,8 @@ export function renderConfig(answers: InitAnswers): string {
     lines.push('  setup: []                          # empty: start the app yourself before you run Bugpatrol');
   }
   lines.push('  connect:');
-  if (platform === 'web' || platform === 'api') lines.push(`    url: ${answers.url ?? 'http://localhost:3000'}`);
+  if (platform === 'web') lines.push(`    url: ${answers.url ?? 'http://localhost:3000'}`);
+  if (platform === 'api') lines.push(...apiConnect(answers));
   if (platform === 'desktop')
     lines.push(
       '    cua:',
@@ -445,6 +473,7 @@ export type InitFlags = {
   platform?: Platform;
   start?: string;
   url?: string;
+  spec?: string;
   appId?: string;
   agent?: Provider;
   explorer?: Provider;
@@ -483,6 +512,9 @@ export function parseInitFlags(args: string[]): InitFlags {
         break;
       case '--url':
         flags.url = value();
+        break;
+      case '--spec':
+        flags.spec = value();
         break;
       case '--app-id':
         flags.appId = value();
@@ -535,10 +567,12 @@ export function defaultAnswers(guess: AppGuess, detected: Detected, flags: InitF
       ].join('\n'),
     );
   }
+  // detectApp never guesses api, so an api app gets no detected start command: Bugpatrol tests a backend that runs (5).
   return {
     platform,
     start: flags.start ?? (platform === guess.platform ? guess.start : undefined),
-    url: flags.url ?? guess.url,
+    url: flags.url ?? (platform === 'api' ? API_URL : guess.url),
+    spec: flags.spec,
     appId: flags.appId ?? guess.appId,
     cdpPort: guess.cdpPort,
     ready: platform === guess.platform ? guess.ready : undefined,
@@ -597,8 +631,19 @@ export async function interview(
   );
   const next: InitAnswers = { ...answers, platform, start: platform === guess.platform ? answers.start : undefined };
   process.stdout.write('\nPress Enter to keep a value, or edit it.\n');
-  next.start = await text(ask, 'Start command (clear it if you start the app yourself)', next.start);
-  if (platform === 'web' || platform === 'api')
+  if (platform === 'api') {
+    // Bugpatrol tests a backend that runs: no start command (5).
+    next.start = undefined;
+    next.url = (await text(ask, 'API URL', answers.platform === 'api' ? next.url : API_URL)) ?? API_URL;
+    next.spec = await text(
+      ask,
+      'OpenAPI spec: a URL, a path on the API URL, or a file (clear it if there is none)',
+      next.spec,
+    );
+  } else {
+    next.start = await text(ask, 'Start command (clear it if you start the app yourself)', next.start);
+  }
+  if (platform === 'web')
     next.url = (await text(ask, 'App URL', next.url ?? 'http://localhost:3000')) ?? 'http://localhost:3000';
   if (platform === 'electron')
     next.cdpPort = Number(await text(ask, 'CDP port that the app opens', String(next.cdpPort ?? 9222))) || 9222;
@@ -693,7 +738,8 @@ export async function runInit(root: string, args: string[], log: (line: string) 
       [flags.url, 'Port'],
       [flags.appId, 'App ID'],
     ];
-    for (const note of guess.notes) {
+    // The guess of another platform says nothing about this app.
+    for (const note of answers.platform === guess.platform ? guess.notes : []) {
       if (!given.some(([value, prefix]) => value !== undefined && note.startsWith(prefix))) log(`  ${note}`);
     }
   }
@@ -702,9 +748,13 @@ export async function runInit(root: string, args: string[], log: (line: string) 
   log(
     '  1. Check .bugpatrol/bugpatrol.yml, and write .bugpatrol/instructions.md: what the app is, how to sign in, and what never to do.',
   );
-  log(
-    '  2. Test the launch and the sign-in: `npx bugpatrol explore --steps 10 --goal "Sign in, then open the main screen"`',
-  );
+  if (answers.platform === 'api') {
+    log('  2. Start the API, then see the requests that the sweep plans: `npx bugpatrol sweep --dry-run`');
+  } else {
+    log(
+      '  2. Test the launch and the sign-in: `npx bugpatrol explore --steps 10 --goal "Sign in, then open the main screen"`',
+    );
+  }
   log('  3. Start the patrol: `npx bugpatrol`. Watch it on `npx bugpatrol dashboard` (http://127.0.0.1:4311).');
 }
 

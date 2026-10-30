@@ -76,7 +76,7 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
     retest: ['--issue', '--worktree', '--branch', '--pr', '--summary'],
     publish: ['--issue'],
     ci: ['--issue'],
-    patrol: [],
+    patrol: ['--state'],
   };
   if (!values[command]) throw new ConfigError(`Unknown agent command ${command}`);
   for (let index = 0; index < args.length; index++) {
@@ -121,6 +121,9 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
         throw new ConfigError('--pr needs a pull request number or URL');
       }
       flags.pr = number;
+    } else if (flag === '--state') {
+      if (value !== 'local' && value !== 'branch') throw new ConfigError('--state needs local or branch');
+      flags.state = value;
     } else if (flag === '--worktree' || flag === '--branch' || flag === '--summary') {
       flags[flag.slice(2)] = value;
     } else if (flag === '--steps') {
@@ -189,9 +192,10 @@ export async function runAgentCommand(
   preflight(command, config);
   const workspace = new Workspace(root);
   if (command === 'patrol') {
+    const state = flags.state as 'local' | 'branch' | undefined;
     const { problems } = await runPatrol({
       root,
-      config,
+      config: state ? { ...config, agents: { ...config.agents, patrol: { ...config.agents.patrol, state } } } : config,
       once: Boolean(flags.once),
       force: Boolean(flags.force),
       onLog: log,
@@ -386,6 +390,7 @@ export async function runAgentCommand(
       vars.resolve.bind(vars),
       (value) => vars.redact(value) as string,
       resolve(root, config.app.source),
+      app.contract,
     );
     await driver.connect();
     if (driver.viewerUrl) {

@@ -76,9 +76,17 @@ export const paths = {
   live: (root: string) => data(root, 'gate', 'live.json'),
   /** Committed. Small JSON with no pixels, so a fresh clone knows the app (ADR 0006). */
   appMap: (root: string) => join(dir(root), 'appmap.json'),
+  /** Committed. The endpoint inventory of an api app without a spec (decision 1b). */
+  endpointInventory: (root: string) => join(dir(root), 'endpoints.yml'),
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
   triage: (root: string) => data(root, 'triage.json'),
   memory: (root: string) => data(root, 'memory.json'),
+  /** The sweep's coverage cells and its cursor, so the next run resumes where this one stopped. */
+  coverage: (root: string) => data(root, 'coverage.json'),
+  /** The commit that the external backend runs, from the last probe of `app.connect.version`. */
+  deploy: (root: string) => data(root, 'deploy.json'),
+  /** The `bugpatrol-state` commit that this folder last shared. Not state: it belongs to this machine. */
+  stateBase: (root: string) => data(root, 'state-base.json'),
   agentBaselines: (root: string) => data(root, 'agent-baselines'),
   agentBaseline: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.png`),
   agentBaselineSnapshot: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.snapshot.json`),
@@ -102,7 +110,32 @@ export const paths = {
   sessionLogs: (root: string, id: string) => data(root, 'sessions', recordId(id), 'logs.json'),
   sessionSignals: (root: string, id: string) => data(root, 'sessions', recordId(id), 'signals.jsonl'),
   sessionFlow: (root: string, id: string) => data(root, 'sessions', recordId(id), 'flow.json'),
+  /** One line for each candidate of the session that the judge or a review dismissed. */
+  sessionDecisions: (root: string, id: string) => data(root, 'sessions', recordId(id), 'decisions.jsonl'),
 } as const;
+
+/**
+ * The JSON state that a patrol shares through the `bugpatrol-state` branch
+ * (`agents.patrol.state: branch`). This list is the one allowlist: nothing
+ * else goes on the branch. A path is relative to the Bugpatrol folder, and
+ * `*` is one record id. `keys` shares only those fields of the file:
+ * `agents.json` also holds this machine's live status and pid.
+ *
+ * Never add pixels, casts, videos, raw exchanges, locks, or credentials
+ * (ADR 0004): sessions stay on the machine that recorded them.
+ */
+export const STATE_FILES: readonly { path: string; keys?: readonly string[] }[] = [
+  { path: 'appmap.json' },
+  { path: 'routines/*.json' },
+  { path: `${DATA_DIR}/issues/*.json` },
+  { path: `${DATA_DIR}/fixes/*.json` },
+  { path: `${DATA_DIR}/triage.json` },
+  { path: `${DATA_DIR}/memory.json` },
+  { path: `${DATA_DIR}/coverage.json` },
+  { path: `${DATA_DIR}/deploy.json` },
+  /** The commit that the last full cycle tested. */
+  { path: `${DATA_DIR}/agents.json`, keys: ['patrol.commit'] },
+];
 
 /**
  * The project root: the nearest folder at or above `start` that holds

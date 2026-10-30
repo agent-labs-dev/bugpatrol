@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['packages/*/src/**/*.test.ts'],
+    include: ['packages/*/src/**/*.test.ts', 'examples/*/src/**/*.test.ts'],
     environment: 'node',
     // No test may reach a real model, whatever keys the shell holds.
     env: Object.fromEntries(

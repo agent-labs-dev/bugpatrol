@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
-import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
+import { externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -14,6 +16,9 @@ import { recheckMerged, runFixCycle } from './roles/retest.js';
 import { cleanWorktrees } from './roles/worktrees.js';
 import { createRuntime } from './runtime/index.js';
 import { AgentSession } from './session.js';
+import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
+import { runSweep } from './sweep.js';
+import { pendingCandidates } from './tools/judge.js';
 import type { RoleOutcome } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -166,6 +171,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   // The commit of the last full cycle, also from an earlier run, so a cron job
   // with --once tests only new commits. --force tests the first cycle anyway.
   let tested = options.force ? undefined : previous?.commit;
+  const shared = config.agents.patrol.state === 'branch';
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
@@ -179,15 +185,40 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
       await workspace.setPatrol({ state: 'running', cycle, startedAt: new Date().toISOString() });
       await pullSource(root, config, options.onLog);
+      if (shared) {
+        try {
+          const { changed } = await pullState(root, STATE_BRANCH);
+          options.onLog?.(`Pulled the state from ${STATE_BRANCH}: ${changed} file(s) changed.`);
+          // Another writer may have tested a newer commit. --force still tests the first cycle.
+          if (!(options.force && cycle === 1)) tested = (await workspace.readAgents()).patrol?.commit ?? tested;
+        } catch (error) {
+          problems.push(`Cycle ${cycle}: did not pull the state: ${String(error)}`);
+          options.onLog?.(problems.at(-1)!);
+        }
+      }
       if (config.agents.github.enabled) await syncGitHub(root, config, { onLog: options.onLog });
       await cleanWorktrees(root, config, { onLog: options.onLog });
-      const commit = await sourceCommit(root, config);
+      // An external backend changes only with a deploy, so its trigger is the
+      // deployed commit, not the source commit (T5). Without a version
+      // endpoint, each cycle of the schedule explores.
+      const external = externalBackend(config.app);
+      const deploy = external ? await probeDeploy(root, config) : undefined;
+      const commit = external
+        ? deploy && 'commit' in deploy
+          ? deploy.commit
+          : undefined
+        : await sourceCommit(root, config);
       // An old commit needs no new explore or judge. The work that is not done
       // yet (fixes, retests, publish, CI) still runs, so it never waits for a merge.
-      const fresh = !commit || commit !== tested;
-      if (!fresh) {
+      const fresh = deploy && 'pending' in deploy ? false : !commit || commit !== tested;
+      if (deploy && 'pending' in deploy) {
         options.onLog?.(
-          `No new commit since the last cycle (${commit!.slice(0, 7)}): skipped explore and judge. ` +
+          `The deploy is not settled (${deploy.pending}): skipped explore and judge. ` +
+            'The pending fixes, retests, publish, and CI checks still run.',
+        );
+      } else if (!fresh) {
+        options.onLog?.(
+          `No new ${external ? 'deploy' : 'commit'} since the last cycle (${commit!.slice(0, 7)}): skipped explore and judge. ` +
             'The pending fixes, retests, publish, and CI checks still run.',
         );
       }
@@ -208,9 +239,12 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             vars.resolve.bind(vars),
             (value) => vars.redact(value) as string,
             resolve(root, config.app.source),
+            app.contract,
           );
           await driver.connect();
           let explorerId: string | undefined;
+          // L14: an explorer that runs out of time still has candidates, so the judge runs before the cycle fails.
+          let timedOut: RoleOutcome | undefined;
           if (config.agents.explorer.enabled && !interrupted) {
             const record = await workspace.startSession('explorer');
             explorerId = record.id;
@@ -220,8 +254,25 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
               await withSessionLogs(
                 { config, root, vars, onLog: options.onLog, workspace, session: record },
                 async () => {
+                  // An api app gets the deterministic sweep first, in the same session, so the
+                  // judge sees its candidates with the explorer's.
+                  if (!interrupted && driver instanceof ApiDriver) {
+                    const sweep = await runSweep(
+                      session,
+                      sweepCases(driver.policy.contract, {
+                        credentials: apiCredentials(config.app.connect, (value) => value),
+                      }),
+                      config.agents.sweep,
+                    );
+                    options.onLog?.(
+                      `Sweep: ${sweep.requests} request(s), ${sweep.findings.length} finding(s), ` +
+                        `${sweep.remaining} case(s) left for the next cycle.`,
+                    );
+                  }
                   if (!interrupted) {
-                    unfinished('Explorer', await runExplorer(session, runtime(config.agents.explorer.use)));
+                    const outcome = await runExplorer(session, runtime(config.agents.explorer.use));
+                    if (outcome.stop === 'timeout') timedOut = outcome;
+                    else unfinished('Explorer', outcome);
                   } else {
                     await workspace.endSession(record.id, { summary: 'Interrupted' });
                   }
@@ -235,11 +286,17 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             const record = await workspace.startSession('judge');
             const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, options.onLog);
             activeSession = session;
+            // The judge reads every finding that waits, also from an earlier
+            // session (a sweep alone, a cycle that stopped), not only this one.
+            const earlier: string[] = [];
+            for (const { id } of await workspace.listSessions(Infinity))
+              if (id !== explorerId && (await pendingCandidates(session, [id])).length) earlier.push(id);
             unfinished(
               'Judge',
-              await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId] }),
+              await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId, ...earlier] }),
             );
           }
+          if (timedOut) unfinished('Explorer', timedOut);
         } catch (error) {
           activeSession = undefined;
           const problem = `Cycle ${cycle}: ${String(error)}`;
@@ -303,6 +360,19 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       if (!interrupted && fresh && commit && !cycleFailed) {
         tested = commit;
         await workspace.setPatrol({ commit });
+      }
+      if (shared) {
+        try {
+          const { commit: pushed } = await pushState(root, STATE_BRANCH);
+          options.onLog?.(
+            pushed
+              ? `Pushed the state to ${STATE_BRANCH} at ${pushed.slice(0, 7)}.`
+              : 'The shared state did not change.',
+          );
+        } catch (error) {
+          problems.push(`Cycle ${cycle}: did not push the state: ${String(error)}`);
+          options.onLog?.(problems.at(-1)!);
+        }
       }
       await idle();
       if (options.once || interrupted) {

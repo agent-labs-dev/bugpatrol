@@ -55,7 +55,8 @@ export type FlowEntry = {
   /** The role for an action, `METHOD /path` for a request, the source name for a log. */
   label?: string;
   level?: LogLevel;
-  screenshot?: string;
+  /** A capture file, relative to the workspace root: a PNG, or the exchange JSON of an API. */
+  capture?: string;
   /**
    * True for a backend log that landed inside the correlation window of the
    * failed request or error before it: the log is probably that call's answer.

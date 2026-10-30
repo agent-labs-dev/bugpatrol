@@ -205,7 +205,7 @@ export class CliRuntime implements Runtime {
           summary: result.meta?.summary ?? `${name}: ${firstLine(output)}`,
           tool: name,
           output: output.slice(0, 500),
-          screenshot: result.meta?.screenshot,
+          capture: result.meta?.capture,
           screenId: result.meta?.screenId,
           durationMs: ms,
           costUsd: 0,

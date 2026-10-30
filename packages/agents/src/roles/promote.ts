@@ -66,9 +66,8 @@ export async function promoteClaims(
       id: `pr-${number}-${finding.claim.id}`,
       description: finding.claim.text,
       platform: saved.platform,
+      // The steps carry their checks, so a replay in the patrol applies them too.
       steps: saved.steps,
-      // The checks decide the verdict of a replay, so the patrol needs them too.
-      ...(saved.assert ? { assert: saved.assert } : {}),
       ...(saved.same ? { same: saved.same } : {}),
       ...(saved.bug ? { bug: saved.bug } : {}),
       createdAt: now,

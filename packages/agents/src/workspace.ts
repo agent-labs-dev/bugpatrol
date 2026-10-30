@@ -9,7 +9,10 @@ import {
   type AppMap,
   type AppMapScreen,
   type Candidate,
+  type CoverageFile,
+  type DeployFile,
   type FixProposal,
+  type HttpExchange,
   type Issue,
   type Lesson,
   type LessonRole,
@@ -159,6 +162,28 @@ export class Workspace {
     return readJson(paths.appMap(this.root));
   }
 
+  async writeAppMap(map: AppMap): Promise<void> {
+    await atomic(paths.appMap(this.root), map);
+  }
+
+  /** The sweep's coverage cells and cursor. Absent before the first sweep. */
+  readCoverage(): Promise<CoverageFile | undefined> {
+    return readJson(paths.coverage(this.root));
+  }
+
+  async writeCoverage(coverage: CoverageFile): Promise<void> {
+    await atomic(paths.coverage(this.root), coverage);
+  }
+
+  /** The last probe of `app.connect.version`. Absent before the first probe. */
+  readDeploy(): Promise<DeployFile | undefined> {
+    return readJson(paths.deploy(this.root));
+  }
+
+  async writeDeploy(deploy: DeployFile): Promise<void> {
+    await atomic(paths.deploy(this.root), deploy);
+  }
+
   async upsertScreen(screen: Partial<AppMapScreen> & Pick<AppMapScreen, 'id'>): Promise<AppMapScreen> {
     const now = new Date().toISOString();
     const map = await this.readAppMap();
@@ -186,13 +211,14 @@ export class Workspace {
       ...(transitions.length ? { transitions } : {}),
       visits: (previous?.visits ?? 0) + (screen.visits ?? 1),
       lastSeenAt: screen.lastSeenAt ?? now,
-      lastScreenshot: screen.lastScreenshot ?? previous?.lastScreenshot,
+      lastCapture: screen.lastCapture ?? previous?.lastCapture,
     };
     const screens = [...(map?.screens ?? []).filter((item) => item.id !== screen.id), merged];
     await atomic(paths.appMap(this.root), {
       version: 1,
       platform: map?.platform ?? merged.platform,
       screens,
+      ...(map?.endpoints ? { endpoints: map.endpoints } : {}),
       updatedAt: now,
     });
     return merged;
@@ -316,13 +342,22 @@ export class Workspace {
     await appendFile(join(dir, 'events.jsonl'), `${JSON.stringify({ ...event, at: new Date().toISOString() })}\n`);
   }
 
-  async saveScreenshot(sessionId: string, png: Buffer, label: string): Promise<string> {
+  /**
+   * Saves one capture of a session as `NNN-<label>.png`, or for an API as
+   * `NNN-<label>.exchange.json`, and returns the workspace-relative file.
+   */
+  async saveCapture(
+    sessionId: string,
+    capture: { kind: 'image'; png: Buffer } | { kind: 'http'; exchange: HttpExchange },
+    label: string,
+  ): Promise<string> {
     const dir = paths.session(this.root, sessionId);
     await mkdir(dir, { recursive: true });
     const files = await readdir(dir);
-    const number = files.filter((file) => /^\d{3}-.*\.png$/.test(file)).length + 1;
-    const file = join(dir, `${String(number).padStart(3, '0')}-${basename(label).replace(/[^a-zA-Z0-9_-]/g, '-')}.png`);
-    await writeFile(file, png);
+    const number = files.filter((file) => /^\d{3}-.*\.(?:png|exchange\.json)$/.test(file)).length + 1;
+    const name = `${String(number).padStart(3, '0')}-${basename(label).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const file = join(dir, capture.kind === 'image' ? `${name}.png` : `${name}.exchange.json`);
+    await writeFile(file, capture.kind === 'image' ? capture.png : `${JSON.stringify(capture.exchange, null, 2)}\n`);
     return relative(this.root, file);
   }
 

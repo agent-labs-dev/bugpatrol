@@ -443,7 +443,7 @@ export class MaestroDriver implements Driver {
     const observation: Observation = {
       platform: this.platform,
       location: this.options.appId,
-      screenshot,
+      capture: { kind: 'image', png: screenshot },
       viewport: { ...viewport, scale: pixelWidth / viewport.width },
       elements,
       volatileRegions: [

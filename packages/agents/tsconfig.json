@@ -3,11 +3,13 @@
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../contract" },
     { "path": "../core" },
     { "path": "../decide" },
     { "path": "../diff" },
     { "path": "../drivers" },
     { "path": "../invariants" },
-    { "path": "../logs" }
+    { "path": "../logs" },
+    { "path": "../../examples/api-fixture" }
   ]
 }

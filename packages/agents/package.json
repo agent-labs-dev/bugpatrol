@@ -19,6 +19,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@bugpatrol/contract": "workspace:*",
     "@bugpatrol/core": "workspace:*",
     "@bugpatrol/decide": "workspace:*",
     "@bugpatrol/diff": "workspace:*",
@@ -28,5 +29,8 @@
     "@modelcontextprotocol/sdk": "^1.20.0",
     "pngjs": "^7.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@bugpatrol/api-fixture": "workspace:*"
   }
 }

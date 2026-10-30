@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
+    "examples/api-fixture": {
+      "entry": ["src/start.ts"]
+    },
     "packages/drivers": {
       "ignoreBinaries": ["adb"]
     },

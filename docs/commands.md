@@ -15,8 +15,10 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol promote <pr> <claim>...` | Keep the routine of each proven claim of a merged pull request as `.bugpatrol/routines/pr-<pr>-<claim>.json`. Commit it, and the patrol replays it. It refuses a pull request that is not merged, a review of another commit than the one that merged, and a claim that is not proven. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol publish [--issue <id>] [--dry-run]` | Open PRs and issues on GitHub, or write them to local files. Refer to [GitHub](github.md) |
 | `bugpatrol ci [--issue <id>] [--wait]` | Watch the CI checks of each Bugpatrol PR, and let the fixer fix a failed check. Refer to [GitHub](github.md#5-make-ci-green) |
-| `bugpatrol [--once] [--force]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again |
+| `bugpatrol [--once] [--force] [--state local\|branch]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again; `--state branch` keeps the state on the `bugpatrol-state` branch |
 | `bugpatrol replay <routine-id>` | Replay a learned routine, with no model |
+| `bugpatrol endpoints [--spec URL\|file] [--json]` | Print the endpoints of an api contract and the operations that Bugpatrol skips. With no `--spec`, it reads `app.connect.spec` (or `.bugpatrol/endpoints.yml`) and writes the endpoints to `appmap.json` |
+| `bugpatrol sweep [--json] [--max-requests N] [--dry-run]` | Test each endpoint and case of an api with no model, and check each response against the spec. It exits 1 on a failure that repeats. Refer to [Backend testing](backend-testing.md#the-sweep) |
 
 ## Issues, memory, and GitHub
 
@@ -38,6 +40,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol dashboard [--port N]` | The local dashboard, on 127.0.0.1 |
 | `bugpatrol doctor` | Check that this machine can run the deterministic gate |
 | `bugpatrol init [--yes] [--agent a]` | Detect the app and the LLMs, ask for each agent's provider, and write `.bugpatrol/bugpatrol.yml` and `.bugpatrol/instructions.md` |
+| `bugpatrol init --platform api [--url <url>] [--spec <spec>]` | Write a starter config for an API that runs already. It asks for the URL and an optional spec, and detects no start command |
 | `bugpatrol init --gate` | Write a starter `.bugpatrol/bugpatrol.yml` for the deterministic web gate |
 | `bugpatrol --version` | Show the version |
 

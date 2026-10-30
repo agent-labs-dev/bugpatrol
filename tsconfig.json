@@ -38,10 +38,16 @@
       "path": "packages/recon"
     },
     {
+      "path": "packages/contract"
+    },
+    {
       "path": "packages/github-app"
     },
     {
       "path": "packages/cli"
+    },
+    {
+      "path": "examples/api-fixture"
     }
   ]
 }

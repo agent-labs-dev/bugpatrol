@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { baselineKey, fingerprint, normalizeRegionSignature } from './fingerprint.js';
+import type { EndpointKey } from './types/endpoint.js';
 
 describe('fingerprint', () => {
   it('is stable across runs for identical input', () => {
@@ -19,6 +20,14 @@ describe('fingerprint', () => {
     const a = fingerprint({ screenId: 's1', ruleId: 'r', regions: [{ x: 10, y: 10, width: 40, height: 20 }] });
     const b = fingerprint({ screenId: 's1', ruleId: 'r', regions: [{ x: 800, y: 600, width: 40, height: 20 }] });
     expect(a).not.toBe(b);
+  });
+
+  it('keys an api failure on the endpoint, the case, and the failed check', () => {
+    const key = { endpoint: 'GET /items/{id}' as EndpointKey, case: 'missing-id' as const, assertionId: 'status' };
+    expect(fingerprint(key)).toBe(fingerprint({ ...key }));
+    expect(fingerprint(key)).not.toBe(fingerprint({ ...key, case: 'other-user' }));
+    expect(fingerprint(key)).not.toBe(fingerprint({ ...key, assertionId: 'contract:schema' }));
+    expect(fingerprint(key)).not.toBe(fingerprint({ ...key, endpoint: 'GET /items' as EndpointKey }));
   });
 
   it('distinguishes rules on the same screen', () => {

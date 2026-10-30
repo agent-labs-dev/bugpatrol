@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveArtifactPath } from './server.js';
+import { writeCoverageFixture } from './fixtures/coverage.js';
+import { resolveArtifactPath, startDashboard } from './server.js';
 
 let root: string;
 let outside: string;
@@ -81,5 +82,54 @@ describe('resolveArtifactPath', () => {
 
   it('rejects a path that does not exist', () => {
     expect(resolveArtifactPath(root, '.bugpatrol/runs/latest/missing.png')).toBeUndefined();
+  });
+});
+
+describe('GET /api/coverage', () => {
+  it('coverage route reads coverage.json', async () => {
+    const dashboard = await startDashboard({ root, port: 0 });
+    try {
+      const get = (path: string) => fetch(`${dashboard.url}${path}`);
+      // Before the first sweep, the summary has no API coverage, and the page shows the sweep command.
+      expect((await (await get('/api/summary')).json()).coverage.api).toBeUndefined();
+      expect((await get('/api/coverage')).status).toBe(404);
+
+      writeCoverageFixture(root);
+      expect((await (await get('/api/summary')).json()).coverage.api).toMatchObject({ endpoints: 13 });
+      const matrix = await (await get('/api/coverage')).json();
+      // A status column only for a status that a case got and the contract declares.
+      expect(matrix.cases).toEqual([
+        'ok',
+        'declared:401',
+        'declared:404',
+        'declared:422',
+        'no-auth',
+        'invalid-input',
+        'missing-id',
+        'other-user',
+        'repeat-delete',
+      ]);
+      expect(matrix.endpoints).toContain('POST /notify');
+      expect(matrix.remaining).toBe(2);
+      const cells = matrix.cells;
+      expect(cells['GET /items/{id} invalid-input']).toMatchObject({ state: 'fail', status: 500 });
+      expect(cells['GET /items/{id} missing-id']).toMatchObject({ state: 'fail', status: 404 });
+      expect(cells['GET /items/{id} declared:404']).toBeUndefined();
+      expect(cells['GET /events ok']).toMatchObject({
+        state: 'blocked',
+        reason: expect.stringContaining('event stream'),
+      });
+      expect(cells['POST /notify ok']).toEqual({ state: 'skip', reason: 'the spec marks it x-bugpatrol-skip' });
+      expect(cells['GET /export ok']).toEqual({ state: 'untested' });
+
+      // A click on a cell opens its exchange through the exchange route.
+      const text = await (
+        await get(`/api/exchange?path=${encodeURIComponent(cells['GET /items/{id} invalid-input'].exchange)}`)
+      ).text();
+      expect(text).toMatch(/^GET \/items\/0/);
+      expect(text).toContain('HTTP 500');
+    } finally {
+      await dashboard.close();
+    }
   });
 });

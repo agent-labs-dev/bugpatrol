@@ -19,7 +19,7 @@ export async function runJudge(
     const task = {
       role: 'judge' as const,
       sessionId: session.sessionId,
-      system: judgeSystem(lessonsFor(await session.workspace.readMemory(), 'judge')),
+      system: judgeSystem(lessonsFor(await session.workspace.readMemory(), 'judge'), session.config.app.platform),
       prompt: judgePrompt(opts.sessionIds, candidates, issues),
       tools: judgeTools(session, opts.sessionIds, runtime.label),
       // Each candidate needs a look and a decision, so a big session must not

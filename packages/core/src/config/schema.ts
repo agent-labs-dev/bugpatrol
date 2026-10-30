@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AgentRole } from '../types/agents.js';
+import { HTTP_METHODS } from '../types/endpoint.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
 
 export const viewportSchema = z.object({
@@ -162,15 +163,76 @@ export const appSchema = z
     teardown: z.array(appCommandSchema).default([]),
     connect: z
       .object({
-        /** Web: defaults to run.url. May use ${NAME} from env or captures. */
+        /**
+         * Web, API: defaults to run.url. `${NAME}` or `{{NAME}}` takes a setup
+         * capture or a name in `secrets` (read from the environment). Any
+         * other name is an error.
+         */
         url: z.string().optional(),
-        /** API: default request headers; credentials should be placeholders. */
+        /**
+         * API: default request headers; credentials should be placeholders,
+         * with the same names as `url`.
+         * They go into each credential set. Without `credentials`, they are
+         * the only set.
+         */
         headers: z.record(z.string()).default({}),
-        /** API: writes require explicit opt-in in repository configuration. */
-        methods: z
-          .array(z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']))
-          .default(['GET', 'HEAD', 'OPTIONS']),
+        /**
+         * API: two users (3b). Each set keeps its token and its workspace
+         * header together. Without `other`, the cross-user cases are blocked.
+         */
+        credentials: z
+          .object({
+            self: z.object({ headers: z.record(z.string()) }),
+            other: z.object({ headers: z.record(z.string()) }).optional(),
+          })
+          .optional(),
+        /**
+         * API: the methods Bugpatrol may send. The request policy narrows them
+         * further: a target that is not loopback or `disposable` gets no writes.
+         */
+        methods: z.array(z.enum(HTTP_METHODS)).default([...HTTP_METHODS]),
+        /**
+         * API: the target holds data that may be lost, so writes are on also
+         * when it is not loopback.
+         */
+        disposable: z.boolean().default(false),
+        /**
+         * API: endpoints Bugpatrol never requests. Each glob matches a path
+         * template of the spec, with an optional leading method: `*` is one
+         * segment, `**` is any number of segments. Example: `POST /admin/**`.
+         */
+        deny: z.array(z.string().min(1)).default([]),
+        /** API: the most requests in one minute. A 429 or a Retry-After also slows them. */
+        perMinute: z.number().int().positive().default(60),
         timeoutMs: z.number().int().positive().max(120000).default(30000),
+        /**
+         * API: the OpenAPI spec. An http(s) URL, a path on connect.url such as
+         * /openapi.json, a file relative to the project root, or an absolute
+         * file as a file: URL. Bugpatrol never uses its `servers` value.
+         */
+        spec: z.string().optional(),
+        /** API: the error statuses every endpoint may return, and the JSON Schema of their body. */
+        errors: z
+          .object({
+            statuses: z.array(z.number().int().min(400).max(599)).default([]),
+            schema: z.record(z.unknown()).optional(),
+          })
+          .optional(),
+        /**
+         * API: where the deployed commit is. `path` is a path on connect.url,
+         * and `pointer` is a JSON pointer into its response, for example
+         * `/result/commit`. For a fleet, a `*` segment takes each element of
+         * an array (`/result`, then `*`, then `commit`). Every process must
+         * report the same commit.
+         */
+        version: z
+          .object({
+            path: z.string().startsWith('/'),
+            pointer: z.string().startsWith('/'),
+          })
+          .optional(),
+        /** API: the preview deploy of a pull request, with {{PR_NUMBER}}. Reserved; nothing reads it yet. */
+        preview: z.string().optional(),
         /** Linux desktop: a private Xvfb/DBus session; never the host display. */
         cua: z
           .object({
@@ -487,6 +549,21 @@ export const agentsSchema = z
           .default(20 * 60 * 1000),
       })
       .default({}),
+    /**
+     * `bugpatrol sweep`, and the sweep that an api patrol runs before the
+     * explorer. A run stops at either limit, and the next run resumes there.
+     */
+    sweep: z
+      .object({
+        /** The most requests in one run. A second replay of a failure can go over by one case. */
+        maxRequests: z.number().int().positive().default(600),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .default(30 * 60 * 1000),
+      })
+      .default({}),
     patrol: z
       .object({
         intervalMinutes: z.number().positive().default(30),
@@ -499,6 +576,13 @@ export const agentsSchema = z
         pull: z
           .union([z.string().regex(/^[^/]+\/.+$/, 'Use remote/branch, e.g. origin/main'), z.literal(false)])
           .default('origin/main'),
+        /**
+         * `branch` shares the JSON state (`STATE_FILES`) through the
+         * `bugpatrol-state` branch of `origin`: it pulls before each cycle and
+         * pushes after it, so CI and a dev machine see the same issues. `local`
+         * keeps the state only in `.bugpatrol/runs/`.
+         */
+        state: z.enum(['local', 'branch']).default('local'),
       })
       .default({}),
   })

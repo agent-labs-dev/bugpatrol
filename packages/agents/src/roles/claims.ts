@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
   type Assertion,
+  type AssertionResult,
   type BugCheck,
   type Claim,
   type ClaimBench,
@@ -18,9 +19,10 @@ import {
   type RoutineStep,
 } from '@bugpatrol/core';
 import { castGif, type Driver, inlineGif, type Observation } from '@bugpatrol/drivers';
+import { captureParts } from '../evidence.js';
 import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
-import { assertionWords, bugMisses, checkAssertions, replaySteps } from '../replay.js';
+import { assertionWords, bugMisses, checkAssertions, confirmFailure, replaySteps } from '../replay.js';
 import { reproRoutineId } from '../report.js';
 import { short, stoppedAt } from '../review-comment.js';
 import { AgentSession } from '../session.js';
@@ -28,7 +30,6 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, type Workspace } from '../workspace.js';
 import { benchWords, type Measured, overlaps } from './benches.js';
-import { image } from './capture.js';
 import { claimJudge } from './claim-judge.js';
 import { stepWords } from './fixer.js';
 import type { ReviewContext } from './review.js';
@@ -136,7 +137,7 @@ export async function reproClaims(
  */
 type Checks = {
   code: [key: string, kind: 'exit-code' | 'status', example: number];
-  texts: [key: string, kind: Exclude<Assertion['kind'], 'exit-code' | 'status'>][];
+  texts: [key: string, kind: Extract<Assertion, { value: string }>['kind']][];
   words: string;
   /** What `same` compares on the platform. */
   same: string;
@@ -287,6 +288,11 @@ export function claimTools(
           ...(await chainSteps(session.workspace, session.anchor.routineId)),
           ...session.trail.slice(session.anchor.index),
         ].map(({ at: _at, ...step }) => step as RoutineStep);
+        // The checks are on the result of the last step.
+        if (assert.length) {
+          if (!steps.length) return { ...response('The flow has no step to check. Do the flow first.'), isError: true };
+          steps[steps.length - 1] = { ...steps.at(-1)!, assert };
+        }
         const now = new Date().toISOString();
         const routine: Routine = {
           version: 1,
@@ -294,7 +300,6 @@ export function claimTools(
           description: redact(input.did),
           platform: session.config.app.platform,
           steps,
-          ...(assert.length ? { assert } : {}),
           ...(same ? { same } : {}),
           createdAt: now,
           updatedAt: now,
@@ -316,7 +321,7 @@ export function claimTools(
           );
         if (!assert.length) return response(`Saved the flow of ${claim.id} (${steps.length} steps).`);
         const screen = session.lastObservation ?? (await session.driver!.observe());
-        const results = checkAssertions(assert, screen).map(
+        const results = checkAssertions(assert, screen, { raw: session.driver?.lastRaw?.() }).map(
           (result) =>
             `- ${assertionWords(result)}: ${result.ok ? 'passed' : `failed, ${assertionWords(result, true)}`}`,
         );
@@ -467,10 +472,17 @@ async function replayClaims(
       const errors: string[] = [];
       let last: Observation | undefined;
       const shot = async () => {
-        const file = join(dir, `${build}-${String(shots.length).padStart(2, '0')}.png`);
+        const name = join(dir, `${build}-${String(shots.length).padStart(2, '0')}`);
         last = await current.observe();
         errors.push(...last.consoleErrors, ...(last.networkErrors ?? []));
-        await writeFile(file, last.screenshot);
+        const { capture } = last;
+        // An API before its first request has no exchange, so it has no shot.
+        if (capture.kind === 'http' && !capture.exchange) return;
+        const file = capture.kind === 'image' ? `${name}.png` : `${name}.exchange.json`;
+        await writeFile(
+          file,
+          capture.kind === 'image' ? capture.png : `${JSON.stringify(vars.redact(capture.exchange), null, 2)}\n`,
+        );
         shots.push(relative(root, file));
       };
       const what = `${claim} on ${where}`;
@@ -487,19 +499,21 @@ async function replayClaims(
       }
       await shot();
       const outputs: ClaimOutput[] = [];
+      const checked: AssertionResult[] = [];
       const result = await replaySteps(session, routine.steps, {
         windowMs: opts.replayWindowMs,
         async onStep(index) {
           await shot();
-          const output = routine.same ? outputOf(routine.steps[index]!, last!) : undefined;
+          const step = routine.steps[index]!;
+          const output = routine.same ? outputOf(step, last!) : undefined;
           if (output) outputs.push(output);
+          if (step.assert?.length) checked.push(...checkAssertions(step.assert, last!, { raw: current.lastRaw?.() }));
         },
       });
       // The bug shows only at the end of a full replay.
       const bug = routine.bug && result.ok ? { bug: !bugMisses(routine.bug, last!, errors).length } : {};
-      // Like the bug check, the assertions hold only at the end of a full replay.
-      const assertions =
-        routine.assert?.length && result.ok ? { assertions: checkAssertions(routine.assert, last!) } : {};
+      // Like the bug check, the assertions hold only after a full replay.
+      const assertions = checked.length && result.ok ? { assertions: checked } : {};
       const recorded = recording ? await saveRecording(ctx, current, join(dir, build), what) : undefined;
       replays.set(claim, {
         ok: result.ok,
@@ -566,8 +580,8 @@ async function judgeClaims(
         const { claim, flow } = item;
         if (!flow) return response(`${claim.id}: ${claim.text}\n${benchWords(item.bench!)}`);
         const steps = flow.kind === 'flow' ? flow.routine.steps.length : 0;
-        const head = await image(root, item.head?.shots.at(-1));
-        const base = await image(root, item.base?.shots.at(-1));
+        const head = await captureParts(root, item.head?.shots.at(-1));
+        const base = await captureParts(root, item.base?.shots.at(-1));
         const how =
           flow.kind === 'flow'
             ? `Bugpatrol replayed the same ${steps} step(s) on both builds, with no model.`
@@ -690,7 +704,7 @@ export async function checkClaims(
     // Assertions give their own verdict, with no judge.
     else if (
       flow?.kind === 'note' ||
-      (flow?.kind === 'flow' && !flow.routine.assert?.length && !flow.routine.same && headReplays.get(claim.id)?.ok)
+      (flow?.kind === 'flow' && !asserts(flow.routine) && !flow.routine.same && headReplays.get(claim.id)?.ok)
     )
       tested.push({ claim, flow, head: headReplays.get(claim.id), base: baseReplays.get(claim.id) });
   }
@@ -743,7 +757,7 @@ export async function checkClaims(
         reason: `The replay on the pull request build ${stoppedWords(replay)}`,
         ...shown,
       };
-    if (flow.kind === 'flow' && flow.routine.assert?.length)
+    if (flow.kind === 'flow' && asserts(flow.routine))
       return assertionFinding(claim, replay!, baseReplays.get(claim.id), shown);
     if (flow.kind === 'flow' && flow.routine.same) return sameFinding(claim, replay!, baseReplays.get(claim.id), shown);
     const judged = verdicts.get(claim.id);
@@ -759,6 +773,8 @@ export async function checkClaims(
     };
   });
 }
+
+const asserts = (routine: Routine) => routine.steps.some((step) => step.assert?.length);
 
 /**
  * The verdict on a claim with assertions, from the assertions alone: they
@@ -883,27 +899,6 @@ const blockingDisproofs = (findings: ClaimFinding[]) =>
   findings.filter((finding) => disproves(finding) && finding.again);
 
 /**
- * Why a second replay differs from the first, or undefined when both gave
- * the same results that code decides: where the replay stopped, the bug
- * check, the outputs and the exact checks. The screens may differ, for
- * example by a time on the page; no verdict reads them.
- */
-function difference(first: ClaimReplay | undefined, second: ClaimReplay): string | undefined {
-  const at = (replay: ClaimReplay | undefined) => (replay?.ok ? 'replayed all its steps' : stoppedAt(replay));
-  if (first?.ok !== second.ok || first?.failedStep !== second.failedStep)
-    return `the first replay ${at(first)}, and the second ${at(second)}`;
-  if (first?.bug !== second.bug) return 'the bug showed on one replay only';
-  // The normalised outputs are the evidence of a same-behavior claim.
-  if (first?.outputs || second.outputs)
-    return JSON.stringify(first?.outputs) === JSON.stringify(second.outputs)
-      ? undefined
-      : 'the outputs of the second replay differ from the first';
-  const results = (replay?: ClaimReplay) =>
-    JSON.stringify(replay?.assertions?.map((result) => [result.ok, result.actual]));
-  return results(first) === results(second) ? undefined : 'the exact checks gave a different result';
-}
-
-/**
  * With blocking on, each deterministic disproof runs a second time on the
  * pull request build before it can fail the check. A second replay that
  * stops elsewhere, or gives another bug check, exact check or output, makes
@@ -930,36 +925,43 @@ export async function replayDisproofs(
     ctx.log(`No second replay of the disproved claims. ${ctx.budget.late}`);
     return findings;
   }
-  const again = await ctx.budget.timed(() =>
-    build('head', ctx.pr.head, (driver, vars, fresh) =>
-      replayClaims(ctx, review, 'again', routines, driver, vars, fresh),
+  const firsts = (pick: (finding: ClaimFinding) => ClaimReplay | undefined, keep: (claim: string) => boolean) =>
+    new Map(findings.filter((finding) => keep(finding.claim.id)).map((finding) => [finding.claim.id, pick(finding)]));
+  const replayAgain = (pass: 'again' | 'againBase', ids: string[]) =>
+    ctx.budget.timed(() =>
+      build(pass === 'again' ? 'head' : 'base', pass === 'again' ? ctx.pr.head : ctx.pr.base, (driver, vars, fresh) =>
+        replayClaims(ctx, review, pass, new Map(ids.map((id) => [id, routines.get(id)!])), driver, vars, fresh),
+      ),
+    );
+  const again = await confirmFailure(
+    firsts(
+      (finding) => finding.head,
+      (claim) => routines.has(claim),
     ),
+    (ids) => replayAgain('again', ids),
   );
-  const differs = new Map<string, string | undefined>();
-  for (const finding of findings) {
-    const second = again.get(finding.claim.id);
-    if (second) differs.set(finding.claim.id, difference(finding.head, second));
-  }
-  const bases = new Map(
-    [...routines].filter(
-      ([claim, routine]) => (routine.same || routine.bug) && differs.has(claim) && !differs.get(claim),
+  const bases = new Set(
+    [...routines].flatMap(([claim, routine]) =>
+      (routine.same || routine.bug) && again.has(claim) && !again.get(claim)!.differs ? [claim] : [],
     ),
   );
   const againBase =
     bases.size && !ctx.budget.late
-      ? await ctx.budget.timed(() =>
-          build('base', ctx.pr.base, (driver, vars, fresh) =>
-            replayClaims(ctx, review, 'againBase', bases, driver, vars, fresh),
+      ? await confirmFailure(
+          firsts(
+            (finding) => finding.base,
+            (claim) => bases.has(claim),
           ),
+          (ids) => replayAgain('againBase', ids),
         )
-      : new Map<string, ClaimReplay>();
+      : new Map<string, { again: ClaimReplay; differs?: string }>();
   const out: ClaimFinding[] = [];
   for (const finding of findings) {
-    const second = again.get(finding.claim.id);
+    const second = again.get(finding.claim.id)?.again;
     const secondBase = againBase.get(finding.claim.id);
-    const baseDiffers = secondBase && difference(finding.base, secondBase);
-    const why = differs.get(finding.claim.id) ?? (baseDiffers && `on the base build, ${baseDiffers}`);
-    const repeated = { again: second, ...(secondBase ? { againBase: secondBase } : {}) };
+    const baseDiffers = secondBase?.differs;
+    const why = again.get(finding.claim.id)?.differs ?? (baseDiffers && `on the base build, ${baseDiffers}`);
+    const repeated = { again: second, ...(secondBase ? { againBase: secondBase.again } : {}) };
     // A disproof that rests on both builds and has no second base replay stays a comment.
     if (!second || (!why && bases.has(finding.claim.id) && !secondBase)) out.push(finding);
     else if (!why) out.push({ ...finding, ...repeated });

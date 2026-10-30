@@ -33,6 +33,8 @@ async function repoFixture() {
   await git(source, 'add', '-A');
   await git(source, 'commit', '-m', 'initial');
   const workspace = new Workspace(root);
+  const reported = await new FakeDriver({ home: { elements: [] } }).observe();
+  await writeFile(join(root, 'reported.png'), reported.capture.kind === 'image' ? reported.capture.png : '');
   const issue: Issue = {
     version: 1,
     id: 'iss_1',
@@ -42,7 +44,7 @@ async function repoFixture() {
     severity: 'major',
     status: 'new',
     candidateIds: [],
-    evidence: { steps: [{ kind: 'open', url: 'fake://home' }] },
+    evidence: { capture: { kind: 'image', screenshot: 'reported.png' }, steps: [{ kind: 'open', url: 'fake://home' }] },
     judgement: { by: 'judge', reason: 'visible', at: 'now' },
     occurrences: 1,
     firstSeenAt: 'now',
@@ -442,7 +444,7 @@ describe('fix cycle', () => {
         agents: { ...f.config.agents, fixer: { ...f.config.agents.fixer, retest: { prepare: 'touch prepare-ran' } } },
       });
       const result = await recheckMerged(f.root, config, {
-        isMerged: async () => {
+        findMerge: async () => {
           throw new Error('PR state was ignored');
         },
         createDriver: () => new FakeDriver({ home: { elements: [] } }),
@@ -698,14 +700,18 @@ describe('multi-screen retest', () => {
     const driver = new FakeDriver({ usage: { elements: [] }, memories: { elements: [] } }, 'usage');
     const beforeUsage = 'before-usage.png';
     const beforeMemories = 'before-memories.png';
-    await writeFile(join(f.root, beforeUsage), (await driver.observe()).screenshot);
+    const png = async () => {
+      const { capture } = await driver.observe();
+      return capture.kind === 'image' ? capture.png : '';
+    };
+    await writeFile(join(f.root, beforeUsage), await png());
     driver.current = 'memories';
-    await writeFile(join(f.root, beforeMemories), (await driver.observe()).screenshot);
+    await writeFile(join(f.root, beforeMemories), await png());
     driver.current = 'usage';
     const record = await f.workspace.startSession('explorer');
     const issue = (await f.workspace.readIssue('iss_1'))!;
     issue.screenId = 'usage';
-    issue.evidence = { screenshot: beforeUsage };
+    issue.evidence = { capture: { kind: 'image', screenshot: beforeUsage } };
     issue.candidateIds = ['cand_usage', 'cand_memories'];
     for (const [id, screenId, screenshot] of [
       ['cand_usage', 'usage', beforeUsage],
@@ -719,7 +725,7 @@ describe('multi-screen retest', () => {
         fingerprint: id,
         summary: 'Broken',
         severity: 'major',
-        evidence: { screenshot, steps: [{ kind: 'open', url: `fake://${screenId}` }] },
+        evidence: { capture: { kind: 'image', screenshot }, steps: [{ kind: 'open', url: `fake://${screenId}` }] },
         createdAt: 'now',
       };
       await f.workspace.appendCandidate(record.id, candidate);
@@ -784,14 +790,14 @@ describe('multi-screen retest', () => {
           },
         }),
       });
-      expect(retest.shots).toMatchObject([
+      expect(retest.captures).toMatchObject([
         { screenId: 'usage', reached: true, note: 'Reached 1' },
         { screenId: 'memories', reached: true, note: 'Reached 2' },
       ]);
-      expect(retest.shots?.every((shot) => Boolean(shot.after))).toBe(true);
-      expect(retest.before).toBe(retest.shots?.[0]?.before);
-      expect(retest.after).toBe(retest.shots?.[0]?.after);
-      expect(retest.note).toBe(retest.shots?.[0]?.note);
+      expect(retest.captures?.every((shot) => Boolean(shot.after))).toBe(true);
+      expect(retest.before).toBe(retest.captures?.[0]?.before);
+      expect(retest.after).toBe(retest.captures?.[0]?.after);
+      expect(retest.note).toBe(retest.captures?.[0]?.note);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -847,8 +853,8 @@ describe('multi-screen retest', () => {
           },
         }),
       });
-      expect(retest.shots?.[1]).toMatchObject({ reached: false, note: 'The explorer did not reach this screen.' });
-      expect(retest.shots?.[1]?.after).toBeUndefined();
+      expect(retest.captures?.[1]).toMatchObject({ reached: false, note: 'The explorer did not reach this screen.' });
+      expect(retest.captures?.[1]?.after).toBeUndefined();
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -867,7 +873,7 @@ describe('multi-screen retest', () => {
         fingerprint: 'again',
         summary: 'Same screen',
         severity: 'major',
-        evidence: { screenshot: 'another.png' },
+        evidence: { capture: { kind: 'image', screenshot: 'another.png' } },
         createdAt: 'now',
       });
       expect(await retestTargets(f.workspace, f.issue)).toHaveLength(2);
@@ -955,6 +961,82 @@ describe('patrol', () => {
         }),
       });
       expect(driver.actions).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['timeout', ['explorer', 'judge']],
+    ['error', ['explorer']],
+  ] as const)(
+    'the judge runs after an explorer timeout, not after an error (%s), and the cycle fails',
+    async (stop, expected) => {
+      const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
+      const roles: string[] = [];
+      try {
+        const result = await runPatrol({
+          root,
+          config,
+          once: true,
+          createDriver: () => new FakeDriver({ home: { elements: [] } }),
+          createRuntime: () => ({
+            label: 'scripted',
+            async run(task) {
+              roles.push(task.role);
+              if (task.role === 'judge') {
+                expect(task.prompt).toContain('Broken home');
+                return { stop: 'done', steps: 1, costUsd: 0, summary: 'Judged' };
+              }
+              await task.tools
+                .find((item) => item.name === 'report_bug')!
+                .run({ title: 'Broken home', what_is_wrong: 'Blank', expected: 'Content', severity: 'major' });
+              return { stop, steps: 3, costUsd: 0, error: 'out of time' };
+            },
+          }),
+        });
+        expect(roles).toEqual(expected);
+        expect(result.problems).toEqual([expect.stringContaining(`Explorer did not finish (${stop})`)]);
+        // A failed cycle tests the same commit again.
+        expect((await new Workspace(root).readAgents()).patrol?.commit).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('the judge also reads a finding that waits from an earlier session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
+    try {
+      const workspace = new Workspace(root);
+      const earlier = await workspace.startSession('explorer');
+      await workspace.appendCandidate(earlier.id, {
+        id: 'can_earlier',
+        sessionId: earlier.id,
+        source: 'sweep',
+        fingerprint: 'fp-earlier',
+        summary: 'Earlier sweep failure',
+        severity: 'minor',
+        evidence: { capture: { kind: 'image', screenshot: 'earlier.png' }, steps: [] },
+        route: { to: 'judge', reason: 'failed two times' },
+        createdAt: new Date().toISOString(),
+      });
+      await workspace.endSession(earlier.id, { summary: 'Sweep' });
+      const prompts: string[] = [];
+      await runPatrol({
+        root,
+        config,
+        once: true,
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'judge') prompts.push(task.prompt);
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      expect(prompts).toEqual([expect.stringContaining('Earlier sweep failure')]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

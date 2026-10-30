@@ -24,7 +24,7 @@ async function seed(): Promise<{ workspace: Workspace; issue: Issue; candidate: 
     fingerprint: 'fp-candidate',
     summary: 'The window is blank',
     severity: 'major',
-    evidence: {},
+    evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
     createdAt: '2026-01-01T00:00:00.000Z',
   };
   await workspace.appendCandidate(session.id, candidate);
@@ -37,7 +37,7 @@ async function seed(): Promise<{ workspace: Workspace; issue: Issue; candidate: 
     severity: 'major',
     status: 'new',
     candidateIds: ['can_1'],
-    evidence: {},
+    evidence: { capture: { kind: 'image', screenshot: 'shot.png' } },
     judgement: { by: 'model', reason: 'It is blank.', at: '2026-01-01T00:00:00.000Z' },
     occurrences: 1,
     firstSeenAt: '2026-01-01T00:00:00.000Z',

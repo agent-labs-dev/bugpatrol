@@ -34,7 +34,7 @@ describe('CliDriver', () => {
       expect(observation.platform).toBe('cli');
       expect(observation.terminal).toMatchObject({ exitCode: 3 });
       expect(observation.terminal!.output).toBe(`a terminal in ${dir.split('/').at(-1)}\n[redacted]\ndone`);
-      expect(observation.screenshot.subarray(1, 4).toString()).toBe('PNG');
+      expect(observation.capture.kind === 'image' && observation.capture.png.subarray(1, 4).toString()).toBe('PNG');
 
       const file = await driver.stopRecording(join(dir, 'head'));
       expect(file).toBe(join(dir, 'head.cast'));

@@ -1,32 +1,49 @@
-import type { HttpMethod } from '@bugpatrol/core';
+import type { RequestPolicy } from '@bugpatrol/contract';
+import { formatHttpExchange, type HttpExchange, type HttpMethod, resolvePointer } from '@bugpatrol/core';
+import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { z } from 'zod';
+import type { Pacer } from './api-pacer.js';
 import { CastRecorder } from './cast.js';
-import type { ActResult, DriverAction, Observation } from './types.js';
-import { WebDriver } from './web.js';
+import { nativeSnapshot } from './maestro.js';
+import type { ActResult, Driver, DriverAction, Observation, RawResponse } from './types.js';
+
+/**
+ * The headers of each credential set (3b). A request `as: 'none'` sends
+ * neither set, so a no-auth case removes exactly the configured credentials.
+ */
+export type ApiCredentials = { self: Record<string, string>; other?: Record<string, string> };
+
+/** The sets that send at least one header. With none, nothing tells a request with credentials from one without. */
+export const credentialSets = (credentials: ApiCredentials): ('self' | 'other')[] =>
+  (['self', 'other'] as const).filter((set) => Object.keys(credentials[set] ?? {}).length > 0);
 
 type ApiOptions = {
   url: string;
-  headers: Record<string, string>;
-  methods: HttpMethod[];
+  credentials: ApiCredentials;
+  /** What may be requested. The driver checks each request against it before it sends. */
+  policy: RequestPolicy;
+  pacer: Pacer;
   timeoutMs: number;
-  viewport: { width: number; height: number };
   redact: (value: string) => string;
 };
 
-const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 const captureSchema = z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string().regex(/^(?:\/(?:[^~]|~[01])*)*$/));
+/** The response headers an exchange keeps. The others can carry credentials or noise. */
+const RESPONSE_HEADERS = ['content-type', 'location', 'retry-after', 'allow', 'www-authenticate', 'x-request-id'];
+/** A JSON key or a header with one of these names holds a credential. */
+const CREDENTIAL =
+  /(?:token|password|secret|authorization|cookie|api[-_]?key|secret[-_]?key|jwt|session|sid|credentials?|private[-_]?key)$/i;
+/** A JSON Web Token, whatever the key that holds it is named. */
+const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
 function responseCaptures(body: string, pointers: Record<string, string>): Record<string, string> {
   const parsed: unknown = JSON.parse(body);
   return Object.fromEntries(
     Object.entries(pointers).map(([name, pointer]) => {
-      let value = parsed;
-      for (const part of pointer.split('/').slice(1)) {
-        const key = part.replaceAll('~1', '/').replaceAll('~0', '~');
-        if (typeof value !== 'object' || value === null || !Object.hasOwn(value, key))
-          throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
-        value = (value as Record<string, unknown>)[key];
-      }
+      const found = resolvePointer(parsed, pointer);
+      if (!found) throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
+      const { value } = found;
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
       return [name, String(value)];
@@ -37,54 +54,55 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 function redactCredentials(text: string): string {
   try {
     const value: unknown = JSON.parse(text);
-    return JSON.stringify(
-      value,
-      (key, item: unknown) => (/(?:token|password|secret|authorization|cookie)$/i.test(key) ? '[redacted]' : item),
-      2,
+    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), 2).replace(
+      JWT,
+      '[redacted]',
     );
   } catch {
-    return text;
+    return text.replace(JWT, '[redacted]');
   }
 }
 
-/** One request of a recording and its answer: a response, or why there was none. All text is redacted. */
-type Exchange = { request: string; body?: string } & (
-  | { status: number; contentType: string | null; response: string }
-  | { error: string }
-);
+/** A request before it is sent, and the response as it came: the input of `toExchange`. */
+type Sent = {
+  method: HttpMethod;
+  url: URL;
+  /** Only the headers that the action set. The configured headers carry the app's credentials. */
+  headers: Record<string, string>;
+  body?: string;
+  at: number;
+};
+type Received = {
+  status: number;
+  headers: Headers;
+  text: string;
+  bytes: number;
+  tooLarge: boolean;
+  /** An event stream, cut after its headers (T8). */
+  stream?: true;
+};
 
-/** An exchange as terminal output: the request line, its body, then the status line and the response body. */
-function exchangeText(exchange: Exchange): string {
-  const lines = [`\u001b[1;36m>\u001b[0m ${exchange.request}`];
-  if (exchange.body) lines.push(exchange.body);
-  if ('error' in exchange) lines.push(`\u001b[1;31m< ${exchange.error}\u001b[0m`);
-  else {
-    const color = exchange.status >= 400 ? 31 : exchange.status >= 300 ? 33 : 32;
-    lines.push(
-      `\u001b[1;${color}m< ${exchange.status}\u001b[0m ${exchange.contentType ?? '(no content type)'}`,
-      ...(exchange.response ? [exchange.response] : []),
-    );
-  }
-  return `${lines.join('\n').replaceAll(/\r?\n/g, '\r\n')}\r\n\r\n`;
-}
-
-/** A screenshot here is explicitly a rendered HTTP transcript, never a product UI. */
-export class ApiDriver extends WebDriver {
-  override readonly platform = 'api';
+/**
+ * An API over HTTP, with no browser: each `request` step sends one request
+ * to the configured origin, and the observation is that exchange as text. A
+ * recording is an asciicast of the exchanges.
+ */
+export class ApiDriver implements Driver {
+  readonly platform = 'api' as const;
   private readonly origin: string;
   private location: string;
-  private http?: Observation['http'];
+  private exchange?: HttpExchange;
+  private raw?: RawResponse;
   /**
-   * Requests the server failed, reported once on the next observation in the
-   * web driver's `METHOD url → status` form. A 4xx is the API answering
-   * correctly; a 5xx or no answer at all is the server's own failure.
+   * Requests with no answer at all, reported once on the next observation in
+   * the web driver's `METHOD url → error` form. A status is an answer: the
+   * `contract:no-5xx` check owns the verdict on a 5xx.
    */
   private serverFailures: string[] = [];
   /** The terminal that a recording of requests plays in: wide enough for indented JSON. */
   private readonly cast = new CastRecorder({ width: 100, height: 30 });
 
   constructor(private readonly api: ApiOptions) {
-    super({ url: 'about:blank', viewport: api.viewport });
     const endpoint = new URL(api.url);
     if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password)
       throw new Error('API endpoint must be an HTTP URL without embedded credentials');
@@ -92,102 +110,146 @@ export class ApiDriver extends WebDriver {
     this.location = endpoint.href;
   }
 
-  override async connect(): Promise<void> {
-    await super.connect();
-    await this.render('API response evidence', `Ready for requests to ${this.origin}`);
+  /** The request tool offers only the methods of this policy. */
+  get policy(): RequestPolicy {
+    return this.api.policy;
   }
 
-  override async act(action: DriverAction): Promise<ActResult> {
-    if (action.kind === 'wait') return super.act(action);
+  /** The credential sets that the sweep and the explorer can use. */
+  get credentialSets(): ('self' | 'other')[] {
+    return credentialSets(this.api.credentials);
+  }
+
+  /** `app.setup` started the API, and a request is the first contact. */
+  async connect(): Promise<void> {}
+
+  async act(action: DriverAction): Promise<ActResult> {
+    if (action.kind === 'wait') {
+      await new Promise((resolve) => setTimeout(resolve, action.ms));
+      return { ok: true, step: { kind: 'wait', ms: action.ms } };
+    }
     if (action.kind !== 'request') return { ok: false, error: 'Use request to exercise an API endpoint' };
-    let request: Pick<Exchange, 'request' | 'body'> | undefined;
+    let sent: Sent | undefined;
     try {
       const pointers = captureSchema.parse(action.capture ?? {});
       const url = new URL(action.url, this.api.url);
       if (url.origin !== this.origin || url.username || url.password)
         throw new Error('API requests must stay on the configured origin without embedded credentials');
-      if (!this.api.methods.includes(action.method))
-        throw new Error(`Method ${action.method} is not allowed by app.connect.methods`);
+      const verdict = this.api.policy.check(action.method, url.href);
+      if (!verdict.ok) throw new Error(`${action.method} ${url.pathname} is not allowed: ${verdict.reason}`);
       if (action.body && ['GET', 'HEAD'].includes(action.method))
         throw new Error('GET and HEAD cannot have a request body');
-      if (Buffer.byteLength(action.body ?? '') > MAX_RESPONSE_BYTES) throw new Error('Request body exceeds 1 MiB');
-      const headers = new Headers(this.api.headers);
+      if (Buffer.byteLength(action.body ?? '') > MAX_BODY_BYTES) throw new Error('Request body exceeds 1 MiB');
+      const credentials = action.as === 'none' ? {} : this.api.credentials[action.as ?? 'self'];
+      if (!credentials) throw new Error('No second credential set is configured, so nothing can be sent as other');
+      const headers = new Headers(credentials);
       for (const [name, value] of Object.entries(action.headers ?? {})) headers.set(name, value);
       if (['host', 'connection', 'proxy-authorization'].some((name) => headers.has(name)))
         throw new Error('Host, connection and proxy authorization headers cannot be overridden');
-      // Headers carry the credentials, so the recording shows the request line and body only.
-      request = {
-        request: this.api.redact(`${action.method} ${url.pathname}${url.search}`),
-        ...(action.body ? { body: this.api.redact(redactCredentials(action.body)) } : {}),
-      };
-      const response = await fetch(url, {
-        method: action.method,
-        headers,
-        body: action.body,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(this.api.timeoutMs),
-      }).catch((error: unknown) => {
-        this.serverFailed(`${action.method} ${url.href} → ${error instanceof Error ? error.name : 'no response'}`);
-        throw error;
-      });
-      if (response.status >= 500) this.serverFailed(`${action.method} ${url.href} → ${response.status}`);
-      const reader = response.body?.getReader();
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      if (reader) {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            size += value.byteLength;
-            if (size > MAX_RESPONSE_BYTES)
-              throw new Error('Response exceeds 1 MiB; evidence was not silently truncated');
-            chunks.push(value);
-          }
-        } finally {
-          await reader.cancel();
-          reader.releaseLock();
+      let response: Response;
+      // A 429 waits for its turn one time. A second 429 is "try later", not evidence (T7).
+      for (let attempt = 1; ; attempt++) {
+        await this.api.pacer.acquire();
+        sent = { method: action.method, url, headers: action.headers ?? {}, body: action.body, at: Date.now() };
+        response = await fetch(url, {
+          method: action.method,
+          headers,
+          body: action.body,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(this.api.timeoutMs),
+        }).catch((error: unknown) => {
+          this.serverFailed(`${action.method} ${url.href} → ${error instanceof Error ? error.name : 'no response'}`);
+          throw error;
+        });
+        const pace = this.api.pacer.onResponse(response.status, response.headers.get('retry-after'));
+        if (!pace) break;
+        await response.body?.cancel();
+        if (pace === 'rate-limited' || attempt === 2) {
+          this.raw = undefined;
+          this.exchange = undefined;
+          return { ok: false, retryable: true, error: 'rate-limited' };
         }
       }
-      const sanitized = redactCredentials(Buffer.concat(chunks).toString('utf8'));
-      const captures = Object.keys(pointers).length ? responseCaptures(sanitized, pointers) : undefined;
-      const body = this.api.redact(sanitized);
-      this.http = {
-        method: action.method,
-        status: response.status,
-        body,
-        contentType: response.headers.get('content-type'),
-      };
-      this.location = url.href;
-      this.record({
-        ...request,
-        status: response.status,
-        contentType: response.headers.get('content-type'),
-        response: body,
+      const received = await read(response);
+      const all: Record<string, string> = {};
+      received.headers.forEach((value, name) => {
+        all[name] = value;
       });
-      const status = `${action.method} ${url.pathname}${url.search} → ${response.status}`;
-      await this.render(
-        status,
-        `${status}\nContent-Type: ${response.headers.get('content-type') ?? '(absent)'}\n\n${body}`,
-      );
+      this.raw = {
+        status: received.status,
+        headers: all,
+        text: received.text,
+        ...json(received.text),
+      };
+      const exchange = this.toExchange(sent, received);
+      if (Object.keys(pointers).length && received.tooLarge)
+        throw new Error('Response captures need the body, and the response was over 1 MiB');
+      const captures = Object.keys(pointers).length
+        ? responseCaptures(redactCredentials(received.text), pointers)
+        : undefined;
+      this.exchange = exchange;
+      this.location = url.href;
+      this.cast.push(castText(exchange));
       return { ok: true, step: action, captures };
     } catch (error) {
       const message = this.api.redact(String(error));
-      if (request) this.record({ ...request, error: message });
+      // Evidence of an earlier request must not stand for this one.
+      this.raw = undefined;
+      this.exchange = sent ? this.toExchange(sent, message) : undefined;
+      if (this.exchange) this.cast.push(castText(this.exchange));
       return { ok: false, retryable: false, error: message };
     }
   }
 
-  private record(exchange: Exchange): void {
-    this.cast.push(exchangeText(exchange));
+  /**
+   * The exchange as models, issues, and the dashboard see it. This is the one
+   * place that picks the headers an exchange shows and redacts it: the
+   * configured secrets, and any header or JSON key that names a credential.
+   */
+  private toExchange(sent: Sent, answer: Received | string): HttpExchange {
+    const redact = (text: string) => this.api.redact(redactCredentials(text));
+    const request: HttpExchange['request'] = {
+      method: sent.method,
+      path: this.api.redact(`${sent.url.pathname}${sent.url.search}`),
+      headers: Object.fromEntries(
+        Object.entries(sent.headers).map(([name, value]) => [
+          name.toLowerCase(),
+          CREDENTIAL.test(name) ? '[redacted]' : this.api.redact(value),
+        ]),
+      ),
+      ...(sent.body ? { body: redact(sent.body) } : {}),
+    };
+    const exchange = { request, latencyMs: Date.now() - sent.at, at: new Date(sent.at).toISOString() };
+    if (typeof answer === 'string') return { ...exchange, error: answer };
+    return {
+      ...exchange,
+      response: {
+        status: answer.status,
+        headers: Object.fromEntries(
+          RESPONSE_HEADERS.flatMap((name) => {
+            const value = answer.headers.get(name);
+            return value === null ? [] : [[name, this.api.redact(value)]];
+          }),
+        ),
+        contentType: answer.headers.get('content-type'),
+        body: redact(answer.text),
+        bytes: answer.bytes,
+        ...(answer.tooLarge ? { tooLarge: true as const } : {}),
+        ...(answer.stream ? { stream: true as const } : {}),
+      },
+    };
   }
 
-  /** Records the requests and responses as a terminal cast, not the screen: it needs no ffmpeg. */
-  override async startRecording(): Promise<void> {
+  /** The last response before redaction. Never put it in a tool result, a log, or a file. */
+  lastRaw(): RawResponse | undefined {
+    return this.raw;
+  }
+
+  async startRecording(): Promise<void> {
     this.cast.start();
   }
 
-  override async stopRecording(name: string): Promise<string> {
+  async stopRecording(name: string): Promise<string> {
     return this.cast.stop(name);
   }
 
@@ -195,28 +257,83 @@ export class ApiDriver extends WebDriver {
     if (this.serverFailures.length < 50) this.serverFailures.push(this.api.redact(line));
   }
 
-  private async render(title: string, evidence: string): Promise<void> {
-    const page = this.activePage();
-    await page.setContent(
-      '<!doctype html><meta charset="utf-8"><title>API response evidence</title><style>body{font:16px monospace;background:#f6f8fa;color:#17202a;margin:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>API response evidence</h1><pre></pre>',
-    );
-    // Remote response bytes are text, never executable HTML or script.
-    await page.locator('pre').evaluate((element, value) => {
-      element.textContent = value;
-    }, this.api.redact(evidence));
-    await page.evaluate((value) => {
-      document.title = value;
-    }, this.api.redact(title));
-  }
-
-  override async observe(): Promise<Observation> {
-    const observation = await super.observe();
+  async observe(): Promise<Observation> {
+    const request = this.exchange?.request;
     return {
-      ...observation,
+      platform: 'api',
       location: this.api.redact(this.location),
-      windows: undefined,
-      http: this.http,
+      ...(request ? { title: `${request.method} ${request.path}` } : {}),
+      capture: { kind: 'http', ...(this.exchange ? { exchange: this.exchange } : {}) },
+      viewport: { width: 0, height: 0, scale: 1 },
+      elements: [],
+      volatileRegions: [],
+      consoleErrors: [],
       networkErrors: this.serverFailures.splice(0),
+      at: new Date().toISOString(),
     };
   }
+
+  /** A request runs to its end, so nothing changes between steps. */
+  async settle(): Promise<{ frames: number; stable: boolean }> {
+    return { frames: 1, stable: true };
+  }
+
+  snapshot(observation: Observation, screenId: string): ScreenSnapshot {
+    return nativeSnapshot(observation, screenId);
+  }
+
+  async close(): Promise<void> {}
+}
+
+/**
+ * Reads the body up to 1 MiB. A larger body is kept as its size only, never
+ * cut silently. An event stream can run forever, so it stops after its headers.
+ */
+async function read(response: Response): Promise<Received> {
+  if (/^text\/event-stream\b/i.test(response.headers.get('content-type') ?? '')) {
+    await response.body?.cancel();
+    return { status: response.status, headers: response.headers, text: '', bytes: 0, tooLarge: false, stream: true };
+  }
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let tooLarge = false;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_BODY_BYTES) {
+          tooLarge = true;
+          break;
+        }
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+    }
+  }
+  const length = Number(response.headers.get('content-length'));
+  return {
+    status: response.status,
+    headers: response.headers,
+    text: tooLarge ? '' : Buffer.concat(chunks).toString('utf8'),
+    bytes: tooLarge && length > bytes ? length : bytes,
+    tooLarge,
+  };
+}
+
+function json(text: string): { json?: unknown } {
+  try {
+    return { json: JSON.parse(text) };
+  } catch {
+    return {};
+  }
+}
+
+/** An exchange as terminal output, for the recording. */
+function castText(exchange: HttpExchange): string {
+  return `${formatHttpExchange(exchange).replaceAll(/\r?\n/g, '\r\n')}\r\n\r\n`;
 }

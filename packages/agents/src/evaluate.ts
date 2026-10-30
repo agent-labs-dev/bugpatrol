@@ -47,10 +47,13 @@ export async function evaluateScreen(
   input: { screenId: string; observation: Observation; snapshot: ScreenSnapshot },
 ): Promise<Candidate[]> {
   const { screenId, observation, snapshot } = input;
+  // An API exchange has no pixels and no DOM: its checks are the contract (ADR 0008).
+  if (observation.capture.kind === 'http') return [];
   const screenshot =
-    session.lastObservation === observation && session.lastScreenshot
-      ? session.lastScreenshot
+    session.lastObservation === observation && session.lastCapture
+      ? session.lastCapture
       : await session.capture(observation, screenId);
+  if (!screenshot) return [];
   await writeFile(
     join(paths.session(session.root, session.sessionId), `${screenId}.snapshot.json`),
     `${JSON.stringify(snapshot, null, 2)}\n`,
@@ -99,7 +102,7 @@ export async function evaluateScreen(
       route: routeResult,
     });
     await session.workspace.appendCandidate(session.sessionId, candidate);
-    session.emit({ kind: 'candidate', summary: candidate.summary, screenId, screenshot });
+    session.emit({ kind: 'candidate', summary: candidate.summary, screenId, capture: screenshot });
     candidates.push(candidate);
   }
   return candidates;
@@ -227,7 +230,9 @@ export async function closeAbsentChecks(
   const ids = new Set(
     (await session.workspace.listIssues())
       .filter(
-        (issue) => issue.screenId === screenId && ['new', 'filed', 'fixing', 'fix-proposed'].includes(issue.status),
+        (issue) =>
+          issue.screenId === screenId &&
+          ['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy'].includes(issue.status),
       )
       .map((issue) => issue.id),
   );
@@ -291,9 +296,12 @@ function toCandidate(
     detail: entry.detail,
     severity: entry.severity,
     evidence: {
-      screenshot: extra.screenshot,
-      baseline: extra.baseline,
-      diff: extra.diff,
+      capture: {
+        kind: 'image',
+        screenshot: extra.screenshot,
+        ...(extra.baseline ? { baseline: extra.baseline } : {}),
+        ...(extra.diff ? { diff: extra.diff } : {}),
+      },
       routineId: session.anchor.routineId,
       steps: session.trail.slice(session.anchor.index).map(({ at: _at, ...step }) => step as RoutineStep),
     },
