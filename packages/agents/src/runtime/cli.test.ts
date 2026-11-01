@@ -168,7 +168,7 @@ describe('CLI token usage', () => {
       await writeFile(join(root, 'out.json'), out);
       const events: Omit<AgentEvent, 'at' | 'sessionId' | 'role'>[] = [];
       const outcome = await new CliRuntime({ runtime: 'cli', command: `cat ${join(root, 'out.json')}` }).run(
-        task(root),
+        { ...task(root), tools: [] },
         (event) => {
           events.push(event);
         },
