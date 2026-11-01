@@ -34,7 +34,7 @@ const patrolFacts = [
   'Every 30 minutes, the patrol pulls the latest main. It explores and judges only when main has new commits, so a patrol that runs all day costs little when nobody merges.',
   'On the same commit it still finishes the open work: fixes, retests, publish, CI checks, and the GitHub sync. A fix never waits for the next merge.',
   'Close any issue or PR it opened, and the patrol learns from it. It does not open it again.',
-  'The fixer and GitHub stay off until you turn them on. PRs are drafts by default.',
+  'The fixer and GitHub stay off until you turn them on. PRs are ready for review by default.',
 ];
 
 const support = [

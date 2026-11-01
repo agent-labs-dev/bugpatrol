@@ -55,7 +55,7 @@ agents:
   github:
     enabled: false
     repo: owner/name            # optional: default is the repo of app.source
-    pullRequests: draft         # draft | ready
+    pullRequests: ready         # ready | draft
     issueMinSeverity: major     # a bug with no fix becomes an issue at this severity or worse
     labels: [bugpatrol]
     assetsBranch: bugpatrol-assets # the orphan branch that holds report images

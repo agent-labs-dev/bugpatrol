@@ -135,7 +135,7 @@ export const COMMAND_HELP: Record<string, string> = {
   <claim>         a claim id from the review, for example claim-1
 `,
   publish: `bugpatrol publish [--issue <id>]... [--dry-run]
-  Open a draft PR for each fix, and a GitHub issue for each bug at agents.github.issueMinSeverity or worse with no fix.
+  Open a PR for each fix, and a GitHub issue for each bug at agents.github.issueMinSeverity or worse with no fix.
   Needs agents.github.enabled: true and a logged-in gh CLI.
   --dry-run       write the reports to .bugpatrol/runs/publish/, and open nothing
   --issue <id>    publish this issue only

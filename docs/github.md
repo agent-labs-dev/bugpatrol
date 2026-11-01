@@ -23,7 +23,7 @@ The account must be able to push branches, and open PRs and issues, in the repo.
 agents:
   github:
     enabled: true
-    pullRequests: draft          # draft | ready
+    pullRequests: ready          # ready | draft
     issueMinSeverity: major      # a bug with no fix becomes an issue at this severity or worse
 ```
 
@@ -33,7 +33,7 @@ All the settings:
 | --- | --- | --- |
 | `enabled` | `false` | Turns publish and sync on |
 | `repo` | the repo of `app.source` | The repo, as `owner/name` |
-| `pullRequests` | `draft` | Open PRs as drafts, or as ready for review |
+| `pullRequests` | `ready` | Open PRs as ready for review, or as drafts |
 | `issueMinSeverity` | `major` | The lowest severity that becomes a GitHub issue |
 | `labels` | `[bugpatrol]` | The labels on each PR and issue. The first label also finds them again for sync |
 | `assetsBranch` | `bugpatrol-assets` | The branch that holds the report images |

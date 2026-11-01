@@ -414,7 +414,7 @@ It needs a logged-in `gh` CLI with push access to the repo. Check with `gh auth 
 agents:
   github:
     enabled: true
-    pullRequests: draft          # draft | ready
+    pullRequests: ready          # ready | draft
     issueMinSeverity: major
 ```
 
