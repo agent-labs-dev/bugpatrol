@@ -49,6 +49,14 @@ function task(workdir: string): RoleTask {
 }
 
 describe('MCP and CLI runtime', () => {
+  it.each([true, false])('requires completion only when finish is exposed: %s', async (requiresFinish) => {
+    const runtime = new CliRuntime({ runtime: 'cli', command: 'true' });
+    const request = task(tmpdir());
+    request.tools = requiresFinish ? [finish] : [];
+    const outcome = await runtime.run(request, () => {});
+    expect(outcome).toMatchObject({ stop: requiresFinish ? 'error' : 'done', finished: false });
+  });
+
   it.skipIf(!canListen)('serves unchanged schemas to sequential SDK client sessions with a call budget', async () => {
     const server = await serveTools([echo, finish], { maxCalls: 1 });
     try {

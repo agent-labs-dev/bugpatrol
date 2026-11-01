@@ -316,6 +316,17 @@ export class CliRuntime implements Runtime {
       if (parsed.error) {
         return { stop: 'error', steps, costUsd: 0, error: parsed.error, summary: summary || text, finished };
       }
+      // Tool-driven roles must confirm completion; shell-only fixers have no finish tool.
+      if (!finished && task.tools.some((tool) => tool.name === 'finish')) {
+        return {
+          stop: 'error',
+          steps,
+          costUsd: 0,
+          summary: summary || text,
+          finished,
+          error: 'CLI exited without completing the finish tool. Check tool approvals and agent output.',
+        };
+      }
       return {
         stop: 'done',
         steps,

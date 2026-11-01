@@ -24,7 +24,8 @@ const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
   // `-c` parses its value as TOML and keeps a bare URL as a string.
   // `--approve-for-me` is the codex auto mode, in the workspace-write sandbox.
   codex: {
-    tools: 'codex exec --json --skip-git-repo-check -c mcp_servers.bugpatrol.url={mcpUrl} -',
+    tools:
+      'codex exec --json --skip-git-repo-check -c mcp_servers.bugpatrol.url={mcpUrl} -c mcp_servers.bugpatrol.default_tools_approval_mode=approve -',
     fixer: 'codex exec --json --skip-git-repo-check --approve-for-me -',
   },
   // Print mode approves tool calls on its own. The inline config gives kimi
