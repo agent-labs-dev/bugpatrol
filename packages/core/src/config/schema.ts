@@ -465,7 +465,7 @@ export const agentsSchema = z
       .object({
         enabled: z.boolean().default(false),
         repo: z.string().optional(),
-        pullRequests: z.enum(['draft', 'ready']).default('draft'),
+        pullRequests: z.enum(['draft', 'ready']).default('ready'),
         issueMinSeverity: z.enum(['cosmetic', 'minor', 'major', 'critical']).default('major'),
         assetsBranch: z.string().default('bugpatrol-assets'),
         labels: z.array(z.string()).default(['bugpatrol']),
