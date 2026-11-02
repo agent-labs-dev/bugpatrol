@@ -104,3 +104,24 @@ Derived from the diff rather than the absolute state, which is what makes them l
 | Screen added/removed | A route appeared or disappeared versus the AppModel |
 | Affordance changed | A button became a link; a primary action became secondary |
 | Position changed | An element moved beyond a threshold with no content change |
+
+## 8. Terminal and CLI apps - tier 2-3
+
+A terminal UI has no DOM, so the layout invariants in section 1 do not apply. For a `cli` app the
+explorer judges the captured terminal frame the way a user would, and each check must still convert
+into a one-sentence finding that names a consequence.
+
+| Detector | Signal |
+| -------- | ------ |
+| Column misalignment | A header column no longer lines up with the rows under it |
+| Wide-character overflow | A CJK, fullwidth or emoji title overflows its column and hides the columns after it |
+| Truncation | A long title, path or branch clips mid-character instead of ending in an ellipsis |
+| Narrow-terminal collision | At a small width the fixed columns collide, or a title disappears, instead of columns dropping |
+| Status colour/word mismatch | A row's colour disagrees with its status word, for example a yellow "working" |
+| Empty state | A zero-item list renders as a blank screen with no header or message |
+| Unstable header | The header scrolls away with the content, or moves when the list refreshes |
+| Undiscoverable keys | An action has a keybinding that is not shown anywhere in the UI |
+
+Text-shortening helpers in a TUI must measure terminal columns, not UTF-16 code units: every wide
+character otherwise undoes the layout. These detectors are agent-driven, exactly like section 6:
+the explorer sees the captured frames and the judge decides.
