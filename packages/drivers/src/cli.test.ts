@@ -373,12 +373,20 @@ describe('CliDriver isolation', () => {
         "tmux new-session -d -s bp 'bun app.ts'",
         'FOO=1 /usr/bin/tmux new -d',
         "sh -c 'screen -dmS bp app'",
+        'bash -lc "tmux new -d"',
+        "eval 'setsid app'",
         'setsid app; echo done',
       ]) {
         expect(await driver.act({ kind: 'run', command }), command).toMatchObject({ ok: false });
         expect(await driver.act({ kind: 'session', op: 'start', command }), command).toMatchObject({ ok: false });
       }
-      for (const command of ['echo a && echo b', 'sleep 0 & wait', 'echo screen | grep screen']) {
+      for (const command of [
+        'echo a && echo b',
+        'sleep 0 & wait',
+        'echo screen | grep screen',
+        `echo screen | grep "screen"`,
+        "echo 'tmux' | grep -c 'tmux'",
+      ]) {
         expect(await driver.act({ kind: 'run', command }), command).toMatchObject({ ok: true });
       }
     }),

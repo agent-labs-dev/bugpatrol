@@ -52,10 +52,12 @@ const HOST_ENV =
  * A command that would run a program outside the terminal Bugpatrol drives:
  * a terminal multiplexer, whose server keeps the host's environment and
  * sign-ins, or a program that leaves the process group a stop kills. Only a
- * program in the place of a command counts, so `grep screen` runs.
+ * program in the place of a command counts, so `grep screen` and
+ * `grep "screen" app.log` run: a quote opens a command only after
+ * `sh -c` (or bash, zsh, `-lc` and the like) or `eval`.
  */
 const ESCAPE =
-  /(^|[;|&(`'"]|\n)\s*((exec|command|sudo|env|nice|time)\s+)*([A-Za-z_]\w*=\S*\s+)*(\S*\/)?(tmux|screen|byobu|zellij|abduco|dtach|setsid|systemd-run|daemonize|start-stop-daemon)(?=$|[\s;|&)'"`])/;
+  /(^|[;|&(`]|\n|(?:\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c|\beval)\s+['"])\s*((exec|command|sudo|env|nice|time)\s+)*([A-Za-z_]\w*=\S*\s+)*(\S*\/)?(tmux|screen|byobu|zellij|abduco|dtach|setsid|systemd-run|daemonize|start-stop-daemon)(?=$|[\s;|&)'"`])/;
 
 const OUTSIDE =
   'Bugpatrol refuses a command that starts a program outside its own terminal, such as tmux, screen or setsid: start the program with start_session, and drive it with press';

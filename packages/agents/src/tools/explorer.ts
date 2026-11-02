@@ -468,7 +468,67 @@ function compactSteps(steps: RoutineStep[]): RoutineStep[] {
       if (left) compacted.splice(earlier + 1);
     }
   }
-  return compacted;
+  // A command that only shows something leaves nothing behind for the next
+  // step, so only the last one counts: the explorer's reads of the source
+  // are not how the app reaches this state.
+  return compacted.filter((step, index) => index === compacted.length - 1 || !showsOnly(step));
+}
+
+/** Programs that print what they are given and change nothing. */
+const READERS = new Set([
+  'cat',
+  'head',
+  'tail',
+  'less',
+  'more',
+  'ls',
+  'tree',
+  'pwd',
+  'echo',
+  'printf',
+  'grep',
+  'egrep',
+  'rg',
+  'ag',
+  'find',
+  'fd',
+  'wc',
+  'file',
+  'stat',
+  'du',
+  'which',
+  'nl',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'column',
+  'jq',
+  'diff',
+  'true',
+]);
+/** git subcommands that only read the repository. */
+const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', 'ls-files', 'rev-parse', 'branch']);
+
+/**
+ * Whether a `run` step only shows something: every command in it is a reader,
+ * `sed` only prints, and nothing is redirected into a file. Anything unsure
+ * counts as a change, so a routine never loses a step that sets up state.
+ */
+export function showsOnly(step: RoutineStep): boolean {
+  if (step.kind !== 'run' || step.input) return false;
+  const command = step.command.replace(/\d?>\s*\/dev\/null|\d>&\d/g, '');
+  if (/>|\$\(|`/.test(command)) return false;
+  return command.split(/&&|\|\||[;|\n]/).every((part) => {
+    const [program = '', ...args] = part.trim().split(/\s+/);
+    if (program === '') return true;
+    if (program === 'sed') return args.includes('-n') && !args.some((arg) => /^-\w*i/.test(arg));
+    if (program === 'find' || program === 'fd')
+      return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint)|^--exec/.test(arg));
+    if (program === 'sort') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
+    if (program === 'git') return GIT_READERS.has(args.find((arg) => !arg.startsWith('-')) ?? '');
+    return READERS.has(program);
+  });
 }
 
 function sameStep(left: RoutineStep, right: RoutineStep): boolean {

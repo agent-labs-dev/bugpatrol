@@ -11,7 +11,7 @@ import { runExplorer } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
 import { FakeDriver } from './testing/fake-driver.js';
-import { explorerTools } from './tools/explorer.js';
+import { explorerTools, showsOnly } from './tools/explorer.js';
 import type { Runtime } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -48,6 +48,34 @@ async function explore(app: Record<string, unknown> = {}) {
   const outcome = await runExplorer(session, runtime);
   return { system: systems[0]!, logs, outcome };
 }
+
+describe('a command that only shows something', () => {
+  const run = (command: string): RoutineStep => ({ kind: 'run', command });
+
+  it('is a read of the source: printing, listing, searching, read-only git', () => {
+    for (const command of [
+      'ls tools; head -40 tests/api_spec.lua',
+      'sed -n 300,420p Core/Plan.lua',
+      'grep -rn foo src 2>/dev/null | head',
+      'git log --oneline -5',
+    ])
+      expect(showsOnly(run(command)), command).toBe(true);
+  });
+
+  it('is not anything that could leave state behind', () => {
+    for (const command of [
+      'echo x > notes.txt',
+      "sed -i 's/a/b/' file",
+      'find . -name "*.tmp" -delete',
+      'luajit -e "print(1)"',
+      'cat $(make path)',
+      'git checkout main',
+      'for s in a b; do echo $s; done',
+    ])
+      expect(showsOnly(run(command)), command).toBe(false);
+    expect(showsOnly({ kind: 'run', command: 'cat', input: 'typed' })).toBe(false);
+  });
+});
 
 describe('the explorer prompt', () => {
   it('gives an api explorer requests and endpoints, not screens', () => {
@@ -321,6 +349,8 @@ draw();
       const loop = await run('run_command', { command: 'for s in a b; do echo "item-${s}"; done' });
       expect(loop.text).toContain('item-a\nitem-b');
 
+      // A read of the source shows something and sets nothing up.
+      expect((await run('run_command', { command: 'head -3 counter.cjs' })).isError).toBeFalsy();
       expect((await run('start_session', { command: 'node counter.cjs' })).text).toContain('The program is running.');
       expect((await run('wait_for', { text: 'count 0' })).isError).toBeFalsy();
       const pressed = await run('press', { keys: ['j', 'j', '{{PIN}}', 'enter'] });
