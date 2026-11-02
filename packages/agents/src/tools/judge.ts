@@ -169,17 +169,22 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
         'File a real user problem with an 80-character title, Markdown body, and one-sentence reason; ' +
         'merge candidates with the same cause. To add candidates to an open or fixed issue, pass its issue_id and a ' +
         'reason; the title, body and severity are then not needed.',
-      inputSchema: schema(
-        {
-          candidate_ids: { type: 'array', items: string },
-          issue_id: string,
-          title: string,
-          body: string,
-          severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
-          reason: string,
-        },
-        ['candidate_ids', 'reason'],
-      ),
+      inputSchema: {
+        ...schema(
+          {
+            candidate_ids: { type: 'array', items: string },
+            issue_id: string,
+            title: string,
+            body: string,
+            severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
+            reason: string,
+          },
+          ['candidate_ids', 'reason'],
+        ),
+        // A new issue needs the title, body and severity; adding to an open issue passes issue_id
+        // instead. State it in the schema, or a model that fills only the required keys omits them.
+        anyOf: [{ required: ['issue_id'] }, { required: ['title', 'body', 'severity'] }],
+      },
       async run(input) {
         if (typeof input.reason !== 'string' || !input.reason.trim()) {
           return { ...response('A one-sentence reason is required'), isError: true };
