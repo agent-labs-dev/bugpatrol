@@ -236,7 +236,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
           app = await startApp(config.app, { root, vars, emit: options.onLog, profile: config.profile });
           driver = (options.createDriver ?? makeDriver)(
             config,
-            vars.resolve.bind(vars),
+            vars.resolveStrict.bind(vars),
             (value) => vars.redact(value) as string,
             resolve(root, config.app.source),
             app.contract,

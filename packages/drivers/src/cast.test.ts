@@ -289,6 +289,33 @@ describe('cast', () => {
     expect(plain.data.equals(png.data)).toBe(false);
   });
 
+  it('redacts a secret that wraps onto the next row in the screen text, not only in the PNG', async () => {
+    const secret = 'hunter2-very-secret';
+    const redact = (value: string) => value.replaceAll(secret, '{{TOKEN}}');
+    const terminal = new Terminal(10, 3);
+    terminal.write(`\u001b[?25l${secret} ok`);
+    await terminal.flush();
+    const text = terminal.screenTextRedacted(redact);
+    expect(text).not.toContain('hunter2');
+    expect(text).not.toContain('very-secret');
+    expect(text).toContain('{{TOKEN}}');
+    // A secret on one line is redacted in place, and the rest of the screen is kept.
+    const wide = new Terminal(40, 2);
+    wide.write(`key: ${secret}\r\ndone`);
+    await wide.flush();
+    expect(wide.screenTextRedacted(redact)).toBe('key: {{TOKEN}}\ndone');
+  });
+
+  it('hides the whole screen text when a secret cannot be lined up with the rows', async () => {
+    const terminal = new Terminal(20, 2);
+    terminal.write('key: hunter2-very-secret');
+    await terminal.flush();
+    // Redaction that removes the secret instead of putting a placeholder in its place.
+    const text = terminal.screenTextRedacted((value) => value.replaceAll('hunter2-very-secret', ''));
+    expect(text).not.toContain('hunter2');
+    expect(text.split('\n').every((row) => /^\u2588*$/.test(row))).toBe(true);
+  });
+
   it('redacts a recording as one stream, so a secret split across chunks is still found', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-cast-'));
     try {
@@ -304,6 +331,27 @@ describe('cast', () => {
       expect(text).not.toContain('hunter2');
       expect(text).not.toContain('very-secret');
       expect((await readCast(file)).events.map(([, output]) => output)).toEqual(['key: {{TOKEN}}', '\r\n', 'done\r\n']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts a secret that escape codes break up, in the recording and the GIF rendered from it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-cast-'));
+    try {
+      const recorder = new CastRecorder({ width: 80, height: 24 }, (value) =>
+        value.replaceAll('hunter2-very-secret', '{{TOKEN}}'),
+      );
+      recorder.start();
+      // The program colours each half of the secret, so the raw stream has escapes between its characters.
+      recorder.push('key: \u001b[31mhunter2-\u001b[0m\u001b[32mvery-secret\u001b[0m\r\n');
+      const file = await recorder.stop(join(dir, 'run'));
+      const text = await readFile(file, 'utf8');
+      expect(text).not.toContain('hunter2');
+      expect(text).not.toContain('very-secret');
+      const output = (await readCast(file)).events.map(([, chunk]) => chunk).join('');
+      expect(output).toContain('{{TOKEN}}');
+      expect(await castGif(file, join(dir, 'run.gif'))).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

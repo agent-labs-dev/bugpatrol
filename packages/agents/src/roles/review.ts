@@ -354,7 +354,7 @@ async function withBuild<T>(
         driver = undefined;
         const next = (ctx.opts.createDriver ?? makeDriver)(
           config,
-          vars.resolve.bind(vars),
+          vars.resolveStrict.bind(vars),
           (value) => vars.redact(value) as string,
           worktree,
           app?.contract,

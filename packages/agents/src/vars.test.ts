@@ -38,6 +38,18 @@ describe('Vars', () => {
     expect(vars.resolve('echo ${HOME} ${TOKEN}')).toBe('echo ${HOME} top-secret');
   });
 
+  it('fails an unknown ${name} in a driver config value instead of sending the literal text', () => {
+    const vars = new Vars([], { SHELL_VAR: 'host' });
+    expect(() => vars.resolveStrict('http://localhost:${PORT}')).toThrow('Unknown variable PORT');
+    expect(() => vars.resolveStrict('Bearer ${TOKEN}')).toThrow('Unknown variable TOKEN');
+    // A declared value and a shell variable that only turns up for trusted setup still resolve as before.
+    expect(vars.resolveStrict('port ${SHELL_VAR}')).toBe('port host');
+    const declared = new Vars(['TOKEN'], { TOKEN: 'top-secret' });
+    expect(declared.resolveStrict('Bearer ${TOKEN}')).toBe('Bearer top-secret');
+    // The shell-lenient resolver stays for commands that the shell expands.
+    expect(vars.resolve('echo ${PORT}')).toBe('echo ${PORT}');
+  });
+
   it('keeps trusted setup expansion separate from agent authority', () => {
     const vars = new Vars([], { SETUP_TOKEN: 'setup-only' });
     expect(vars.resolveConfig('${SETUP_TOKEN}')).toBe('setup-only');

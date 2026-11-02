@@ -200,9 +200,10 @@ const prompt = (command: string) => `\u001b[1;32m$\u001b[0m ${command}\r\n`;
  * the program shows now. A recording is an asciicast of both.
  *
  * The output of a `run` is redacted line by line, so a secret that arrives
- * in two pieces is still found. A session's screen text is redacted whole,
- * the cells of a secret on its screenshot are blanked, and the recording is
- * redacted as one stream when it stops.
+ * in two pieces is still found. A session's screen text and the cells of a
+ * secret on its screenshot are both redacted with the rows read as one text,
+ * so a secret the app wrapped onto the next row is found, and the recording
+ * is redacted as one stream when it stops.
  */
 export class CliDriver implements Driver {
   readonly platform = 'cli' as const;
@@ -504,7 +505,7 @@ export class CliDriver implements Driver {
       ? {
           command: session.command,
           ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }),
-          output: this.redact(session.screen.screenText()),
+          output: session.screen.screenTextRedacted(this.redact),
           screen: true,
         }
       : this.last && {

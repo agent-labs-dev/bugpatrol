@@ -510,8 +510,20 @@ const READERS = new Set([
   'diff',
   'true',
 ]);
-/** git subcommands that only read the repository. */
-const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', 'ls-files', 'rev-parse', 'branch']);
+/** git subcommands that only read the repository. `branch` reads only with a list flag. */
+const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', 'ls-files', 'rev-parse']);
+/** `git branch` lists only with these flags: any other word makes or moves a branch. */
+const BRANCH_LIST_FLAGS =
+  /^--(list|show-current|contains|merged|no-merged|points-at|sort|format|verbose|all|remotes)$|^-[alrv]+$/;
+
+/**
+ * The longest a `wait_for` may take: the command time limit of the config, up
+ * to the ten minutes its schema allows, and never more than the caller asked.
+ */
+export function waitTimeoutMs(limitMs: number, requested?: unknown): number {
+  const limit = Math.min(600_000, limitMs);
+  return Math.max(0, Math.min(limit, Number(requested ?? 5000) || 5000));
+}
 
 /**
  * Whether a `run` step only shows something: every command in it is a reader,
@@ -521,15 +533,28 @@ const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', '
 export function showsOnly(step: RoutineStep): boolean {
   if (step.kind !== 'run' || step.input) return false;
   const command = step.command.replace(/\d?>\s*\/dev\/null|\d>&\d/g, '');
-  if (/>|\$\(|`/.test(command)) return false;
+  // `<(cmd)` and `>(cmd)` run a command, and a redirect or substitution writes something.
+  if (/>|\$\(|`|<\(/.test(command)) return false;
   return command.split(/&&|\|\||[;|\n]/).every((part) => {
     const [program = '', ...args] = part.trim().split(/\s+/);
     if (program === '') return true;
-    if (program === 'sed') return args.includes('-n') && !args.some((arg) => /^-\w*i/.test(arg));
+    // A sed script that writes a file or runs a command is not a read: `1w out`, `w out`, `1e cmd`.
+    if (program === 'sed') {
+      if (!args.includes('-n') || args.some((arg) => /^-\w*i/.test(arg))) return false;
+      return !/(^|[\s;'"])[0-9,$/]*[wWe](\s|$|['"])/.test(part);
+    }
     if (program === 'find' || program === 'fd')
       return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint)|^--exec/.test(arg));
     if (program === 'sort') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
-    if (program === 'git') return GIT_READERS.has(args.find((arg) => !arg.startsWith('-')) ?? '');
+    // `uniq in out` writes out; a lone `uniq` or `uniq in` only prints.
+    if (program === 'uniq') return args.filter((arg) => !arg.startsWith('-')).length < 2;
+    // `tree -o file` writes file.
+    if (program === 'tree') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
+    if (program === 'git') {
+      const sub = args.find((arg) => !arg.startsWith('-')) ?? '';
+      if (sub === 'branch') return args.slice(1).every((arg) => BRANCH_LIST_FLAGS.test(arg));
+      return GIT_READERS.has(sub);
+    }
     return READERS.has(program);
   });
 }
@@ -776,7 +801,10 @@ export function explorerTools(
               timeoutMs: { type: 'number', description: 'Default: 5000. At most the command time limit.' },
             }),
             run(input: Record<string, unknown>) {
-              const timeoutMs = Math.max(0, Math.min(60_000, Number(input.timeoutMs ?? 5000) || 5000));
+              // The command time limit is the longest a wait can take, and the
+              // schema allows up to ten minutes: honour a configured limit above
+              // a minute instead of capping every wait at 60 s.
+              const timeoutMs = waitTimeoutMs(session.config.app.connect.cli.timeoutMs, input.timeoutMs);
               const wanted = input.text === undefined || input.text === '' ? undefined : arg(input, 'text');
               return act(
                 session,

@@ -60,16 +60,25 @@ export class Vars {
    * as written.
    */
   resolve(text: string): string {
-    return this.interpolate(text, false);
+    return this.interpolate(text, false, true);
   }
 
   /** Only repository-owned setup commands and paths may read the host environment. */
   resolveConfig(text: string): string {
-    return this.interpolate(text, true);
+    return this.interpolate(text, true, true);
+  }
+
+  /**
+   * A value from the config that the driver resolves, such as `connect.url`,
+   * a header or `connect.cli.env`. A shell never expands these, so an unknown
+   * `${NAME}` is a mistake in the config and fails here, not in the app.
+   */
+  resolveStrict(text: string): string {
+    return this.interpolate(text, false, false);
   }
 
   /** `{{NAME|missing}}` gives an id of the same shape as the value that does not exist (see `missingId`). */
-  private interpolate(text: string, trusted: boolean): string {
+  private interpolate(text: string, trusted: boolean, lenientShell: boolean): string {
     const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
     return text.replace(
       placeholder,
@@ -80,10 +89,15 @@ export class Vars {
           return missing ? missingId(value) : value;
         }
         if (env !== undefined) {
-          if (!trusted) return match;
+          if (!trusted && lenientShell) return match;
           const configured = this.env[name];
-          if (configured !== undefined) this.configValues.set(name, configured);
-          return configured ?? match;
+          if (configured !== undefined) {
+            this.configValues.set(name, configured);
+            return configured;
+          }
+          if (!lenientShell)
+            throw new Error(`Unknown variable ${name}. Available: ${this.names().join(', ') || '(none)'}`);
+          return match;
         }
         throw new Error(`Unknown variable ${name}. Available: ${this.names().join(', ') || '(none)'}`);
       },

@@ -4,7 +4,7 @@ import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
 import * as gifenc from 'gifenc';
 import { PNG } from 'pngjs';
-import { secretSpans } from './secret-spans.js';
+import { secretSpans, withoutEscapes } from './secret-spans.js';
 import { GIF_MAX_BYTES } from './video.js';
 
 /**
@@ -52,6 +52,8 @@ const PALETTE: TerminalRgb[] = [
 const TEXT: TerminalRgb = [0xd4, 0xd4, 0xd4];
 const BACKGROUND: TerminalRgb = [0x1e, 0x1e, 0x1e];
 const GLYPH = { width: 8, height: 16 };
+/** What a screen row shows when a secret on it cannot be isolated. */
+const HIDDEN = '\u2588';
 /** GIFs remain indexed, but use the complete xterm 256-color palette. PNGs do not use this palette. */
 const GIF_PALETTE: TerminalRgb[] = [
   ...PALETTE,
@@ -220,15 +222,54 @@ export class Terminal {
     );
   }
 
+  /** The visible rows of the screen, with trailing spaces removed. */
+  screenRows(): string[] {
+    const buffer = this.emulator.buffer.active;
+    const rows = Array.from(
+      { length: this.rows },
+      (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? '',
+    ).map((row) => row.trimEnd());
+    while (rows.length && !rows.at(-1)) rows.pop();
+    return rows;
+  }
+
   /** The visible screen only, including the alternate screen when it is active. */
   screenText(): string {
-    const buffer = this.emulator.buffer.active;
-    return trimLines(
-      Array.from(
-        { length: this.rows },
-        (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? '',
-      ),
-    );
+    return this.screenRows().join('\n');
+  }
+
+  /**
+   * The visible screen as text with each secret replaced, read the way
+   * `secretCells` reads the grid: the rows are joined with no separator, so a
+   * secret that the app wrapped onto the next row is found. When the redacted
+   * text cannot be lined up with the rows, every row is hidden.
+   */
+  screenTextRedacted(redact: (value: string) => string): string {
+    const rows = this.screenRows();
+    const text = rows.join('');
+    const spans = secretSpans(text, redact);
+    if (!spans) return rows.map((row) => HIDDEN.repeat(row.length)).join('\n');
+    if (!spans.length) return rows.join('\n');
+    const out: string[] = [];
+    let offset = 0;
+    for (const row of rows) {
+      const start = offset;
+      const end = offset + row.length;
+      offset = end;
+      let line = '';
+      let at = start;
+      for (const span of spans) {
+        if (span.end <= start || span.start >= end) continue;
+        const from = Math.max(span.start, at);
+        if (from > at) line += text.slice(at, from);
+        // The placeholder stands once, in the row where the secret starts.
+        if (span.start >= start) line += span.placeholder;
+        at = Math.min(span.end, end);
+      }
+      line += text.slice(at, end);
+      out.push(line);
+    }
+    return out.join('\n');
   }
 
   /** Returns the visible grid with xterm colors resolved to RGB tuples. */
@@ -745,14 +786,22 @@ export class CastRecorder {
 
 /**
  * The output events with each secret replaced, across the events it spans:
- * its placeholder goes in the event where it starts. When the redacted
- * stream cannot be lined up with the output, the output is one event,
- * redacted whole.
+ * its placeholder goes in the event where it starts. A program may break a
+ * secret up with escape codes, so the match is made on the stream without
+ * them and mapped back to the raw output. When the redacted stream cannot be
+ * lined up with the output, the output is one event, redacted whole.
  */
 function redactEvents(events: CastEvent[], redact: (value: string) => string): CastEvent[] {
   const output = events.filter(([, , kind]) => kind !== 'r');
   const text = output.map(([, chunk]) => chunk).join('');
-  const spans = secretSpans(text, redact);
+  const { plain, at } = withoutEscapes(text);
+  const visible = secretSpans(plain, redact);
+  // A span in `plain` becomes the raw range that holds it, escape codes and all.
+  const spans = visible?.map((span) => ({
+    start: at[span.start]!,
+    end: at[span.end - 1]! + 1,
+    placeholder: span.placeholder,
+  }));
   if (!spans) return [...events.filter(([, , kind]) => kind === 'r'), [output[0]?.[0] ?? 0, redact(text)]];
   const result: CastEvent[] = [];
   let offset = 0;

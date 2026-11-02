@@ -14,6 +14,10 @@ A repo can test more than one app config, for example its desktop app with `bugp
 
 The default config keeps the paths it always had. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folder of that profile: `explore`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, and the dashboard.
 
+### Migrating an existing non-default config
+
+Before profiles existed, a config such as `--config .bugpatrol/api.yml` kept its app map, routines and endpoint inventory in `.bugpatrol/` itself. The first command that uses that config and finds no `.bugpatrol/<profile>/` moves `appmap.json`, `endpoints.yml` and the routines in `.bugpatrol/routines/` there, and prints what it moved. Commit that folder. Issues filed before the move name `bugpatrol:routine repro-x` without a profile, so they replay from `.bugpatrol/routines/`; move those files too if you keep a default config as well.
+
 `.bugpatrol/runs/` stays one folder for all profiles. Sessions, issues and fixes have unique ids, so the dashboard and `bugpatrol issue` see the work of every profile. The memory of lessons is shared too, and so is the review record of a pull request: review a pull request with one profile at a time. The `bugpatrol-state` branch (`agents.patrol.state: branch`) shares the app map and the routines of the default config only.
 
 ## The `.bugpatrol/` folder

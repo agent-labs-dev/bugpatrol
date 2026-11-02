@@ -164,7 +164,7 @@ export async function retestFix(
     });
     driver = (deps.createDriver ?? makeDriver)(
       config,
-      vars.resolve.bind(vars),
+      vars.resolveStrict.bind(vars),
       (value) => vars.redact(value) as string,
       options.build === 'main' ? resolve(root, config.app.source) : fix.worktree,
       app.contract,
@@ -536,6 +536,8 @@ export async function runFixCycle(
       if (deps.isInterrupted?.()) break;
       const issue = await workspace.readIssue(fix.issueId);
       if (!issue) continue;
+      // `runs/fixes` is shared by every profile; only retest the active one's issues.
+      if (!deps.issueIds && (issue.evidence?.reproProfile ?? undefined) !== config.profile) continue;
       const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, deps);
       applyRetest(config, fix, result);
       if (fix.status === 'retesting' && result.outcome === 'not-fixed') retryIds.push(fix.issueId);

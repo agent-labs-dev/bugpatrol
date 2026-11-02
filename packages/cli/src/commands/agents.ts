@@ -389,7 +389,7 @@ export async function runAgentCommand(
     app = await startApp(config.app, { root, vars, emit: log, profile: config.profile });
     driver = createDriver(
       config,
-      vars.resolve.bind(vars),
+      vars.resolveStrict.bind(vars),
       (value) => vars.redact(value) as string,
       resolve(root, config.app.source),
       app.contract,

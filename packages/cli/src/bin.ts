@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { cleanWorktrees, syncGitHub } from '@bugpatrol/agents';
-import { BugpatrolError, ExitCode, findProjectRoot, loadConfig, moveRoutines } from '@bugpatrol/core';
+import {
+  BugpatrolError,
+  ExitCode,
+  findProjectRoot,
+  loadConfig,
+  moveProfileFiles,
+  moveRoutines,
+  profileOf,
+} from '@bugpatrol/core';
 import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
@@ -44,6 +52,11 @@ try {
   }
   const moved = moveRoutines(root);
   if (moved) process.stderr.write(`${moved}\n`);
+  // A repo that used a non-default `--config` before profiles kept its app
+  // map, routines and endpoint inventory in the shared folder. Move them into
+  // that config's folder once, so they are not silently lost.
+  const adopted = selected.configFile ? moveProfileFiles(root, profileOf(root, selected.configFile)) : undefined;
+  if (adopted) process.stderr.write(`${adopted}\n`);
   switch (command) {
     case '--version':
     case '-v':

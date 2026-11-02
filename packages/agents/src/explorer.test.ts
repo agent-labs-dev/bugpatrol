@@ -11,7 +11,7 @@ import { runExplorer, wasBlocked } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
 import { FakeDriver } from './testing/fake-driver.js';
-import { explorerTools, showsOnly } from './tools/explorer.js';
+import { explorerTools, showsOnly, waitTimeoutMs } from './tools/explorer.js';
 import type { Runtime } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -90,6 +90,10 @@ describe('a command that only shows something', () => {
       'sed -n 300,420p Core/Plan.lua',
       'grep -rn foo src 2>/dev/null | head',
       'git log --oneline -5',
+      'git branch --list',
+      'git branch -a',
+      'uniq in.txt',
+      'tree src',
     ])
       expect(showsOnly(run(command)), command).toBe(true);
   });
@@ -102,10 +106,27 @@ describe('a command that only shows something', () => {
       'luajit -e "print(1)"',
       'cat $(make path)',
       'git checkout main',
+      'git branch foo',
+      'uniq in.txt out.txt',
+      'tree -o out.txt src',
+      "sed -n '1w out.txt' file",
+      "sed -n '1e touch x' file",
+      'cat <(touch x)',
       'for s in a b; do echo $s; done',
     ])
       expect(showsOnly(run(command)), command).toBe(false);
     expect(showsOnly({ kind: 'run', command: 'cat', input: 'typed' })).toBe(false);
+  });
+});
+
+describe('a cli wait', () => {
+  it('may last as long as the configured command limit, above a minute', () => {
+    // A slow terminal app that draws its first screen after 90 s.
+    expect(waitTimeoutMs(120_000, 90_000)).toBe(90_000);
+    expect(waitTimeoutMs(120_000, 900_000)).toBe(120_000);
+    expect(waitTimeoutMs(60_000, 30_000)).toBe(30_000);
+    expect(waitTimeoutMs(600_000, 600_000)).toBe(600_000);
+    expect(waitTimeoutMs(120_000)).toBe(5000);
   });
 });
 

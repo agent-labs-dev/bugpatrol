@@ -8,6 +8,7 @@ import {
   findProjectRoot,
   instructionsPath,
   legacyLayout,
+  moveProfileFiles,
   moveRoutines,
   paths,
   profileOf,
@@ -67,10 +68,29 @@ describe('profiles', () => {
     expect(paths.memory(root)).toBe(join(root, '.bugpatrol', 'runs', 'memory.json'));
   });
 
-  it('refuses a config name that would take a folder Bugpatrol uses', () => {
+  it('refuses a config name that would take a folder Bugpatrol uses, in any letter case', () => {
     const root = project();
     expect(() => profileOf(root, '.bugpatrol/runs.yml')).toThrow(/cannot use as a folder/);
     expect(() => profileOf(root, '.bugpatrol/routines.yml')).toThrow(/cannot use as a folder/);
+    // macOS and Windows would resolve these to runs/ and routines/.
+    expect(() => profileOf(root, '.bugpatrol/Runs.yml')).toThrow(/cannot use as a folder/);
+    expect(() => profileOf(root, '.bugpatrol/Routines.yml')).toThrow(/cannot use as a folder/);
+  });
+
+  it('moves the shared app map, routines and endpoints into a profile once, when it has none', () => {
+    const root = project();
+    mkdirSync(paths.routines(root), { recursive: true });
+    writeFileSync(paths.appMap(root), '{}');
+    writeFileSync(paths.endpointInventory(root), 'endpoints: []');
+    writeFileSync(paths.routine(root, 'enter-app'), '{}');
+    const message = moveProfileFiles(root, 'api');
+    expect(message).toMatch(/Moved the app map/);
+    expect(existsSync(join(root, '.bugpatrol', 'api', 'appmap.json'))).toBe(true);
+    expect(existsSync(join(root, '.bugpatrol', 'api', 'routines', 'enter-app.json'))).toBe(true);
+    expect(existsSync(join(root, '.bugpatrol', 'api', 'endpoints.yml'))).toBe(true);
+    // The second run leaves the profile alone, since it already has its files.
+    expect(moveProfileFiles(root, 'api')).toBeUndefined();
+    expect(moveProfileFiles(root)).toBeUndefined();
   });
 
   it('lists the app maps and routine folders of every profile, and nothing in runs/', () => {

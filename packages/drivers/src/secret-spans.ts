@@ -1,7 +1,34 @@
+// biome-ignore-all lint/suspicious/noControlCharactersInRegex: ANSI escape sequences are control characters
 /** A part of a text that redaction replaces: `[start, end)` and the placeholder that stands for it. */
 export type SecretSpan = { start: number; end: number; placeholder: string };
 
 const PLACEHOLDER = /\{\{[A-Za-z_][A-Za-z_0-9]*\}\}/g;
+/** One ANSI escape sequence: CSI, OSC (with BEL or ST), or a two-character escape. */
+const ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/g;
+
+/**
+ * `text` without its ANSI escape sequences, and where each remaining
+ * character came from. A secret that a program breaks up with escape codes is
+ * contiguous here, so redaction can find it, and `at` maps a match back to the
+ * raw stream that a cast stores.
+ */
+export function withoutEscapes(text: string): { plain: string; at: number[] } {
+  let plain = '';
+  const at: number[] = [];
+  let from = 0;
+  for (const match of text.matchAll(ESCAPE)) {
+    for (let index = from; index < match.index; index++) {
+      plain += text[index];
+      at.push(index);
+    }
+    from = match.index + match[0].length;
+  }
+  for (let index = from; index < text.length; index++) {
+    plain += text[index];
+    at.push(index);
+  }
+  return { plain, at };
+}
 
 /**
  * Where `redact` would replace a secret in `text`. Redaction only replaces

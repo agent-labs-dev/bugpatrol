@@ -270,7 +270,16 @@ export async function runFixer(
       )
       .map((fix) => [fix.issueId, fix]),
   );
+  // `runs/issues` is shared by every profile, but a fix edits this profile's
+  // app: an issue another profile filed would be retested against the wrong
+  // config, so only the active profile's issues are eligible.
+  const owned = new Set(
+    all
+      .filter((issue) => (issue.evidence?.reproProfile ?? undefined) === session.workspace.profile)
+      .map((issue) => issue.id),
+  );
   const eligible = all.filter((issue) => {
+    if (!owned.has(issue.id)) return false;
     if (issue.status === 'dismissed') return false;
     if (opts.issueIds && !opts.issueIds.includes(issue.id)) return false;
     if (

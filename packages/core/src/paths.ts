@@ -60,7 +60,8 @@ export function profileOf(root: string, configFile?: string): string | undefined
   const file = resolve(root, configFile);
   if (file === join(dir(root), layout(root).config)) return undefined;
   const name = basename(file).replace(/\.ya?ml$/i, '');
-  if (RESERVED.has(name) || !/^[A-Za-z0-9_][\w.-]*$/.test(name))
+  // macOS and Windows resolve `Runs` to `runs`, so the check is case-insensitive.
+  if (RESERVED.has(name.toLowerCase()) || !/^[A-Za-z0-9_][\w.-]*$/.test(name))
     throw new ConfigError(
       `The config file ${basename(file)} gives the profile name "${name}", which Bugpatrol cannot use as a folder. Rename the file.`,
     );
@@ -153,7 +154,7 @@ export function agentFiles(root: string): string[] {
   let profiles: string[] = [];
   try {
     profiles = readdirSync(dir(root), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !RESERVED.has(entry.name))
+      .filter((entry) => entry.isDirectory() && !RESERVED.has(entry.name.toLowerCase()))
       .map((entry) => entry.name);
   } catch {}
   return [undefined, ...profiles].flatMap((profile) => [paths.routines(root, profile), paths.appMap(root, profile)]);
@@ -251,6 +252,44 @@ export function moveRoutines(root: string): string | undefined {
   return [
     `Moved ${moved} routine(s)${movedMap ? ' and the app map' : ''} from ${where}/${DATA_DIR}/ to ${where}/.`,
     `Commit them (${where}/routines/ and ${where}/appmap.json) so CI and a fresh clone can replay them.`,
+  ].join('\n');
+}
+
+/**
+ * A repo that already used `--config .bugpatrol/api.yml` before profiles kept
+ * its app map, routines and endpoint inventory in the Bugpatrol folder itself.
+ * Moves them into the profile's folder once, when that folder is still absent,
+ * and returns what it did. A file the profile folder already holds wins.
+ */
+export function moveProfileFiles(root: string, profile?: string): string | undefined {
+  if (!profile) return undefined;
+  const target = join(dir(root), recordId(profile));
+  if (existsSync(target)) return undefined;
+  const files = (
+    [
+      [paths.appMap(root), join(target, 'appmap.json')],
+      [paths.endpointInventory(root), join(target, 'endpoints.yml')],
+    ] as [string, string][]
+  ).filter(([from]) => existsSync(from));
+  const sharedRoutines = paths.routines(root);
+  const hasRoutines = existsSync(sharedRoutines);
+  if (!files.length && !hasRoutines) return undefined;
+  mkdirSync(join(target, 'routines'), { recursive: true });
+  for (const [from, to] of files) renameSync(from, to);
+  let moved = 0;
+  if (hasRoutines) {
+    for (const name of readdirSync(sharedRoutines).filter((file) => file.endsWith('.json'))) {
+      const to = join(target, 'routines', name);
+      if (existsSync(to)) continue;
+      renameSync(join(sharedRoutines, name), to);
+      moved += 1;
+    }
+    rmSync(sharedRoutines, { recursive: true, force: true });
+  }
+  const where = relative(root, dir(root));
+  return [
+    `Moved the app map, endpoint inventory and ${moved} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
+    `Commit ${where}/${profile}/ so a fresh clone can replay them.`,
   ].join('\n');
 }
 
