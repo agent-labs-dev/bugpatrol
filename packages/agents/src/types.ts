@@ -21,6 +21,15 @@ export type ToolResult = {
   meta?: { summary?: string; capture?: string; screenId?: string };
 };
 
+/**
+ * The tools an agent may call after its steps are used, and that use no step:
+ * it hands back with finish, and reports a bug it found but had no step left
+ * for, so the finding is not lost in the finish text.
+ */
+export function handsBack(name: string): boolean {
+  return name.startsWith('finish') || name === 'report_bug';
+}
+
 export type Tool = {
   name: string;
   description: string;

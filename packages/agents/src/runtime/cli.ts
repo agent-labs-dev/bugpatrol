@@ -193,8 +193,8 @@ export class CliRuntime implements Runtime {
     };
     const mcp = await serveTools(task.tools, {
       maxCalls: task.maxSteps,
-      onCall(name, input, result, ms) {
-        steps++;
+      onCall(name, input, result, ms, step) {
+        if (step) steps++;
         emit({ kind: 'tool-call', summary: `Called ${name}.`, tool: name, input });
         const output = result.content
           .filter((part) => part.type === 'text')

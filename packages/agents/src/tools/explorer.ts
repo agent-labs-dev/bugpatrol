@@ -196,16 +196,19 @@ async function observe(session: AgentSession, label: string, summary?: string): 
 }
 
 /**
- * Where the app is, for loop removal: the screen key plus the element names.
+ * Where the app is, for loop removal: the screen key plus the element names,
+ * or the text of a terminal.
  * A URL alone is too coarse (a form or a dialog keeps it), and the names also
  * change when the app state changes, e.g. a new row in a list.
  */
 function locationKey(observation: Observation): string {
+  // A terminal has no elements: its text is where it is.
   const names = shortHash(
-    observation.elements
-      .map((item) => item.name)
-      .sort()
-      .join('|'),
+    observation.terminal?.output ??
+      observation.elements
+        .map((item) => item.name)
+        .sort()
+        .join('|'),
   );
   return observation.platform === 'ios' || observation.platform === 'android'
     ? names
@@ -665,7 +668,7 @@ export function explorerTools(
           {
             name: 'run_command',
             description:
-              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials; ${name} is left to the shell. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output. For a program that stays open, such as a full screen terminal UI, use start_session.',
+              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials; ${name} is left to the shell. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output. For a program that stays open, such as a full screen terminal UI, use start_session. A command that starts a program outside this terminal, such as tmux or screen, is refused.',
             inputSchema: schema({ command: string, input: string }, ['command']),
             async run(input: Record<string, unknown>) {
               const command = arg(input, 'command');

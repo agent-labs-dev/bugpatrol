@@ -1,6 +1,6 @@
 import { type AgentEvent, ConfigError, type RoleRuntime, usageFrom } from '@bugpatrol/core';
 import { MODEL_KEYS, MODEL_ROUTES } from '@bugpatrol/decide';
-import type { EventSink, RoleOutcome, RoleTask, Runtime, ToolResult } from '../types.js';
+import { type EventSink, handsBack, type RoleOutcome, type RoleTask, type Runtime, type ToolResult } from '../types.js';
 
 type ModelUse = Extract<RoleRuntime, { runtime: 'model' }>;
 type Message = { role: string; content?: unknown; tool_calls?: unknown[]; tool_call_id?: string };
@@ -206,8 +206,8 @@ export class ModelRuntime implements Runtime {
     let costUsd = 0;
     let lastText = '';
     let textOnly = 0;
-    // The steps are used: one more call with the finish tools only, so the agent hands back a
-    // summary, as the CLI runtime lets it.
+    // The steps are used: one more call with the hand-back tools only, so the agent reports what
+    // it found and hands back a summary, as the CLI runtime lets it.
     let handBack: RoleTask | undefined;
     const outcome = (stop: RoleOutcome['stop'], summary?: string, error?: string): RoleOutcome => ({
       stop,
@@ -218,12 +218,17 @@ export class ModelRuntime implements Runtime {
     });
     for (;;) {
       if (steps >= task.maxSteps) {
-        const finish = task.tools.filter((tool) => tool.name.startsWith('finish'));
+        const finish = task.tools.filter((tool) => handsBack(tool.name));
         if (handBack || !finish.length) {
           return outcome('max-steps', lastText);
         }
         handBack = { ...task, tools: finish };
-        tell(messages, 'Your steps are used. Call finish now with what you did and what you did not reach.');
+        tell(
+          messages,
+          finish.some((tool) => tool.name === 'report_bug')
+            ? 'Your steps are used. Call finish now with what you did and what you did not reach, and in the same turn report_bug for each bug that you found and did not report yet.'
+            : 'Your steps are used. Call finish now with what you did and what you did not reach.',
+        );
       }
       const current = handBack ?? task;
       if (Date.now() - started >= task.timeoutMs) {

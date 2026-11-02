@@ -20,6 +20,12 @@ export const PRIVATE_DIR = '{{PRIVATE_DIR}}';
  * person types.
  */
 const KEY_GAP_MS = 50;
+/**
+ * The pause after a lone escape that another key follows. A program waits
+ * this long for the rest of a sequence before it reads a lone escape:
+ * ncurses waits 1000 ms unless it sets `ESCDELAY`, OpenTUI 20 ms.
+ */
+const ESCAPE_GAP_MS = 1000;
 /** How long a program has to start answering a key. One that prints nothing by then is taken as still. */
 const ANSWER_MS = 1000;
 /**
@@ -32,14 +38,27 @@ const QUIET_CAP_MS = 1000;
 const SETTLE_MS = 5000;
 
 /**
- * The variables of the host that the app gets: where programs, the home
- * folder and the user's folders are, the user, the locale and the time
- * zone. Nothing else, so a token in Bugpatrol's environment never reaches
- * the app, and `printenv` in a command shows none. `connect.cli.env` adds
- * the rest that the app needs.
+ * The variables of the host that the app gets: where programs are, the user,
+ * the locale and the time zone. Nothing else, so a token in Bugpatrol's
+ * environment never reaches the app, and `printenv` in a command shows none.
+ * Not the host's `HOME` or XDG folders either, where a CLI keeps its sign-in:
+ * the app's `HOME` is the private folder unless `connect.cli.env` names one.
+ * `connect.cli.env` adds the rest that the app needs.
  */
 const HOST_ENV =
-  /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z]+|TZ|TMPDIR|COLORTERM|NO_COLOR|XDG_[A-Z]+_(HOME|DIR|DIRS))$/;
+  /^(PATH|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z]+|TZ|TMPDIR|COLORTERM|NO_COLOR|XDG_(DATA|CONFIG)_DIRS)$/;
+
+/**
+ * A command that would run a program outside the terminal Bugpatrol drives:
+ * a terminal multiplexer, whose server keeps the host's environment and
+ * sign-ins, or a program that leaves the process group a stop kills. Only a
+ * program in the place of a command counts, so `grep screen` runs.
+ */
+const ESCAPE =
+  /(^|[;|&(`'"]|\n)\s*((exec|command|sudo|env|nice|time)\s+)*([A-Za-z_]\w*=\S*\s+)*(\S*\/)?(tmux|screen|byobu|zellij|abduco|dtach|setsid|systemd-run|daemonize|start-stop-daemon)(?=$|[\s;|&)'"`])/;
+
+const OUTSIDE =
+  'Bugpatrol refuses a command that starts a program outside its own terminal, such as tmux, screen or setsid: start the program with start_session, and drive it with press';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -213,11 +232,10 @@ export class CliDriver implements Driver {
         code === 0 ? resolve() : reject(new Error('The cli driver needs the pty module of python3')),
       );
     });
-    const env = Object.entries(this.options.env ?? {});
-    if (env.some(([, value]) => value.includes(PRIVATE_DIR)))
-      this.privateDir = await mkdtemp(join(tmpdir(), 'bugpatrol-app-'));
+    const privateDir = await mkdtemp(join(tmpdir(), 'bugpatrol-app-'));
+    this.privateDir = privateDir;
     this.appEnv = Object.fromEntries(
-      env.map(([name, value]) => [name, this.privateDir ? value.replaceAll(PRIVATE_DIR, this.privateDir) : value]),
+      Object.entries(this.options.env ?? {}).map(([name, value]) => [name, value.replaceAll(PRIVATE_DIR, privateDir)]),
     );
   }
 
@@ -228,7 +246,7 @@ export class CliDriver implements Driver {
 
   /**
    * The environment of the app's processes: the allowed host variables, the
-   * terminal, then `connect.cli.env`. A session can be resized, and curses
+   * private `HOME`, the terminal, then `connect.cli.env`. A session can be resized, and curses
    * apps prefer COLUMNS and LINES to the size of the terminal, so a session
    * gets neither.
    */
@@ -238,6 +256,7 @@ export class CliDriver implements Driver {
     );
     return {
       ...Object.fromEntries(host),
+      ...(this.privateDir ? { HOME: this.privateDir } : {}),
       TERM: 'xterm-256color',
       ...(session ? {} : { COLUMNS: String(this.cols), LINES: String(this.rows) }),
       ...this.appEnv,
@@ -309,6 +328,7 @@ export class CliDriver implements Driver {
     }
     if (action.kind !== 'run')
       return { ok: false, retryable: false, error: 'A CLI app takes only run, session and wait' };
+    if (ESCAPE.test(action.command)) return { ok: false, retryable: false, error: OUTSIDE };
     this.view = 'shell';
     const command = this.redact(action.command);
     this.show(prompt(command), false);
@@ -365,6 +385,7 @@ export class CliDriver implements Driver {
     const step = { kind: 'session' as const, ...op };
     const fail = (error: string): ActResult => ({ ok: false, retryable: false, error: this.redact(error) });
     if (op.op === 'start') {
+      if (ESCAPE.test(op.command)) return fail(OUTSIDE);
       await this.start(op.command);
       return { ok: true, step };
     }
@@ -409,7 +430,7 @@ export class CliDriver implements Driver {
       return fail(error instanceof Error ? error.message : String(error));
     }
     for (const [index, bytes] of keys.entries()) {
-      if (index) await sleep(KEY_GAP_MS);
+      if (index) await sleep(keys[index - 1] === '\u001b' ? ESCAPE_GAP_MS : KEY_GAP_MS);
       session.helper.child.stdin?.write(bytes);
       session.sent = Date.now();
     }

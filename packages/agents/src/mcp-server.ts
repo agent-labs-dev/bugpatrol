@@ -2,10 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { Tool, ToolResult } from './types.js';
+import { handsBack, type Tool, type ToolResult } from './types.js';
 
 type Options = {
-  onCall?: (name: string, input: Record<string, unknown>, result: ToolResult, ms: number) => void;
+  /** `step` is false for a call that used no step: a hand-back tool, or one refused for the budget. */
+  onCall?: (name: string, input: Record<string, unknown>, result: ToolResult, ms: number, step: boolean) => void;
   maxCalls?: number;
 };
 
@@ -86,8 +87,9 @@ function buildServer(tools: Tool[], opts: Options, budget: { calls: number }): S
     const name = request.params.name;
     const input = request.params.arguments ?? {};
     const started = Date.now();
+    const before = budget.calls;
     const result = await callTool(tools, name, input, opts, budget);
-    opts.onCall?.(name, input, result, Date.now() - started);
+    opts.onCall?.(name, input, result, Date.now() - started, budget.calls > before);
     return { content: result.content.map(toMcp), isError: result.isError ?? false };
   });
 
@@ -101,11 +103,14 @@ async function callTool(
   opts: Options,
   budget: { calls: number },
 ): Promise<ToolResult> {
-  // `finish` is always allowed, so an agent out of steps can still hand back.
-  if (name !== 'finish' && budget.calls >= (opts.maxCalls ?? Infinity)) {
-    return { content: [{ type: 'text', text: 'The step budget is used. Call finish now.' }], isError: true };
+  // An agent out of steps can still report what it found, and hand back.
+  if (!handsBack(name) && budget.calls >= (opts.maxCalls ?? Infinity)) {
+    const text = tools.some((tool) => tool.name === 'report_bug')
+      ? 'The step budget is used. Report each bug that you found and did not report yet with report_bug, then call finish.'
+      : 'The step budget is used. Call finish now.';
+    return { content: [{ type: 'text', text }], isError: true };
   }
-  if (name !== 'finish') {
+  if (!handsBack(name)) {
     budget.calls++;
   }
 

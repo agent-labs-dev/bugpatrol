@@ -300,6 +300,38 @@ process.stdin.on('data', () => setTimeout(() => process.stdout.write('\\x1b[H\\x
     }),
   );
 
+  it('waits out the escape delay after a lone escape, so the next key is not read as alt', { timeout: 30_000 }, () =>
+    withDriver(async (driver) => {
+      // Raw mode, then each read and the time since the read before it.
+      const program = `python3 -I -c "
+import os, sys, time, tty
+tty.setraw(0)
+print('ready', end='\\r\\n', flush=True)
+last = None
+for _ in range(3):
+    data = os.read(0, 16)
+    now = time.monotonic()
+    gap = 0 if last is None else int((now - last) * 1000)
+    last = now
+    print(repr(data), gap, end='\\r\\n', flush=True)
+"`;
+      await driver.act({ kind: 'session', op: 'start', command: program });
+      await driver.act({ kind: 'session', op: 'wait', text: 'ready', timeoutMs: 5000 });
+      await driver.act({ kind: 'session', op: 'keys', keys: ['escape', 'j', 'alt+x'] });
+      await driver.act({ kind: 'session', op: 'wait', text: "'\\x1bx'", timeoutMs: 5000 });
+      const lines = (await driver.observe()).terminal!.output.split('\n');
+      const gap = (bytes: string) =>
+        Number(
+          lines
+            .find((line) => line.startsWith(bytes))!
+            .split(' ')
+            .at(-1),
+        );
+      expect(gap("b'j'")).toBeGreaterThanOrEqual(900);
+      expect(gap("b'\\x1bx'")).toBeLessThan(900);
+    }),
+  );
+
   it('says that a screen which never stops changing is not stable', { timeout: 30_000 }, () =>
     withDriver(async (driver) => {
       await driver.act({ kind: 'session', op: 'start', command: 'while true; do date +%N; sleep 0.02; done' });
@@ -322,7 +354,8 @@ describe('CliDriver isolation', () => {
           });
           const { output } = (await driver.observe()).terminal!;
           expect(output).toContain('token=\n');
-          expect(output).toContain(`home=${process.env.HOME}`);
+          expect(output).toMatch(/home=\S*bugpatrol-app-\S+\n/);
+          expect(output).not.toContain(`home=${process.env.HOME}\n`);
           expect(output).toContain('term=xterm-256color');
           expect(output).toContain('own=mine');
         },
@@ -333,6 +366,23 @@ describe('CliDriver isolation', () => {
       delete process.env.BUGPATROL_TEST_TOKEN;
     }
   });
+
+  it('refuses a command that would start a program outside its terminal', { timeout: 30_000 }, () =>
+    withDriver(async (driver) => {
+      for (const command of [
+        "tmux new-session -d -s bp 'bun app.ts'",
+        'FOO=1 /usr/bin/tmux new -d',
+        "sh -c 'screen -dmS bp app'",
+        'setsid app; echo done',
+      ]) {
+        expect(await driver.act({ kind: 'run', command }), command).toMatchObject({ ok: false });
+        expect(await driver.act({ kind: 'session', op: 'start', command }), command).toMatchObject({ ok: false });
+      }
+      for (const command of ['echo a && echo b', 'sleep 0 & wait', 'echo screen | grep screen']) {
+        expect(await driver.act({ kind: 'run', command }), command).toMatchObject({ ok: true });
+      }
+    }),
+  );
 
   it('keeps the app env away from the terminal helper', { timeout: 30_000 }, () =>
     withDriver(

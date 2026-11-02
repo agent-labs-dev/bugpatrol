@@ -156,9 +156,9 @@ With `platform: cli`, the explorer runs the app in a terminal from the root of `
 | `rows` | `24` | The height of the terminal in characters |
 | `env` | `{}` | Environment variables for the app, on top of the few that it gets from the host |
 
-The app does not get the environment of Bugpatrol. It gets only these variables of the host: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, the `LC_*` variables, `TZ`, `TMPDIR`, `COLORTERM`, `NO_COLOR`, and the XDG folders (`XDG_*_HOME`, `XDG_*_DIR`, `XDG_*_DIRS`). Bugpatrol sets `TERM` to `xterm-256color`. So a token in your shell, such as `AWS_SECRET_ACCESS_KEY`, never reaches the app, and `printenv` in a command shows none of them. Give the app each other variable that it needs in `env`.
+The app does not get the environment of Bugpatrol. It gets only these variables of the host: `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, the `LC_*` variables, `TZ`, `TMPDIR`, `COLORTERM`, `NO_COLOR`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Its `HOME` is `{{PRIVATE_DIR}}`, an empty folder that Bugpatrol makes for the session and removes after it, and Bugpatrol sets `TERM` to `xterm-256color`. So a token in your shell, such as `AWS_SECRET_ACCESS_KEY`, never reaches the app, `printenv` in a command shows none of them, and a CLI that keeps its sign-in under `~` starts signed out. Give the app each other variable that it needs in `env`.
 
-`env` reaches each command and program that the explorer runs, and each replay of its routines. It never reaches Bugpatrol, the agent CLIs, `gh`, or the terminal helper, so the app can have its own `HOME` while they keep their logins. A value can use a declared secret or a setup capture as `${NAME}`, and `{{PRIVATE_DIR}}`, an empty folder that Bugpatrol makes for the session and removes after it:
+`env` reaches each command and program that the explorer runs, and each replay of its routines. It never reaches Bugpatrol, the agent CLIs, `gh`, or the terminal helper, so they keep their logins. A value can use a declared secret or a setup capture as `${NAME}`, and `{{PRIVATE_DIR}}`:
 
 ```yaml
 app:
@@ -168,12 +168,13 @@ app:
       cols: 120
       rows: 40
       env:
-        HOME: '{{PRIVATE_DIR}}/home'
         XDG_CONFIG_HOME: '{{PRIVATE_DIR}}/config'
         API_TOKEN: '${API_TOKEN}'   # declared in app.secrets
 ```
 
-A program does not create these folders itself in most cases, so create them first: start it with `mkdir -p "$HOME" && my-app`, or tell the explorer to in the app guide.
+A program does not create these folders itself in most cases, so create them first: start it with `mkdir -p "$XDG_CONFIG_HOME" && my-app`, or tell the explorer to in the app guide.
+
+The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you.
 
 ### Connect for an API
 

@@ -4,6 +4,7 @@ import {
   AgentSession,
   applyRetest,
   attachExternalFix,
+  bugMisses,
   createRuntime,
   type ExternalFixTarget,
   pendingCandidates,
@@ -55,7 +56,7 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
   const prNumber = (value: string | undefined) => Number(/^(?:.*\/pull\/)?(\d+)\/?$/.exec(value ?? '')?.[1]);
   if (command === 'replay') {
     if (args.length !== 1 || args[0]?.startsWith('-')) {
-      throw new ConfigError('replay needs one routine id');
+      throw new ConfigError('replay takes one routine id, and no flags');
     }
     return { id: args[0]! };
   }
@@ -412,7 +413,17 @@ export async function runAgentCommand(
       });
       if (!replay.ok) throw new InfrastructureError(`Replay failed: ${replay.error}`);
       log(`Replayed ${flags.id}${replay.degraded ? ' (degraded)' : ''}`);
-      return;
+      // A repro routine holds the check of its bug, which holds at its end.
+      const check = (await workspace.readRoutine(String(flags.id)))?.bug;
+      if (!check) return;
+      await driver.settle();
+      const screen = await driver.observe();
+      const misses = bugMisses(check, screen, [...screen.consoleErrors, ...(screen.networkErrors ?? [])]);
+      if (misses.length) {
+        log(`The bug no longer shows: ${misses.join(', and ')}`);
+        return;
+      }
+      throw new BugpatrolError(`The bug of ${flags.id} still shows`, ExitCode.Regression);
     }
     const record = await workspace.startSession('explorer');
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
