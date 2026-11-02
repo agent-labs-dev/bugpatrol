@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "bugpatrol": "./dist/bin.js"
+    "bugpatrol": "dist/bin.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
