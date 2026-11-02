@@ -394,6 +394,13 @@ Example: Sign in with the email {{TEST_EMAIL}} and the password {{TEST_PASSWORD}
 
 <!-- The flows that matter most. -->
 
+## What to check, UX first
+
+<!-- A UX defect is a bug. Tell the explorer to watch for the things a human tester notices:
+alignment and truncation, empty and error states, status colours matching their wording, and
+discoverable navigation. For terminal apps, wide characters and narrow windows are the common
+breakages; see docs/detection-rubric.md. -->
+
 ## Never do these things
 
 - Do not delete data that you did not make.

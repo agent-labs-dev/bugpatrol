@@ -1134,7 +1134,24 @@ Derived from the diff rather than the absolute state, which is what makes them l
 | **Affordance changed** | A button became a link, or a primary action became secondary |
 | **Position changed** | An element moved beyond a threshold with no content change |
 
-### 8.8 The false-positive discipline
+### 8.8 Terminal and CLI UX (tier 2-3)
+
+A terminal UI has no DOM, so the layout invariants in 8.1 do not apply. The explorer judges the captured terminal frame the way a user would, and each check still converts into a one-sentence finding that names a consequence.
+
+| Detector | Signal |
+|---|---|
+| **Column misalignment** | A header column no longer lines up with the rows under it |
+| **Wide-character overflow** | A CJK, fullwidth or emoji title overflows its column and hides the columns after it |
+| **Truncation** | A long title, path or branch clips mid-character instead of ending in an ellipsis |
+| **Narrow-terminal collision** | At a small width the fixed columns collide, or a title disappears, instead of columns dropping |
+| **Status colour/word mismatch** | A row's colour disagrees with its status word - for example a yellow "working" |
+| **Empty state** | A zero-item list renders as a blank screen with no header or message |
+| **Unstable header** | The header scrolls away with the content, or moves when the list refreshes |
+| **Undiscoverable keys** | An action has a keybinding that is not shown anywhere in the UI |
+
+Text-shortening helpers in a TUI must measure terminal columns, not UTF-16 code units: every wide character otherwise undoes the layout.
+
+### 8.9 The false-positive discipline
 
 Every detector above is designed against a single governing rule: **a finding must be explainable to an engineer in one sentence, and that sentence must name a consequence.** "4.3% of pixels changed" fails this test. "The primary action is no longer reachable" passes it.
 
