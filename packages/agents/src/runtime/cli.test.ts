@@ -50,7 +50,7 @@ function task(workdir: string): RoleTask {
 
 describe('MCP and CLI runtime', () => {
   it.each([true, false])('requires completion only when finish is exposed: %s', async (requiresFinish) => {
-    const runtime = new CliRuntime({ runtime: 'cli', command: 'true' });
+    const runtime = new CliRuntime({ runtime: 'cli', command: 'true {mcp}' });
     const request = task(tmpdir());
     request.tools = requiresFinish ? [finish] : [];
     const outcome = await runtime.run(request, () => {});
@@ -168,7 +168,7 @@ describe('CLI token usage', () => {
       await writeFile(join(root, 'out.json'), out);
       const events: Omit<AgentEvent, 'at' | 'sessionId' | 'role'>[] = [];
       const outcome = await new CliRuntime({ runtime: 'cli', command: `cat ${join(root, 'out.json')}` }).run(
-        { ...task(root), tools: [] },
+        task(root),
         (event) => {
           events.push(event);
         },

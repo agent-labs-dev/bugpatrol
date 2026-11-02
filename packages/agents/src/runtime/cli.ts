@@ -316,8 +316,9 @@ export class CliRuntime implements Runtime {
       if (parsed.error) {
         return { stop: 'error', steps, costUsd: 0, error: parsed.error, summary: summary || text, finished };
       }
-      // Tool-driven roles must confirm completion; shell-only fixers have no finish tool.
-      if (!finished && task.tools.some((tool) => tool.name === 'finish')) {
+      // Fixer tasks include model tools even when their CLI command never connects to MCP.
+      const usesMcp = /\{(?:mcp|mcpUrl)\}/.test(this.use.command);
+      if (usesMcp && !finished && task.tools.some((tool) => tool.name === 'finish')) {
         return {
           stop: 'error',
           steps,
