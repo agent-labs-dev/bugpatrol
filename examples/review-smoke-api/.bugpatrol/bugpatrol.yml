@@ -45,4 +45,7 @@ agents:
     budgetUsd: 0.5
     maxSteps: 40
   judge:
+    # The default cheap model fills only the schema's required keys, so it omits the
+    # title/body/severity that file_issue needs. Use the judge model docs/models.md recommends.
+    use: { runtime: model, via: openrouter, model: moonshotai/kimi-k3 }
     budgetUsd: 0.5
