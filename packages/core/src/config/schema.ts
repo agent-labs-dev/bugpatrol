@@ -263,10 +263,13 @@ export const appSchema = z
          * CLI: each command runs in a terminal of `cols` by `rows` from the
          * app source, and is stopped after `timeoutMs`; a session waits at
          * most that long. `env` is set for the app's processes only, never
-         * for Bugpatrol or the agent CLIs.
+         * for Bugpatrol or the agent CLIs. `command`, when set, is a
+         * program that stays open, such as a full screen terminal UI, which
+         * the driver starts on connect, so the explorer begins in it.
          */
         cli: z
           .object({
+            command: z.string().min(1).optional(),
             timeoutMs: z.number().int().positive().max(600_000).default(60_000),
             cols: z.number().int().min(20).max(500).default(80),
             rows: z.number().int().min(5).max(200).default(24),

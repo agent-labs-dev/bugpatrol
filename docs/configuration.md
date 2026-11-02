@@ -43,7 +43,7 @@ app:
   source: .                     # the repo that the fixer edits, relative to the project root
   setup: []                     # commands: { run, cwd, capture, background, readyWhen, timeoutMs }
   teardown: []
-  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { timeoutMs, cols, rows, env }
+  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { command, timeoutMs, cols, rows, env }
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
@@ -148,6 +148,8 @@ For mobile, the default device is the booted simulator or the running emulator.
 ### Connect for a command line app
 
 With `platform: cli`, the explorer runs the app in a terminal from the root of `app.source`. It can run a command until it exits, or start a program that stays open, such as a full screen terminal UI, and drive it with keys. The terminal comes from the `pty` module of `python3`, so `python3` must be on the `PATH`.
+
+Set `connect.cli.command` to a program that stays open, such as `bun src/entry.ts`, and Bugpatrol starts it in the terminal before the explorer begins, with the app's environment. The explorer then starts on its screen, and it needs no rule in the app guide on how to start it. When `bugpatrol explore` ends because the explorer could not test the app at all, it exits with code 4.
 
 | Key | Default | What it does |
 | --- | --- | --- |

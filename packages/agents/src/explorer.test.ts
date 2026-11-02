@@ -7,7 +7,7 @@ import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { explorerSystem } from './prompts.js';
-import { runExplorer } from './roles/explorer.js';
+import { runExplorer, wasBlocked } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
 import { FakeDriver } from './testing/fake-driver.js';
@@ -48,6 +48,38 @@ async function explore(app: Record<string, unknown> = {}) {
   const outcome = await runExplorer(session, runtime);
   return { system: systems[0]!, logs, outcome };
 }
+
+describe('a session that could not test the app', () => {
+  /** Runs the explorer once, finishing with `input`, and returns the outcome. */
+  async function finish(input: Record<string, unknown>) {
+    const record = await new Workspace(root).startSession('explorer');
+    const session = new AgentSession(
+      root,
+      parseConfig({ version: 1, app: { connect: { url: 'fake://home' } } }),
+      new Vars(),
+      record.id,
+      'explorer',
+      new FakeDriver({ home: { elements: [] } }),
+      () => undefined,
+    );
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run(task) {
+        const result = await task.tools.find((tool) => tool.name === 'finish')!.run(input);
+        const text = result.content.map((part) => ('text' in part ? part.text : '')).join('');
+        return { stop: 'done', steps: 1, costUsd: 0, summary: text };
+      },
+    };
+    return runExplorer(session, runtime);
+  }
+
+  it('is told apart from one that tested something, so explore can fail on it', async () => {
+    const blocked = await finish({ summary: 'Blocked: the app never started.', blocked: true });
+    expect(blocked.summary).toMatch(/^Blocked: the app never started\./);
+    expect(wasBlocked(blocked)).toBe(true);
+    expect(wasBlocked(await finish({ summary: 'Covered the landing screen.' }))).toBe(false);
+  });
+});
 
 describe('a command that only shows something', () => {
   const run = (command: string): RoutineStep => ({ kind: 'run', command });

@@ -166,6 +166,8 @@ export type CliDriverOptions = {
    * folder that the driver makes on connect and removes on close.
    */
   env?: Record<string, string>;
+  /** A program that stays open, started on connect, so the first look is at it. */
+  command?: string;
 };
 
 /** A program that stays open across steps, such as a full screen terminal UI. */
@@ -239,6 +241,7 @@ export class CliDriver implements Driver {
     this.appEnv = Object.fromEntries(
       Object.entries(this.options.env ?? {}).map(([name, value]) => [name, value.replaceAll(PRIVATE_DIR, privateDir)]),
     );
+    if (this.options.command) await this.start(this.options.command);
   }
 
   /** The helper runs in isolated mode with only the host PATH, so nothing of the app's environment changes it. */

@@ -242,6 +242,22 @@ describe('CliDriver session', () => {
     }),
   );
 
+  it('starts the configured program on connect, so the first look is at it', { timeout: 30_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-'));
+    await writeFile(join(dir, 'tui.cjs'), TUI);
+    const driver = new CliDriver({ cwd: dir, timeoutMs: 10_000, command: 'node tui.cjs' });
+    try {
+      await driver.connect();
+      expect(await driver.act({ kind: 'session', op: 'wait', text: 'Items', timeoutMs: 5000 })).toMatchObject({
+        ok: true,
+      });
+      expect(await screen(driver)).toContain('> alpha');
+    } finally {
+      await driver.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('kills a running session on close', { timeout: 30_000 }, async () => {
     let pids: number[] = [];
     await withDriver(async (driver, dir) => {

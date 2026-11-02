@@ -3,7 +3,7 @@ import { rankForExplorer } from '../coverage.js';
 import { noGuide, readGuide } from '../guide.js';
 import { explorerPrompt, explorerSystem } from '../prompts.js';
 import type { AgentSession } from '../session.js';
-import { explorerTools } from '../tools/explorer.js';
+import { BLOCKED, explorerTools } from '../tools/explorer.js';
 import type { RoleOutcome, Runtime, Tool } from '../types.js';
 import { lessonsFor } from '../workspace.js';
 import { reflectOnSession } from './reflect.js';
@@ -34,6 +34,11 @@ function sessionSummary(outcome: RoleOutcome, screens: number, candidates: numbe
       return `The explorer stopped on an error: ${cause.slice(0, 300)}${cause.length > 300 ? '…' : ''}. ${counts}`;
   }
   return `The explorer ${STOP_REASONS[outcome.stop]}. ${counts}`;
+}
+
+/** Whether the explorer finished saying it could not test the app at all. */
+export function wasBlocked(outcome: RoleOutcome): boolean {
+  return outcome.stop === 'done' && (outcome.summary ?? '').startsWith(BLOCKED);
 }
 
 export function stopOnCancellation(session: AgentSession, tool: Tool): Tool {

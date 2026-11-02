@@ -25,9 +25,10 @@ export function createDriver(
 ): Driver {
   const { platform, connect } = config.app;
   if (platform === 'cli') {
-    const { env, ...cli } = connect.cli;
+    const { env, command, ...cli } = connect.cli;
     return new CliDriver({
       ...cli,
+      ...(command ? { command: vars(command) } : {}),
       cwd: source,
       redact,
       env: Object.fromEntries(

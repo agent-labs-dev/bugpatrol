@@ -84,6 +84,9 @@ const schema = (properties: Record<string, unknown>, required: string[] = []) =>
 });
 const string = { type: 'string' };
 const boolean = { type: 'boolean' };
+
+/** How the summary of a session that could not test the app begins. */
+export const BLOCKED = 'Blocked: ';
 const arg = (input: Record<string, unknown>, key: string) => String(input[key] ?? '');
 const slug = (value: string) =>
   value
@@ -1184,10 +1187,15 @@ export function explorerTools(
     },
     {
       name: 'finish',
-      description: 'Finish exploring with a short summary.',
-      inputSchema: schema({ summary: string }, ['summary']),
+      description:
+        'Finish exploring with a short summary. Set blocked when you could not test the app at all, for example when it never started or never signed in.',
+      inputSchema: schema({ summary: string, blocked: boolean }, ['summary']),
       async run(input) {
-        return { ...text(arg(input, 'summary')), done: true };
+        const summary = arg(input, 'summary');
+        return {
+          ...text(input.blocked === true ? `${BLOCKED}${summary.replace(/^Blocked:\s*/i, '')}` : summary),
+          done: true,
+        };
       },
     },
   ];

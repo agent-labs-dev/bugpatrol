@@ -21,6 +21,7 @@ import {
   syncGitHub,
   Vars,
   Workspace,
+  wasBlocked,
   watchCi,
   withSessionLogs,
 } from '@bugpatrol/agents';
@@ -428,7 +429,7 @@ export async function runAgentCommand(
     const record = await workspace.startSession('explorer');
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
     activeSession = session;
-    await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>
+    const outcome = await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>
       runExplorer(session, createRuntime(config.agents.explorer.use), {
         goal: flags.goal as string | undefined,
         maxSteps: flags.steps as number | undefined,
@@ -436,6 +437,8 @@ export async function runAgentCommand(
     );
     // The session-end event already printed the summary.
     await logUsage(workspace, record.id, log);
+    // A session that could not reach the app tested nothing, which a script must not read as a pass.
+    if (wasBlocked(outcome)) throw new BugpatrolError('The explorer could not test the app', ExitCode.Infrastructure);
     log('Next: run `bugpatrol judge` to file the real bugs as issues, or open `bugpatrol dashboard`.');
   } finally {
     try {
