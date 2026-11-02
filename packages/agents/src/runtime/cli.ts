@@ -316,6 +316,18 @@ export class CliRuntime implements Runtime {
       if (parsed.error) {
         return { stop: 'error', steps, costUsd: 0, error: parsed.error, summary: summary || text, finished };
       }
+      // Fixer tasks include model tools even when their CLI command never connects to MCP.
+      const usesMcp = /\{(?:mcp|mcpUrl)\}/.test(this.use.command);
+      if (usesMcp && !finished && task.tools.some((tool) => tool.name === 'finish')) {
+        return {
+          stop: 'error',
+          steps,
+          costUsd: 0,
+          summary: summary || text,
+          finished,
+          error: 'CLI exited without completing the finish tool. Check tool approvals and agent output.',
+        };
+      }
       return {
         stop: 'done',
         steps,

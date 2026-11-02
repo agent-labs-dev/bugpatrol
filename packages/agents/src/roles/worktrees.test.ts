@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CliRuntime } from '../runtime/cli.js';
 import { AgentSession } from '../session.js';
 import type { Runtime } from '../types.js';
 import { Vars } from '../vars.js';
@@ -169,6 +170,17 @@ describe('cleanWorktrees', () => {
       kept: [{ id: f.fix.id, reason: 'local commits' }],
     });
     expect(existsSync(f.worktree)).toBe(true);
+  });
+
+  it('lets a shell-only CLI fixer finish with the production fixer tools', async () => {
+    const f = await fixture('failed');
+    const record = await f.workspace.startSession('fixer');
+    const session = new AgentSession(f.root, f.config, new Vars(), record.id, 'fixer');
+    const runtime = new CliRuntime({ runtime: 'cli', command: 'echo No change needed' });
+    const [proposal] = await runFixer(session, runtime, { issueIds: [f.issue.id] });
+    expect(proposal?.status).toBe('declined');
+    expect(proposal?.attempts?.at(-1)?.outcome).toBe('declined');
+    expect(proposal?.error).toBeUndefined();
   });
 
   it('creates a numbered branch when a later refix finds the old branch', async () => {
