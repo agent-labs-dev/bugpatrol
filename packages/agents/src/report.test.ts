@@ -1,6 +1,6 @@
 import type { FixProposal, Issue } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { buildReport, reproRoutineId } from './report.js';
+import { buildReport, reproRoutine } from './report.js';
 
 const issue: Issue = {
   version: 1,
@@ -103,8 +103,16 @@ describe('repro marker', () => {
     const withRepro = { ...issue, evidence: { ...issue.evidence, reproRoutineId: 'repro-1' } };
     const body = buildReport({ ...base, kind: 'issue', issue: { ...withRepro, body: 'x'.repeat(70_000) } });
     expect(body).toContain('<!-- bugpatrol:routine repro-1 -->');
-    expect(reproRoutineId(body)).toBe('repro-1');
+    expect(reproRoutine(body)).toEqual({ id: 'repro-1' });
     expect(buildReport({ ...base, kind: 'issue' })).not.toContain('bugpatrol:routine');
-    expect(reproRoutineId('Fixed it. <!-- bugpatrol:routine ../../etc -->')).toBeUndefined();
+    expect(reproRoutine('Fixed it. <!-- bugpatrol:routine ../../etc -->')).toBeUndefined();
+  });
+
+  it('names the profile of a routine that another config saved', () => {
+    const withRepro = { ...issue, evidence: { ...issue.evidence, reproRoutineId: 'repro-1', reproProfile: 'cli' } };
+    const body = buildReport({ ...base, kind: 'issue', issue: withRepro });
+    expect(body).toContain('<!-- bugpatrol:routine cli/repro-1 -->');
+    expect(reproRoutine(body)).toEqual({ id: 'repro-1', profile: 'cli' });
+    expect(reproRoutine('<!-- bugpatrol:routine ../repro-1 -->')).toBeUndefined();
   });
 });

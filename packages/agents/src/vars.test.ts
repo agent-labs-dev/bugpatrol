@@ -25,11 +25,17 @@ describe('Vars', () => {
     expect(() => vars.resolve('{{MISSING}}')).not.toThrow('top-secret');
   });
 
-  it('rejects undeclared environment variables in both agent placeholder forms', () => {
+  it('never gives agent input an undeclared environment variable', () => {
     const vars = new Vars([], { PRIVATE_KEY: 'synthetic-secret' });
-    for (const text of ['${PRIVATE_KEY}', '{{PRIVATE_KEY}}']) {
-      expect(() => vars.resolve(text)).toThrow('Unknown variable PRIVATE_KEY');
-    }
+    expect(() => vars.resolve('{{PRIVATE_KEY}}')).toThrow('Unknown variable PRIVATE_KEY');
+    expect(vars.resolve('${PRIVATE_KEY}')).toBe('${PRIVATE_KEY}');
+  });
+
+  it('leaves a shell ${name} in agent input to the shell, and still fills in a declared one', () => {
+    const vars = new Vars(['TOKEN'], { TOKEN: 'top-secret' });
+    const loop = 'for s in a b; do luajit tests/${s}_spec.lua; done';
+    expect(vars.resolve(loop)).toBe(loop);
+    expect(vars.resolve('echo ${HOME} ${TOKEN}')).toBe('echo ${HOME} top-secret');
   });
 
   it('keeps trusted setup expansion separate from agent authority', () => {
@@ -37,7 +43,7 @@ describe('Vars', () => {
     expect(vars.resolveConfig('${SETUP_TOKEN}')).toBe('setup-only');
     expect(vars.redact('setup-only')).toBe('{{SETUP_TOKEN}}');
     expect(vars.names()).toEqual([]);
-    expect(() => vars.resolve('${SETUP_TOKEN}')).toThrow('Unknown variable');
+    expect(vars.resolve('${SETUP_TOKEN}')).toBe('${SETUP_TOKEN}');
     expect(vars.resolveConfig('${SHELL_VAR}')).toBe('${SHELL_VAR}');
   });
 

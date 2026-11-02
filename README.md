@@ -82,7 +82,7 @@ To set up Bugpatrol by hand, read [Getting started](docs/getting-started.md).
 
 | Area | Supported |
 | --- | --- |
-| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), Linux desktop apps through Cua and Xvfb, HTTP APIs and CLIs |
+| Platforms | Web (Playwright), Electron (CDP), iOS simulator and Android emulator (Maestro), Linux desktop apps through Cua and Xvfb, HTTP APIs, CLIs, and full screen terminal UIs |
 | Agent LLMs | Claude Code, Codex, Kimi CLI, opencode, pi, or any CLI agent; or an API key for OpenRouter, Vercel AI Gateway, OpenAI, Anthropic, or a custom endpoint |
 | GitHub | PRs, issues, state sync, and pull request reviews in CI, through the `gh` CLI |
 | Output | A local dashboard, GitHub PRs and issues, and JSON files under `.bugpatrol/runs/` |

@@ -145,7 +145,7 @@ async function reuseFiled(
 
 export async function runPublisher(root: string, config: BugpatrolConfig, deps: Deps = {}): Promise<PublishOutcome[]> {
   if (!config.agents.github.enabled && !deps.dryRun) return [];
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const gh = deps.gh ?? defaultGh;
   const fixes = new Map((await workspace.listFixes()).map((fix) => [fix.issueId, fix]));
   const issues = (await workspace.listIssues()).filter((issue) => !deps.issueIds || deps.issueIds.includes(issue.id));

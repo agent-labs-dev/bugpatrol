@@ -20,6 +20,7 @@ import {
   type MemoryFile,
   type PrReview,
   paths,
+  profileOf,
   type Routine,
   type SessionFlow,
   type SessionSummary,
@@ -141,10 +142,15 @@ export type SessionCandidate = Candidate & {
 };
 
 export class AgentReader {
+  /** The profile of `configFile`, whose app map and routines the dashboard shows. */
+  private readonly profile: string | undefined;
+
   constructor(
     private readonly root: string,
     private readonly configFile?: string,
-  ) {}
+  ) {
+    this.profile = profileOf(root, configFile);
+  }
 
   memory(): MemoryFile {
     const value = readJson<MemoryFile>(paths.memory(this.root));
@@ -174,7 +180,7 @@ export class AgentReader {
   }
 
   appmap(): AppMap {
-    const value = readJson<AppMap>(paths.appMap(this.root));
+    const value = readJson<AppMap>(paths.appMap(this.root, this.profile));
     if (!Array.isArray(value?.screens)) return { version: 1, platform: 'web', screens: [], updatedAt: '' };
     return {
       ...value,
@@ -229,9 +235,9 @@ export class AgentReader {
   }
 
   routines(): Routine[] {
-    return list(paths.routines(this.root))
+    return list(paths.routines(this.root, this.profile))
       .filter((name) => name.endsWith('.json'))
-      .map((name) => readJson<Routine>(join(paths.routines(this.root), name)))
+      .map((name) => readJson<Routine>(join(paths.routines(this.root, this.profile), name)))
       .filter((routine): routine is Routine => Boolean(routine?.id && Array.isArray(routine.steps)));
   }
 

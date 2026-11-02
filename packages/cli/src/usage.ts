@@ -127,6 +127,7 @@ export const COMMAND_HELP: Record<string, string> = {
 `,
   promote: `bugpatrol promote <pr> <claim>...
   Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
+  With --config .bugpatrol/<name>.yml, the routines go to .bugpatrol/<name>/routines/.
   Commit the routines, and the patrol replays them from then on. A review never does this by itself.
   It refuses a pull request that is not merged, a review of another commit than the one that merged,
   and a claim that is not proven or has no claim routine.
@@ -159,7 +160,8 @@ export const COMMAND_HELP: Record<string, string> = {
   endpoints: `bugpatrol endpoints [--spec URL|file] [--json]
   Print the endpoints of the api contract, and each operation that Bugpatrol skips, with the reason.
   With no --spec, read app.connect.spec, or .bugpatrol/endpoints.yml when there is no spec,
-  and write the endpoints to .bugpatrol/appmap.json. Bugpatrol never uses the servers value of a spec.
+  and write the endpoints to .bugpatrol/appmap.json. With --config .bugpatrol/<name>.yml, both files
+  are in .bugpatrol/<name>/. Bugpatrol never uses the servers value of a spec.
   --spec URL|file   read this spec, and write nothing
   --json            print JSON
 `,

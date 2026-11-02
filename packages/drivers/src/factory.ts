@@ -3,7 +3,7 @@ import { type Contract, requestPolicy } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
 import { type ApiCredentials, ApiDriver } from './api.js';
 import { Pacer } from './api-pacer.js';
-import { CliDriver } from './cli.js';
+import { CliDriver, PRIVATE_DIR } from './cli.js';
 import { CuaDriver } from './cua/driver.js';
 import { ElectronDriver } from './electron.js';
 import { MaestroDriver } from './maestro.js';
@@ -24,7 +24,17 @@ export function createDriver(
   contract?: Contract,
 ): Driver {
   const { platform, connect } = config.app;
-  if (platform === 'cli') return new CliDriver({ cwd: source, timeoutMs: connect.cli.timeoutMs, redact });
+  if (platform === 'cli') {
+    const { env, ...cli } = connect.cli;
+    return new CliDriver({
+      ...cli,
+      cwd: source,
+      redact,
+      env: Object.fromEntries(
+        Object.entries(env).map(([name, value]) => [name, value.split(PRIVATE_DIR).map(vars).join(PRIVATE_DIR)]),
+      ),
+    });
+  }
   if (platform === 'desktop') {
     if (!connect.cua) throw new ConfigError('Desktop driver requires app.connect.cua.launch');
     return new CuaDriver({
@@ -32,7 +42,7 @@ export function createDriver(
       command: vars(connect.cua.command),
       windowManager: vars(connect.cua.windowManager),
       launch: vars(connect.cua.launch),
-      args: connect.cua.args.map((arg) => arg.split('{{PRIVATE_DIR}}').map(vars).join('{{PRIVATE_DIR}}')),
+      args: connect.cua.args.map((arg) => arg.split(PRIVATE_DIR).map(vars).join(PRIVATE_DIR)),
       windowTitle: connect.cua.windowTitle ? vars(connect.cua.windowTitle) : undefined,
       viewport: config.viewports[0]!,
       redact,

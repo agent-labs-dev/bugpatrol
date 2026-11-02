@@ -295,6 +295,7 @@ export function stepFor(action: DriverAction, element?: UiElement, fallback?: St
       return { kind: 'upload', target, file: action.file };
     case 'request':
     case 'run':
+    case 'session':
       return action;
   }
 }

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
-import { type AgentsFile, type BugpatrolConfig, paths } from '@bugpatrol/core';
+import { type AgentsFile, agentFiles, type BugpatrolConfig } from '@bugpatrol/core';
 import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
@@ -31,11 +31,11 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 
 /**
  * True when the source repo has uncommitted changes to tracked files. The
- * routines and the app map do not count: the patrol writes them itself and
+ * routines and the app maps of every profile do not count: the patrol writes them itself and
  * leaves them for the user to commit (ADR 0006).
  */
 async function dirty(root: string, source: string): Promise<boolean> {
-  const own = [paths.routines(root), paths.appMap(root)]
+  const own = agentFiles(root)
     .map((path) => relative(source, path))
     .filter((path) => !path.startsWith('..'));
   const exclude = own.map((path) => `:(exclude)${path}`);
@@ -146,7 +146,7 @@ function unfinished(role: string, outcome: RoleOutcome): void {
 export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   const problems: string[] = [];
   const { root, config } = options;
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const previous = (await workspace.readAgents()).patrol;
   // A cron job can start a patrol while the last one still runs.
   const running = activePatrolPid(previous);
@@ -233,7 +233,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
         let app: Awaited<ReturnType<typeof startApp>> | undefined;
         let driver: Driver | undefined;
         try {
-          app = await startApp(config.app, { root, vars, emit: options.onLog });
+          app = await startApp(config.app, { root, vars, emit: options.onLog, profile: config.profile });
           driver = (options.createDriver ?? makeDriver)(
             config,
             vars.resolve.bind(vars),

@@ -6,6 +6,7 @@ import type {
   Platform,
   RoutineStep,
   SampleFile,
+  SessionOp,
 } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 
@@ -74,9 +75,11 @@ export type Observation = {
   at: string;
   /**
    * CLI only: the last command, redacted, and what it printed as a terminal
-   * shows it. `exitCode` is absent while no command ran to its end.
+   * shows it. `exitCode` is absent while no command ran to its end. For a
+   * session (`screen: true`), `output` is the visible screen of the program,
+   * not a log of what it printed.
    */
-  terminal?: { command: string; exitCode?: number; output: string };
+  terminal?: { command: string; exitCode?: number; output: string; screen?: boolean };
 };
 
 /**
@@ -103,7 +106,8 @@ export type DriverAction =
       capture?: Record<string, string>;
       as?: CredentialSet;
     }
-  | { kind: 'run'; command: string; input?: string };
+  | { kind: 'run'; command: string; input?: string }
+  | ({ kind: 'session' } & SessionOp);
 
 /** A response before redaction. See `Driver.lastRaw`. */
 export type RawResponse = { status: number; headers: Record<string, string>; json?: unknown; text: string };

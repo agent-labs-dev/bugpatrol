@@ -81,7 +81,14 @@ async function listJson<T>(dir: string): Promise<T[]> {
 
 /** State stays plain JSON so a dashboard and a human can inspect the same data. */
 export class Workspace {
-  constructor(readonly root: string) {}
+  /**
+   * `profile` picks the committed app map and routines (`config.profile`,
+   * see profileOf). Everything under `runs/` is shared by every profile.
+   */
+  constructor(
+    readonly root: string,
+    readonly profile?: string,
+  ) {}
 
   async readMemory(): Promise<MemoryFile> {
     return (await readJson<MemoryFile>(paths.memory(this.root))) ?? { version: 1, lessons: [] };
@@ -159,11 +166,11 @@ export class Workspace {
   }
 
   readAppMap(): Promise<AppMap | undefined> {
-    return readJson(paths.appMap(this.root));
+    return readJson(paths.appMap(this.root, this.profile));
   }
 
   async writeAppMap(map: AppMap): Promise<void> {
-    await atomic(paths.appMap(this.root), map);
+    await atomic(paths.appMap(this.root, this.profile), map);
   }
 
   /** The sweep's coverage cells and cursor. Absent before the first sweep. */
@@ -214,7 +221,7 @@ export class Workspace {
       lastCapture: screen.lastCapture ?? previous?.lastCapture,
     };
     const screens = [...(map?.screens ?? []).filter((item) => item.id !== screen.id), merged];
-    await atomic(paths.appMap(this.root), {
+    await atomic(paths.appMap(this.root, this.profile), {
       version: 1,
       platform: map?.platform ?? merged.platform,
       screens,
@@ -225,13 +232,13 @@ export class Workspace {
   }
 
   listRoutines(): Promise<Routine[]> {
-    return listJson(paths.routines(this.root));
+    return listJson(paths.routines(this.root, this.profile));
   }
   readRoutine(id: string): Promise<Routine | undefined> {
-    return readJson(paths.routine(this.root, id));
+    return readJson(paths.routine(this.root, id, this.profile));
   }
   saveRoutine(value: Routine): Promise<void> {
-    return atomic(paths.routine(this.root, value.id), value);
+    return atomic(paths.routine(this.root, value.id, this.profile), value);
   }
   listIssues(): Promise<Issue[]> {
     return listJson(paths.issues(this.root));

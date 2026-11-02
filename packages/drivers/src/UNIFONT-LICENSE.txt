@@ -1,0 +1,12 @@
+GNU Unifont 17.0.03
+
+This package contains a compressed subset of the GNU Unifont bitmap font,
+used under the SIL Open Font License, version 1.1.
+
+Copyright 1998-2025 Roman Czyborra, Paul Hardy, and contributors.
+
+The full license text is available at:
+https://scripts.sil.org/OFL
+
+GNU Unifont is also available under GPL-2.0-or-later with the GNU font
+embedding exception. This package uses the SIL Open Font License option.

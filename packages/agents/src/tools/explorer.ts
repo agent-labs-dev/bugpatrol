@@ -21,6 +21,7 @@ import { ApiDriver, type DriverAction, type Observation, type RawResponse, type 
 import { z } from 'zod';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
 import { assertionWords, bugMisses, checkAssertions, replayRoutine } from '../replay.js';
+import { stepWords } from '../roles/fixer.js';
 import type { AgentSession } from '../session.js';
 import { reportFingerprint } from '../sweep.js';
 import type { Tool, ToolResult } from '../types.js';
@@ -147,21 +148,30 @@ function observationText(observation: Observation, contract?: Contract): string 
     ...(observation.capture.kind === 'http'
       ? [observation.capture.exchange ? exchangeText(observation.capture.exchange, contract) : 'No request yet.']
       : []),
-    ...(observation.terminal
-      ? [
-          `$ ${observation.terminal.command}`,
-          observation.terminal.exitCode === undefined
-            ? 'The command did not exit.'
-            : `Exit code: ${observation.terminal.exitCode}`,
-          'Output:',
-          observation.terminal.output.slice(-8000) || '(none)',
-        ]
-      : []),
+    ...(observation.terminal ? terminalLines(observation.terminal) : []),
     'Elements:',
     ...observation.elements.slice(0, 117).map(elementLine),
   ]
     .slice(0, 130)
     .join('\n');
+}
+
+function terminalLines(terminal: NonNullable<Observation['terminal']>): string[] {
+  if (terminal.screen)
+    return [
+      `Session: ${terminal.command}`,
+      terminal.exitCode === undefined
+        ? 'The program is running.'
+        : `The program exited with code ${terminal.exitCode}.`,
+      'Screen:',
+      terminal.output || '(blank)',
+    ];
+  return [
+    `$ ${terminal.command}`,
+    terminal.exitCode === undefined ? 'The command did not exit.' : `Exit code: ${terminal.exitCode}`,
+    'Output:',
+    terminal.output.slice(-8000) || '(none)',
+  ];
 }
 
 /** The evidence of the last capture: its PNG, or the redacted exchange of an API. */
@@ -216,7 +226,10 @@ function transition(session: AgentSession, to: string): ScreenTransition | undef
     ? 'open'
     : last.kind === 'back'
       ? 'back'
-      : last.kind === 'tap' || last.kind === 'press' || (last.kind === 'type' && last.submit)
+      : last.kind === 'tap' ||
+          last.kind === 'press' ||
+          (last.kind === 'type' && last.submit) ||
+          (last.kind === 'session' && last.op === 'keys')
         ? 'tap'
         : 'other';
   const label =
@@ -232,9 +245,11 @@ function transition(session: AgentSession, to: string): ScreenTransition | undef
               ? 'back'
               : last.kind === 'press'
                 ? `press ${last.key}`
-                : last.kind === 'type'
-                  ? (last.target?.name ?? 'submit')
-                  : last.kind;
+                : last.kind === 'session' && last.op === 'keys'
+                  ? `press ${last.keys.join(' ')}`
+                  : last.kind === 'type'
+                    ? (last.target?.name ?? 'submit')
+                    : last.kind;
   const via = (session.vars.redact(label) as string).slice(0, 60);
   return { to, kind, via, steps: actions.length, count: 1, lastSeenAt: new Date().toISOString() };
 }
@@ -303,6 +318,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `${action.method} ${session.vars.redact(action.url)}`;
     case 'run':
       return `Ran ${session.vars.redact(action.command)}`;
+    case 'session':
+      return session.vars.redact(stepWords(action)) as string;
   }
 }
 
@@ -315,7 +332,7 @@ async function act(session: AgentSession, action: DriverAction, recorded?: Routi
   const result = await session.driver!.act(action);
   if (!result.ok) return failed(session, result.error ?? 'Action failed', summary);
   session.vars.capture(result.captures);
-  await session.driver!.settle();
+  const settled = await session.driver!.settle();
   const viewed = await observe(session, action.kind, summary);
   if (version !== session.driver!.controlVersion)
     return failed(session, 'Human takeover interrupted this action. Look again; start a new routine.', summary);
@@ -323,6 +340,11 @@ async function act(session: AgentSession, action: DriverAction, recorded?: Routi
     session.trail.push({ ...(recorded ?? result.step)!, at: locationKey(session.lastObservation!) });
   await arriveAtKnownScreen(session, before);
   if (replacement) viewed.content.unshift({ type: 'text', text: replacement.message });
+  if (!settled.stable)
+    viewed.content.unshift({
+      type: 'text',
+      text: 'The screen was still changing when this was taken. Wait for it (wait_for in a terminal) before you judge it.',
+    });
   return viewed;
 }
 
@@ -426,7 +448,8 @@ function compactSteps(steps: RoutineStep[]): RoutineStep[] {
   const compacted: RoutineStep[] = [];
   for (const step of steps) {
     if (step.kind === 'wait') continue;
-    if (step.kind === 'request' || step.kind === 'run') {
+    // Each command and each key counts: two presses of j move twice.
+    if (step.kind === 'request' || step.kind === 'run' || step.kind === 'session') {
       compacted.push(step);
       continue;
     }
@@ -470,7 +493,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
   if (step.kind === 'upload') return `upload:${locatorSignature(step.target)}:${step.file}`;
-  if (step.kind === 'request' || step.kind === 'run') return JSON.stringify(step);
+  if (step.kind === 'request' || step.kind === 'run' || step.kind === 'session') return JSON.stringify(step);
   return step.kind;
 }
 
@@ -642,7 +665,7 @@ export function explorerTools(
           {
             name: 'run_command',
             description:
-              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output.',
+              'Run one command in a terminal, from the root of the source, until it exits. Use {{NAME}} placeholders for credentials; ${name} is left to the shell. input: text typed into the command when it starts, a line for each prompt. Returns the screen, the exit code, and the output. For a program that stays open, such as a full screen terminal UI, use start_session.',
             inputSchema: schema({ command: string, input: string }, ['command']),
             async run(input: Record<string, unknown>) {
               const command = arg(input, 'command');
@@ -662,6 +685,73 @@ export function explorerTools(
                 { kind: 'run', ...recorded },
               );
             },
+          },
+          {
+            name: 'start_session',
+            description:
+              'Start a program that stays open, such as a full screen terminal UI, in a terminal from the root of the source. It runs until stop_session, or until start_session starts another. Use {{NAME}} placeholders for credentials. Returns the screen of the program.',
+            inputSchema: schema({ command: string }, ['command']),
+            run(input: Record<string, unknown>) {
+              const command = arg(input, 'command');
+              if (!command.trim()) return Promise.resolve({ ...text('Give the command to start.'), isError: true });
+              return act(
+                session,
+                { kind: 'session', op: 'start', command: session.vars.resolve(command) },
+                { kind: 'session', op: 'start', command: session.vars.redact(command) as string },
+              );
+            },
+          },
+          {
+            name: 'wait_for',
+            description:
+              'Wait until text is on the screen of the session, for a program that is slow to draw. With no text, wait until the screen stops changing. Fails when the time runs out.',
+            inputSchema: schema({
+              text: string,
+              timeoutMs: { type: 'number', description: 'Default: 5000. At most the command time limit.' },
+            }),
+            run(input: Record<string, unknown>) {
+              const timeoutMs = Math.max(0, Math.min(60_000, Number(input.timeoutMs ?? 5000) || 5000));
+              const wanted = input.text === undefined || input.text === '' ? undefined : arg(input, 'text');
+              return act(
+                session,
+                {
+                  kind: 'session',
+                  op: 'wait',
+                  timeoutMs,
+                  ...(wanted === undefined ? {} : { text: session.vars.resolve(wanted) }),
+                },
+                {
+                  kind: 'session',
+                  op: 'wait',
+                  timeoutMs,
+                  ...(wanted === undefined ? {} : { text: session.vars.redact(wanted) as string }),
+                },
+              );
+            },
+          },
+          {
+            name: 'resize',
+            description:
+              'Resize the terminal of the session, for example to a narrow 60 by 20 to see how the layout copes. The program gets the new size as a real terminal gives it.',
+            inputSchema: schema(
+              {
+                cols: { type: 'integer', minimum: 20, maximum: 500 },
+                rows: { type: 'integer', minimum: 5, maximum: 200 },
+              },
+              ['cols', 'rows'],
+            ),
+            run(input: Record<string, unknown>) {
+              const size = z
+                .object({ cols: z.number().int().min(20).max(500), rows: z.number().int().min(5).max(200) })
+                .parse(input);
+              return act(session, { kind: 'session', op: 'resize', ...size });
+            },
+          },
+          {
+            name: 'stop_session',
+            description: 'Stop the program of the session, and every process that it started.',
+            inputSchema: schema({}),
+            run: () => act(session, { kind: 'session', op: 'stop' }),
           },
         ]
       : []),
@@ -728,12 +818,27 @@ export function explorerTools(
         return viewed;
       },
     },
-    {
-      name: 'press',
-      description: 'Press one key.',
-      inputSchema: schema({ key: string }, ['key']),
-      run: (input) => act(session, { kind: 'press', key: arg(input, 'key') }),
-    },
+    session.driver?.platform === 'cli'
+      ? {
+          name: 'press',
+          description:
+            'Send keys to the program of the session, one after the other, like a person types them. Each item is a named key (enter, escape, tab, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, f1 to f12, shift+tab), ctrl+ a letter (ctrl+p), alt+ a key (alt+x), or else text typed as it is ("hello", {{NAME}} placeholders work). A single character is always text, so "j" is the letter j. Returns the screen.',
+          inputSchema: schema({ keys: { type: 'array', items: string, minItems: 1 } }, ['keys']),
+          run(input: Record<string, unknown>) {
+            const keys = z.array(z.string().min(1)).min(1).parse(input.keys);
+            return act(
+              session,
+              { kind: 'session', op: 'keys', keys: keys.map((key) => session.vars.resolve(key)) },
+              { kind: 'session', op: 'keys', keys: keys.map((key) => session.vars.redact(key) as string) },
+            );
+          },
+        }
+      : {
+          name: 'press',
+          description: 'Press one key.',
+          inputSchema: schema({ key: string }, ['key']),
+          run: (input: Record<string, unknown>) => act(session, { kind: 'press', key: arg(input, 'key') }),
+        },
     {
       name: 'scroll',
       description: 'Scroll one direction.',
@@ -1049,7 +1154,9 @@ export function explorerTools(
   }
   tools.push(...lessonTools(session, 'explorer'));
   if (session.driver?.platform === 'desktop') return tools.filter((tool) => tool.name !== 'open');
-  return session.driver?.platform === 'api' || session.driver?.platform === 'cli'
+  if (session.driver?.platform === 'cli')
+    return tools.filter((tool) => !['tap', 'type', 'scroll', 'back', 'open'].includes(tool.name));
+  return session.driver?.platform === 'api'
     ? tools.filter((tool) => !['tap', 'type', 'press', 'scroll', 'back', 'open'].includes(tool.name))
     : tools;
 }

@@ -20,8 +20,8 @@ export type Contract = {
 };
 
 /**
- * The contract of a project: from `app.connect.spec`, or else from its
- * endpoint inventory. `resolve` fills the placeholders of `spec` and `url`.
+ * The contract of a project: from `app.connect.spec`, or else from the
+ * endpoint inventory of its profile (`config.profile`). `resolve` fills the placeholders of `spec` and `url`.
  * A project with neither has a contract without endpoints, so only reads go
  * out. A caller that needs endpoints checks for that.
  */
@@ -29,8 +29,9 @@ export async function loadContract(
   root: string,
   connect: Pick<AppConfig['connect'], 'spec' | 'url' | 'errors'>,
   resolve: (value: string) => string,
+  profile?: string,
 ): Promise<Contract> {
-  const inventory = paths.endpointInventory(root);
+  const inventory = paths.endpointInventory(root, profile);
   const doc = connect.spec
     ? await loadSpec(specSource(resolve(connect.spec), { root, url: connect.url && resolve(connect.url) }))
     : existsSync(inventory)

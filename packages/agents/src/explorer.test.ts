@@ -271,3 +271,91 @@ describe('the api explorer', () => {
     ]);
   });
 });
+
+describe('the explorer on a terminal UI', () => {
+  /** Counts the presses of j, and shows the last line typed after enter. */
+  const COUNTER = `
+let count = 0;
+let line = '';
+let last = '';
+const draw = () => process.stdout.write('\\x1b[H\\x1b[2Jcount ' + count + '\\r\\nlast ' + last);
+process.stdout.write('\\x1b[?1049h');
+process.stdin.setRawMode(true);
+process.stdin.on('data', (data) => {
+  for (const key of data.toString()) {
+    if (key === 'j') count++;
+    else if (key === '\\r') [last, line] = [line, ''];
+    else line += key;
+  }
+  draw();
+});
+draw();
+`;
+
+  it('drives a session with keys, and saves a routine that replays with its secrets as placeholders', async () => {
+    await writeFile(join(root, 'counter.cjs'), COUNTER);
+    const config = parseConfig({ version: 1, app: { platform: 'cli', source: '.', secrets: ['PIN'] } });
+    const vars = new Vars(['PIN'], { PIN: 'pin-4821' });
+    const driver = createDriver(
+      config,
+      (value) => value,
+      (value) => vars.redact(value) as string,
+      root,
+    );
+    await driver.connect();
+    const workspace = new Workspace(root);
+    const record = await workspace.startSession('explorer');
+    const session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
+    const tools = explorerTools(session);
+    const run = async (name: string, input: Record<string, unknown> = {}) => {
+      const result = await tools.find((tool) => tool.name === name)!.run(input);
+      return { ...result, text: result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n') };
+    };
+    try {
+      const names = tools.map((tool) => tool.name);
+      for (const name of ['run_command', 'start_session', 'press', 'wait_for', 'resize', 'stop_session'])
+        expect(names).toContain(name);
+      expect(names).not.toContain('tap');
+
+      // A shell ${name} is the shell's, not an unknown placeholder.
+      const loop = await run('run_command', { command: 'for s in a b; do echo "item-${s}"; done' });
+      expect(loop.text).toContain('item-a\nitem-b');
+
+      expect((await run('start_session', { command: 'node counter.cjs' })).text).toContain('The program is running.');
+      expect((await run('wait_for', { text: 'count 0' })).isError).toBeFalsy();
+      const pressed = await run('press', { keys: ['j', 'j', '{{PIN}}', 'enter'] });
+      expect(pressed.text).toContain('Screen:\ncount 2\nlast {{PIN}}');
+      expect((await run('wait_for', { text: 'never', timeoutMs: 200 })).isError).toBe(true);
+      expect((await run('save_routine', { id: 'count-twice', description: 'Counts to two' })).isError).toBeFalsy();
+      await run('stop_session');
+
+      const routine = (await workspace.readRoutine('count-twice'))!;
+      expect(routine.steps.map(({ at: _at, ...step }) => step)).toEqual([
+        { kind: 'run', command: 'for s in a b; do echo "item-${s}"; done' },
+        { kind: 'session', op: 'start', command: 'node counter.cjs' },
+        { kind: 'session', op: 'wait', text: 'count 0', timeoutMs: 5000 },
+        { kind: 'session', op: 'keys', keys: ['j', 'j', '{{PIN}}', 'enter'] },
+      ]);
+      const replayed = await run('run_routine', { id: 'count-twice' });
+      expect(replayed.isError).toBeFalsy();
+      expect(replayed.text).toContain('count 2\nlast {{PIN}}');
+    } finally {
+      await driver.close();
+    }
+  });
+
+  it('tells the explorer when the screen was still changing', { timeout: 30_000 }, async () => {
+    const config = parseConfig({ version: 1, app: { platform: 'cli', source: '.' } });
+    const driver = createDriver(config, (value) => value, undefined, root);
+    await driver.connect();
+    const record = await new Workspace(root).startSession('explorer');
+    const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
+    const start = explorerTools(session).find((tool) => tool.name === 'start_session')!;
+    try {
+      const result = await start.run({ command: 'while true; do date +%N; sleep 0.02; done' });
+      expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/still changing/) });
+    } finally {
+      await driver.close();
+    }
+  });
+});

@@ -68,7 +68,7 @@ export async function reflectOnSession(
   deps: { createRuntime?: typeof makeRuntime; onLog?: (message: string) => void; vars?: Vars } = {},
 ): Promise<number> {
   if (!config.agents.memory.enabled) return 0;
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const session = (await workspace.listSessions(Infinity)).find((item) => item.id === sessionId);
   const lines = troubleLog(await workspace.readEvents(sessionId), session?.summary);
   if (!lines.length) return 0;

@@ -637,5 +637,13 @@ export function stepWords(step: RoutineStep): string {
   if (step.kind === 'request') return `${step.method} ${step.url}`;
   if (step.kind === 'run')
     return `Run \`${step.command}\`${step.input ? ` with the input ${JSON.stringify(step.input)}` : ''}`;
+  if (step.kind === 'session') {
+    if (step.op === 'start') return `Start \`${step.command}\` in a terminal`;
+    if (step.op === 'keys') return `Press ${step.keys.join(' ')}`;
+    if (step.op === 'wait')
+      return step.text === undefined ? 'Wait until the screen is still' : `Wait for ${JSON.stringify(step.text)}`;
+    if (step.op === 'resize') return `Resize the terminal to ${step.cols} by ${step.rows}`;
+    return 'Stop the program';
+  }
   return 'Go back';
 }

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { ConfigError } from '../errors.js';
-import { BUGPATROL_DIR, CONFIG_FILENAME, legacyLayout, paths } from '../paths.js';
+import { BUGPATROL_DIR, CONFIG_FILENAME, legacyLayout, paths, profileOf } from '../paths.js';
 import type { runSchema } from './schema.js';
 import { type BugpatrolConfig, bugpatrolConfigSchema } from './schema.js';
 
@@ -34,7 +34,8 @@ export function loadConfig(
     throw new ConfigError(`${CONFIG_FILENAME} is not valid YAML`, { cause });
   }
 
-  return parseConfig(mergeShallow(raw, overrides), path);
+  const profile = profileOf(root, configFile);
+  return { ...parseConfig(mergeShallow(raw, overrides), path), ...(profile && { profile }) };
 }
 
 export function parseConfig(raw: unknown, source = '<inline>'): BugpatrolConfig {

@@ -16,7 +16,7 @@ export async function runIssueCommand(
   config?: BugpatrolConfig,
 ): Promise<void> {
   const [action, id, ...rest] = args;
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config?.profile);
 
   if (action === 'list' || action === undefined) {
     const issues = await workspace.listIssues();

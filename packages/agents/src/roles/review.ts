@@ -98,6 +98,10 @@ const REVIEW_TOOLS = new Set([
   'wait',
   'request',
   'run_command',
+  'start_session',
+  'wait_for',
+  'resize',
+  'stop_session',
   'run_routine',
   'switch_window',
   'report_bug',
@@ -344,7 +348,7 @@ async function withBuild<T>(
     let driver: Driver | undefined;
     try {
       const vars = new Vars(config.app.secrets);
-      app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree });
+      app = await startApp(config.app, { root, vars, emit: ctx.log, source: worktree, profile: config.profile });
       const connect = async () => {
         await driver?.close();
         driver = undefined;
@@ -1230,7 +1234,7 @@ export async function reviewPullRequest(
   const gh = opts.gh ?? defaultGh;
   const ready = await ghReady(gh);
   if (!ready.ok) throw new ConfigError(ready.reason.replace('GitHub publish skipped', 'Review stopped'));
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const patrol = activePatrolPid((await workspace.readAgents()).patrol);
   if (patrol)
     throw new ConfigError(

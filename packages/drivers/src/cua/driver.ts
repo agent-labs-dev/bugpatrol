@@ -333,6 +333,7 @@ export class CuaDriver implements Driver {
           case 'request':
             throw new Error('HTTP requests require the API driver');
           case 'run':
+          case 'session':
             throw new Error('Commands require the CLI driver');
         }
         return {

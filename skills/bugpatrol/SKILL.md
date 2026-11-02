@@ -21,11 +21,11 @@ Bugpatrol has these roles:
 - The **retest** starts the app from the fix worktree. The explorer repeats the flow, and the judge compares the before and after screenshots.
 - The **publish** step (off by default) opens a GitHub PR for each verified fix, and an issue for each major bug with no fix.
 
-Platforms: `web` (Playwright), `electron` (CDP), `ios` and `android` (Maestro).
+Platforms: `web` (Playwright), `electron` (CDP), `ios` and `android` (Maestro), `desktop` (Cua), `api` (HTTP), and `cli`: commands that run and exit, and full screen terminal UIs that the explorer drives with keys (it needs `python3`).
 
 The explorer, the judge, and the fixer are LLM agents. Each one runs on a local agent CLI (`claude`, `codex`, `kimi`, `opencode`, or `pi`) or on an API key (OpenRouter, Vercel AI Gateway, OpenAI, Anthropic).
 
-Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model. The routines (`.bugpatrol/routines/`) and the app map (`.bugpatrol/appmap.json`) are committed, so CI and a fresh clone can replay them. Bugpatrol writes them and never commits them: the user does.
+Bugpatrol keeps all of its files in one `.bugpatrol/` folder at the project root. The config and the app guide are committed. The local data goes in `.bugpatrol/runs/`, and git ignores it. The first session learns **routines** (for example `enter-app`), so later sessions start faster and replay these paths with no model. The routines (`.bugpatrol/routines/`) and the app map (`.bugpatrol/appmap.json`) are committed, so CI and a fresh clone can replay them. Bugpatrol writes them and never commits them: the user does. Another config, such as `--config .bugpatrol/cli.yml`, is a profile with its own `.bugpatrol/cli/appmap.json` and `.bugpatrol/cli/routines/`.
 
 ## 2. Configure it for the repo
 
@@ -55,6 +55,7 @@ Launch the app yourself, and prove that it runs:
 - **Electron:** run the start command with `--remote-debugging-port=<port>`, then run `curl -sf http://127.0.0.1:<port>/json/version`.
 - **iOS:** check that the app is on the booted simulator: `xcrun simctl listapps booted | grep <bundle id>`. Also start the dev server (for example Metro), if the app needs it.
 - **Android:** check that the app is on the emulator: `adb shell pm list packages | grep <package>`.
+- **CLI:** run the command once with `--help` or `--version`. If the app keeps state in the user's home or config folder, give it its own with `app.connect.cli.env`, for example `HOME: '{{PRIVATE_DIR}}/home'`, so the explorer never touches the user's real files. For a full screen terminal UI, note the keys that open each view; the explorer starts it with `start_session` and drives it with `press`.
 
 Also check the backend. If `.env` or the config points to an API URL, check that it answers, for example `curl -s -o /dev/null -w '%{http_code}' <api url>`. A web app often starts, but it cannot sign in when its backend is down.
 
@@ -515,6 +516,7 @@ To summarize the results for the user, read these files:
 | `.bugpatrol/runs/sessions/<id>/` | One explorer session and its screenshots |
 | `.bugpatrol/appmap.json` | The screens that the explorer found. Commit it |
 | `.bugpatrol/routines/<id>.json` | The routines, and the repro routine of each issue (`repro-<hash>`). Commit them |
+| `.bugpatrol/<profile>/` | The app map and routines of the config `.bugpatrol/<profile>.yml`. Commit them |
 | `.bugpatrol/runs/memory.json` | The lessons |
 
 Severity, worst first: `critical`, `major`, `minor`, `cosmetic`.

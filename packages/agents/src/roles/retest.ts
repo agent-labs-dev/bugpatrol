@@ -112,7 +112,7 @@ export async function retestFix(
   deps: Deps,
   options: { build?: 'main' } = {},
 ): Promise<Retest> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const targets = await loadRetestTargets(workspace, issue);
   const retest: Retest = {
     attempt,
@@ -160,6 +160,7 @@ export async function retestFix(
       vars,
       emit: deps.onLog,
       source: options.build === 'main' ? undefined : fix.worktree,
+      profile: config.profile,
     });
     driver = (deps.createDriver ?? makeDriver)(
       config,
@@ -398,7 +399,7 @@ async function findMerge(fix: FixProposal, branch: string): Promise<Merge | unde
  */
 async function deployed(root: string, config: BugpatrolConfig, fix: FixProposal): Promise<boolean> {
   if (!config.app.connect.version) return true;
-  const commit = (await new Workspace(root).readDeploy())?.commit;
+  const commit = (await new Workspace(root, config.profile).readDeploy())?.commit;
   if (!commit || !fix.mergeCommit) return false;
   // The deployed commit can be newer than the last fetch.
   await exec('git', ['-C', fix.repo, 'fetch', '-q', 'origin']).catch(() => {});
@@ -416,7 +417,7 @@ export async function recheckMerged(
   config: BugpatrolConfig,
   deps: Deps = {},
 ): Promise<{ closed: string[] }> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const closed: string[] = [];
   if (!config.agents.explorer.enabled || !config.agents.judge.enabled) return { closed };
   const external = externalBackend(config.app);
@@ -498,7 +499,7 @@ export async function runFixCycle(
   config: BugpatrolConfig,
   deps: Deps & { issueIds?: string[] } = {},
 ): Promise<FixProposal[]> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const changed = new Map<string, FixProposal>();
   // The first pass takes new issues; later passes only refix what the judge
   // sent back, so a retry loop never grows into a queue of new fixes.

@@ -95,6 +95,22 @@ describe('bugpatrol endpoints', () => {
     expect(lines).toEqual(['GET /items  allowed', '\n1 endpoint(s), 0 skipped.']);
   });
 
+  it("reads and writes a profile's own inventory and app map, and leaves the default config's alone", async () => {
+    const config = {
+      ...parseConfig({ version: 1, app: { platform: 'api', connect: { url: 'http://127.0.0.1:9' } } }),
+      profile: 'cli',
+    };
+    await mkdir(join(root, '.bugpatrol', 'cli'), { recursive: true });
+    await writeFile(paths.endpointInventory(root), 'endpoints:\n  - {method: GET, path: /default}\n');
+    await expect(runEndpointsCommand([], root, log, config)).rejects.toThrow('commit .bugpatrol/cli/endpoints.yml');
+    await writeFile(paths.endpointInventory(root, 'cli'), 'endpoints:\n  - {method: GET, path: /items}\n');
+    await runEndpointsCommand([], root, log, config);
+    expect(lines[0]).toBe('GET /items  allowed');
+    const map = JSON.parse(await readFile(paths.appMap(root, 'cli'), 'utf8'));
+    expect(map.endpoints.map((endpoint: { key: string }) => endpoint.key)).toEqual(['GET /items']);
+    await expect(readFile(paths.appMap(root))).rejects.toThrow(/ENOENT/);
+  });
+
   it('marks each endpoint allowed, read-only, or denied', async () => {
     await mkdir(join(root, '.bugpatrol'), { recursive: true });
     await writeFile(

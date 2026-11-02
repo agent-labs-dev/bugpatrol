@@ -4,7 +4,14 @@ import { type Contract, loadContract } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
 import type { Vars } from './vars.js';
 
-type Options = { root: string; vars: Vars; emit?: (summary: string) => void; source?: string };
+type Options = {
+  root: string;
+  vars: Vars;
+  emit?: (summary: string) => void;
+  source?: string;
+  /** The config profile, whose endpoint inventory an api app reads. */
+  profile?: string;
+};
 
 type RunningApp = {
   vars: Vars;
@@ -122,7 +129,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
       await run(command, 'Setup');
     }
     if (app.platform === 'api')
-      contract = await loadContract(opts.root, app.connect, opts.vars.resolve.bind(opts.vars));
+      contract = await loadContract(opts.root, app.connect, opts.vars.resolve.bind(opts.vars), opts.profile);
   } catch (error) {
     // A setup that fails halfway may already hold resources (a test run, an
     // identity). Teardown undoes what it can before the error goes up.

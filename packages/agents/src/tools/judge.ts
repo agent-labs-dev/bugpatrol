@@ -253,7 +253,13 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             status: 'new',
             screenId: first.screenId,
             candidateIds: ids,
-            evidence: repro ? { ...first.evidence, reproRoutineId: repro } : first.evidence,
+            evidence: repro
+              ? {
+                  ...first.evidence,
+                  reproRoutineId: repro,
+                  ...(session.workspace.profile && { reproProfile: session.workspace.profile }),
+                }
+              : first.evidence,
             judgement: { by: runtimeLabel, reason: input.reason.trim(), at: now },
             occurrences: 1,
             firstSeenAt: now,

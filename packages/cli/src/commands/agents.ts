@@ -190,7 +190,7 @@ export async function runAgentCommand(
 ): Promise<void> {
   const flags = parseAgentFlags(command, args);
   preflight(command, config);
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   if (command === 'patrol') {
     const state = flags.state as 'local' | 'branch' | undefined;
     const { problems } = await runPatrol({
@@ -384,7 +384,7 @@ export async function runAgentCommand(
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
-    app = await startApp(config.app, { root, vars, emit: log });
+    app = await startApp(config.app, { root, vars, emit: log, profile: config.profile });
     driver = createDriver(
       config,
       vars.resolve.bind(vars),

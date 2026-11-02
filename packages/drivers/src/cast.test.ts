@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
-import { castGif, readCast, Terminal, terminalPng, writeCast } from './cast.js';
+import { CastRecorder, castGif, readCast, Terminal, terminalPng, writeCast } from './cast.js';
 
 /** The width, height, and frame count of a GIF, from its header and its image descriptors. */
 function gifInfo(bytes: Buffer): { width: number; height: number; frames: number } {
@@ -16,22 +16,166 @@ function gifInfo(bytes: Buffer): { width: number; height: number; frames: number
   return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8), frames };
 }
 
+function ink(png: PNG, x: number, y: number): boolean {
+  const index = (y * png.width + x) * 4;
+  return png.data[index] !== 0x1e || png.data[index + 1] !== 0x1e || png.data[index + 2] !== 0x1e;
+}
+
 describe('Terminal', () => {
-  it('draws what a terminal shows: overwritten lines, cleared lines, and wrapped lines', () => {
+  it('draws what a terminal shows: overwritten lines, cleared lines, and wrapped lines', async () => {
     const terminal = new Terminal(20, 4);
     terminal.write('progress 10%\rprogress 99%\r\n');
     terminal.write('\u001b[31mred\u001b[0m text\r\n');
     terminal.write('gone\u001b[2K\rkept\r\n');
     terminal.write('0123456789abcdefghijXYZ');
+    await terminal.flush();
     // The first line scrolled off the top, and the text keeps it.
     expect(terminal.text()).toBe('progress 99%\nred text\nkept\n0123456789abcdefghij\nXYZ');
   });
 
-  it('keeps the escape sequence that one chunk cuts in two', () => {
+  it('keeps the escape sequence that one chunk cuts in two', async () => {
     const terminal = new Terminal(20, 2);
     terminal.write('a\u001b[3');
     terminal.write('2mb\u001b[0m');
+    await terminal.flush();
     expect(terminal.text()).toBe('ab');
+  });
+
+  it('keeps truecolor in cells and PNG pixels', async () => {
+    const terminal = new Terminal(2, 1);
+    terminal.write('\u001b[38;2;12;34;56m\u001b[48;2;78;90;123mX');
+    await terminal.flush();
+    expect(terminal.cells()[0]![0]).toMatchObject({ fg: [12, 34, 56], bg: [78, 90, 123] });
+    const png = PNG.sync.read(terminalPng(terminal));
+    const colors = new Set<string>();
+    for (let index = 0; index < png.data.length; index += 4)
+      colors.add(`${png.data[index]}:${png.data[index + 1]}:${png.data[index + 2]}`);
+    expect(colors.has('12:34:56')).toBe(true);
+    expect(colors.has('78:90:123')).toBe(true);
+  });
+
+  it('reads the visible alternate screen', async () => {
+    const terminal = new Terminal(10, 2);
+    terminal.write('normal');
+    terminal.write('\u001b[?1049h\u001b[H\u001b[2JALT');
+    await terminal.flush();
+    expect(terminal.screenText()).toBe('ALT');
+    expect(terminal.text()).toBe('ALT');
+  });
+
+  it('joins a heavy left bar across rows', async () => {
+    const terminal = new Terminal(2, 2);
+    terminal.write('\u001b[?25l\u001b[1;1H┃\u001b[2;1H┃');
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal));
+    const x = 3;
+    const rowBoundary = 16;
+    expect(png.data[(rowBoundary - 1) * png.width * 4 + x * 4]).not.toBe(0x1e);
+    expect(png.data[rowBoundary * png.width * 4 + x * 4]).not.toBe(0x1e);
+  });
+
+  it('draws Latin-1 glyphs from their own code points', async () => {
+    // Terminus has no no-break space, so a lookup from 0xa0 draws » (0xbb) as ¼ (0xbc).
+    const terminal = new Terminal(1, 1);
+    terminal.write('\u001b[?25l»');
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal));
+    // The sixth row of » is "#  #": the left edges of its two chevrons.
+    expect([0, 1, 2, 3].map((x) => ink(png, x, 5))).toEqual([true, false, false, true]);
+  });
+
+  it('uses two cells for a wide character', async () => {
+    const terminal = new Terminal(5, 1);
+    terminal.write('界');
+    await terminal.flush();
+    expect(terminal.cells()[0]![0]).toMatchObject({ char: '界', width: 2 });
+    expect(terminal.cells()[0]![1]).toMatchObject({ char: '', width: 0 });
+  });
+
+  it('does not leave common TUI glyphs blank', async () => {
+    const chars = [
+      '┃',
+      '┏',
+      '╬',
+      '▏',
+      '▌',
+      '▐',
+      '█',
+      '▀',
+      '▄',
+      '░',
+      '▒',
+      '▓',
+      '◐',
+      '●',
+      '○',
+      '■',
+      '□',
+      '›',
+      '»',
+      '→',
+      '←',
+      '✓',
+      '✗',
+      '⠁',
+      '…',
+      '·',
+    ];
+    for (const char of chars) {
+      const terminal = new Terminal(2, 1);
+      terminal.write(`\u001b[?25l${char}`);
+      await terminal.flush();
+      const png = PNG.sync.read(terminalPng(terminal));
+      let visible = false;
+      for (let y = 0; y < 16 && !visible; y++) {
+        for (let x = 0; x < 8; x++) {
+          const index = (y * png.width + x) * 4;
+          if (png.data[index] !== 0x1e || png.data[index + 1] !== 0x1e || png.data[index + 2] !== 0x1e) visible = true;
+        }
+      }
+      expect(visible, char).toBe(true);
+    }
+  });
+
+  it('draws braille dots from the code point bit pattern', async () => {
+    const terminal = new Terminal(1, 1);
+    terminal.write('\u001b[?25l⠋');
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal));
+    for (const [x, y] of [
+      [1, 1],
+      [1, 5],
+      [5, 1],
+    ] as const)
+      expect(ink(png, x, y)).toBe(true);
+    for (const [x, y] of [
+      [1, 9],
+      [5, 5],
+      [5, 9],
+      [1, 13],
+      [5, 13],
+    ] as const)
+      expect(ink(png, x, y)).toBe(false);
+  });
+
+  it('renders ◐ as a filled left half with a hollow right interior', async () => {
+    const terminal = new Terminal(1, 1);
+    terminal.write('\u001b[?25l◐');
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal));
+    expect(ink(png, 2, 8)).toBe(true);
+    expect(ink(png, 3, 8)).toBe(true);
+    expect(ink(png, 4, 8)).toBe(false);
+    expect(ink(png, 5, 8)).toBe(false);
+  });
+
+  it('renders a wide CJK glyph across both cell halves', async () => {
+    const terminal = new Terminal(2, 1);
+    terminal.write('\u001b[?25l界');
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal));
+    expect(Array.from({ length: 8 }, (_, x) => ink(png, x, 4)).some(Boolean)).toBe(true);
+    expect(Array.from({ length: 8 }, (_, x) => ink(png, x + 8, 4)).some(Boolean)).toBe(true);
   });
 });
 
@@ -110,12 +254,104 @@ describe('cast', () => {
     }
   });
 
-  it('draws the screen of a terminal as a PNG with text on it', () => {
+  it('draws the screen of a terminal as a PNG with text on it', async () => {
     const blank = PNG.sync.read(terminalPng(new Terminal(80, 24)));
     const terminal = new Terminal(80, 24);
     terminal.write('hello');
+    await terminal.flush();
     const png = PNG.sync.read(terminalPng(terminal));
     expect([png.width, png.height]).toEqual([640, 384]);
     expect(png.data.equals(blank.data)).toBe(false);
+  });
+
+  it('hides each cell of a secret on the PNG, also where the secret wraps onto the next row', async () => {
+    const secret = 'hunter2-very-secret';
+    const redact = (value: string) => value.replaceAll(secret, '{{TOKEN}}');
+    const terminal = new Terminal(10, 3);
+    // "hunter2-ve" fills row 1 from column 0, "ry-secret" starts row 2.
+    terminal.write(`\u001b[?25l${secret} ok`);
+    await terminal.flush();
+    const png = PNG.sync.read(terminalPng(terminal, redact));
+    const grey = (col: number, row: number) => {
+      for (let y = row * 16; y < (row + 1) * 16; y++)
+        for (let x = col * 8; x < (col + 1) * 8; x++) {
+          const index = (y * png.width + x) * 4;
+          if (png.data[index] !== 0x80 || png.data[index + 1] !== 0x80 || png.data[index + 2] !== 0x80) return false;
+        }
+      return true;
+    };
+    for (let col = 0; col < 10; col++) expect(grey(col, 0)).toBe(true);
+    for (let col = 0; col < 9; col++) expect(grey(col, 1)).toBe(true);
+    // " ok" after the secret is drawn as usual.
+    expect(grey(9, 1)).toBe(false);
+    expect(grey(0, 2)).toBe(false);
+    const plain = PNG.sync.read(terminalPng(terminal));
+    expect(plain.data.equals(png.data)).toBe(false);
+  });
+
+  it('redacts a recording as one stream, so a secret split across chunks is still found', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-cast-'));
+    try {
+      const recorder = new CastRecorder({ width: 80, height: 24 }, (value) =>
+        value.replaceAll('hunter2-very-secret', '{{TOKEN}}'),
+      );
+      recorder.start();
+      recorder.push('key: hunter2-');
+      recorder.push('very-secret\r\n');
+      recorder.push('done\r\n');
+      const file = await recorder.stop(join(dir, 'run'));
+      const text = await readFile(file, 'utf8');
+      expect(text).not.toContain('hunter2');
+      expect(text).not.toContain('very-secret');
+      expect((await readCast(file)).events.map(([, output]) => output)).toEqual(['key: {{TOKEN}}', '\r\n', 'done\r\n']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records a resize, and draws the GIF at the largest size the terminal had', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bugpatrol-cast-'));
+    try {
+      const recorder = new CastRecorder({ width: 20, height: 5 });
+      recorder.start();
+      recorder.push('small\r\n');
+      recorder.resize(40, 8);
+      recorder.push('large');
+      const file = await recorder.stop(join(dir, 'run'));
+      const lines = (await readFile(file, 'utf8')).trim().split('\n');
+      expect(JSON.parse(lines[2]!)).toEqual([expect.any(Number), 'r', '40x8']);
+      expect((await readCast(file)).events[1]).toEqual([expect.any(Number), '40x8', 'r']);
+      expect(await castGif(file, join(dir, 'run.gif'))).toBe(true);
+      const info = gifInfo(await readFile(join(dir, 'run.gif')));
+      expect(info).toMatchObject({ width: 40 * 8, height: 8 * 16 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('draws each box drawing character from its own arms, not as a cross', async () => {
+    const draw = async (char: string) => {
+      const terminal = new Terminal(1, 1);
+      terminal.write(`\u001b[?25l${char}`);
+      await terminal.flush();
+      const png = PNG.sync.read(terminalPng(terminal));
+      return Array.from({ length: 16 }, (_, y) =>
+        Array.from({ length: 8 }, (_, x) => (ink(png, x, y) ? '#' : '.')).join(''),
+      );
+    };
+    const cross = await draw('┼');
+    // U+2574 is LIGHT LEFT: the left arm only.
+    const left = await draw('╴');
+    expect(left[7]).toBe('#####...');
+    expect(left[0]).toBe('........');
+    // Dashed lines have gaps.
+    expect((await draw('┄'))[7]).toMatch(/#\.#/);
+    expect((await draw('┆')).map((row) => row[3]).join('')).toMatch(/#\.#/);
+    // Heavy and double lines are not the light cross.
+    for (const char of ['╋', '╬', '┽', '╪', '╼', '╍']) expect(await draw(char)).not.toEqual(cross);
+    // A half heavy, half light line keeps each weight.
+    const mixed = await draw('╼');
+    expect(mixed[6]).toBe('...#####');
+    expect(mixed[7]).toBe('########');
   });
 });

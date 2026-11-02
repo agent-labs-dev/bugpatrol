@@ -1,8 +1,8 @@
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Vars, Workspace } from '@bugpatrol/agents';
 import { loadContract, requestPolicy } from '@bugpatrol/contract';
-import { type BugpatrolConfig, ConfigError, type Endpoint } from '@bugpatrol/core';
+import { type BugpatrolConfig, ConfigError, type Endpoint, paths } from '@bugpatrol/core';
 
 /**
  * `bugpatrol endpoints [--spec URL|file] [--json]`
@@ -10,7 +10,7 @@ import { type BugpatrolConfig, ConfigError, type Endpoint } from '@bugpatrol/cor
  * Prints the endpoints of the api contract, what the request policy allows
  * for each (`allowed`, `read-only`, or `denied: <reason>`), and the skipped
  * operations. With no --spec, it reads the spec of the project, or its
- * endpoint inventory, and writes the endpoints to appmap.json.
+ * endpoint inventory, and writes the endpoints to the app map of its profile.
  */
 export async function runEndpointsCommand(
   args: string[],
@@ -33,9 +33,16 @@ export async function runEndpointsCommand(
   const url = connect?.url ?? config?.run?.url;
   // A --spec that is not a URL is a file from the working directory.
   const given = spec && (/^[a-z][a-z\d+.-]*:/i.test(spec) ? spec : pathToFileURL(resolve(spec)).href);
-  const contract = await loadContract(root, { ...connect, url, ...(given ? { spec: given } : {}) }, resolveConfig);
+  const contract = await loadContract(
+    root,
+    { ...connect, url, ...(given ? { spec: given } : {}) },
+    resolveConfig,
+    config?.profile,
+  );
   if (!given && !contract.endpoints.length && !contract.skipped.length)
-    throw new ConfigError('No endpoints: set app.connect.spec, commit .bugpatrol/endpoints.yml, or pass --spec');
+    throw new ConfigError(
+      `No endpoints: set app.connect.spec, commit ${relative(root, paths.endpointInventory(root, config?.profile))}, or pass --spec`,
+    );
   const policy = connect && url ? requestPolicy(contract, { ...connect, url: resolveConfig(url) }) : undefined;
   const access = (endpoint: Endpoint): string | undefined => {
     const verdict = policy?.check(endpoint.method, endpoint.template);
@@ -45,7 +52,7 @@ export async function runEndpointsCommand(
   };
 
   if (!spec && config) {
-    const workspace = new Workspace(root);
+    const workspace = new Workspace(root, config.profile);
     const map = await workspace.readAppMap();
     await workspace.writeAppMap({
       version: 1,

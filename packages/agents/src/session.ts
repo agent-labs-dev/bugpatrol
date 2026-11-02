@@ -42,7 +42,7 @@ export class AgentSession {
     readonly driver?: Driver,
     onEvent?: (summary: string) => void,
   ) {
-    this.workspace = new Workspace(root);
+    this.workspace = new Workspace(root, config.profile);
     const record = this.workspace.recordEvent(sessionId, role, vars);
     this.emit = (event) => {
       record(event);

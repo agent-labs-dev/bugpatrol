@@ -53,7 +53,12 @@ export class Vars {
     return [...this.values.entries()];
   }
 
-  /** Agent input may use only declared secrets and captured setup values. */
+  /**
+   * Agent input may use only declared secrets and captured setup values. An
+   * unknown `{{NAME}}` fails. An unknown `${name}` stays as it is, since it is
+   * also the syntax of the shell: `for s in a b; do cat ${s}.txt; done` runs
+   * as written.
+   */
   resolve(text: string): string {
     return this.interpolate(text, false);
   }
@@ -74,7 +79,8 @@ export class Vars {
         if (value !== undefined) {
           return missing ? missingId(value) : value;
         }
-        if (trusted && env !== undefined) {
+        if (env !== undefined) {
+          if (!trusted) return match;
           const configured = this.env[name];
           if (configured !== undefined) this.configValues.set(name, configured);
           return configured ?? match;

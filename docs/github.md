@@ -73,7 +73,7 @@ The command lists each URL:
 Opened 1 PR(s) and 1 issue(s); skipped 0.
 ```
 
-Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue ([Issues that Bugpatrol filed](#issues-that-bugpatrol-filed)). The routine also holds a bug check: text that the last screen shows or lacks, or an error that the flow logs, while the bug is there.
+Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The judge saves it when it files the issue, and the issue body names it in a hidden line, `<!-- bugpatrol:routine repro-<hash> -->`. An issue that another profile found ([Profiles](configuration.md#profiles)) has its routine in `.bugpatrol/<profile>/routines/`, and the line names the profile too: `<!-- bugpatrol:routine cli/repro-<hash> -->`. Commit the routine. Then any clone of the repo can replay the bug from the issue number alone, for example to check a pull request that closes the issue ([Issues that Bugpatrol filed](#issues-that-bugpatrol-filed)). The routine also holds a bug check: text that the last screen shows or lacks, or an error that the flow logs, while the bug is there.
 
 `patrol` runs the same step at the end of each cycle.
 
@@ -168,7 +168,7 @@ What you must know before you run it:
 - **The code of the pull request runs on your machine, with the secrets of the app.** Bugpatrol refuses a pull request from a fork. Read the diff first. If you trust it, add `--allow-fork`.
 - **One machine runs one app.** `review` does not start while a patrol runs on the same machine.
 - **Each build needs its dependencies.** Set `agents.fixer.retest.prepare` to the install command of your repo, for example `pnpm install --frozen-lockfile`. Bugpatrol runs it in each of the two worktrees. Bugpatrol removes the worktrees after the review.
-- **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol. After the merge, `bugpatrol promote <number> <claim>` keeps a proven claim's routine in `.bugpatrol/routines/` for the patrol to replay.
+- **The pull request build changes nothing that the patrol knows.** The explorer of a review records routines only for that review, and no screen or lesson. A claim routine stays in `.bugpatrol/runs/reviews/pr-<number>/`, never in the routines or the app map of the patrol. After the merge, `bugpatrol promote <number> <claim>` keeps a proven claim's routine in `.bugpatrol/routines/`, or in the routines folder of the `--config` profile, for the patrol to replay.
 - **Bugpatrol finds its comment and its reviews by a marker in the body, not by the account.** So the review can come from your `gh` login on one day and from a CI token on the next, and the same comment is still edited. In GitHub Actions, give `gh` a token in `GH_TOKEN` that has `pull-requests: write`, and `contents: write` for the screenshots on the assets branch. With `agents.review.block` on, the token also needs `checks: write`.
 - **Two reviews of one pull request need a name each.** If two configs review the same pull request, for example two apps of a monorepo, set `agents.review.name` in each. A named review has its own PR comment, only replaces older reviews with the same name, and its check run is `Bugpatrol claim check (<name>)`.
 - The step limit of the explorer is `agents.explorer.maxSteps`. Use `--steps N` for a different limit. The base build uses `agents.fixer.retest.maxSteps`, or 12 steps for each report when that is more.
@@ -271,7 +271,9 @@ Recording needs `ffmpeg` on the `PATH`. Without it, Bugpatrol logs why and the r
 
 ### Claims of a command line app
 
-With `app.platform: cli`, the app is a command line tool, and each step of a claim routine runs one command. Bugpatrol runs the command in a terminal of 80 by 24 from the worktree of the build, and stops it after `app.connect.cli.timeoutMs` (60 seconds by default). A command that waits for input gets the text that the explorer gave it, typed at the start. The terminal comes from the `pty` module of `python3`, the same way on macOS and Linux, so `python3` must be on the `PATH`.
+With `app.platform: cli`, the app is a command line tool, and each step of a claim routine runs one command. Bugpatrol runs the command in a terminal of 80 by 24 (`app.connect.cli.cols` and `rows`) from the worktree of the build, and stops it after `app.connect.cli.timeoutMs` (60 seconds by default). A command that waits for input gets the text that the explorer gave it, typed at the start. The terminal comes from the `pty` module of `python3`, the same way on macOS and Linux, so `python3` must be on the `PATH`.
+
+A full screen terminal UI stays open across steps instead. The routine starts it, sends it keys (`enter`, `escape`, `ctrl+p`, arrows, or text), waits for text on its screen, and stops it, and each step sees the screen that the program shows at that moment. The checks on the output of a step then apply to that screen. A stop, the end of the replay, or a crash of Bugpatrol kills the program and every process that it started.
 
 When the explorer saves the flow of a claim, it can add exact checks on the last command: its exit code, texts that the output must have, and texts that it must not have. Each check gives the same result on each run, so a claim with checks gets its verdict from them, with no judge. The checks must pass on the pull request build for `proven`, and one that fails gives `not-proven`. The evidence is `assertion`. The review shows a table of each check on both builds. With `agents.review.block` on, Bugpatrol runs the commands of a disproof a second time, and only the same results fail the check run. Different results make the claim `untested`, as a flaky replay.
 
@@ -315,7 +317,7 @@ Bugpatrol keeps each list item as written. The judge only marks where a test of 
 
 ### Issues that Bugpatrol filed
 
-A pull request that closes a Bugpatrol issue gets one more claim, "Fixes #12: <issue title>". Bugpatrol reads the routine id from the hidden line in the issue body and loads the routine from `.bugpatrol/routines/` of the checkout, so a fresh clone in CI finds it. The explorer and the judge play no part in this claim. Bugpatrol replays the repro routine on both builds and decides from the routine's bug check alone.
+A pull request that closes a Bugpatrol issue gets one more claim, "Fixes #12: <issue title>". Bugpatrol reads the routine id from the hidden line in the issue body and loads the routine from `.bugpatrol/routines/` of the checkout, or from `.bugpatrol/<profile>/routines/` when the line names a profile, so a fresh clone in CI finds it. Only a review with the same profile replays it: a review with another config lists the claim as untested and names the profile to review with. The explorer and the judge play no part in this claim. Bugpatrol replays the repro routine on both builds and decides from the routine's bug check alone.
 
 The explorer writes the bug check when it reports the bug, and Bugpatrol checks it against the screen right then. It has up to three parts, and each part that is set must hold at the end of a full replay:
 

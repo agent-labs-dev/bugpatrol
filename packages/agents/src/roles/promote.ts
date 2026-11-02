@@ -19,7 +19,7 @@ export async function promoteClaims(
   opts: { gh?: Gh } = {},
 ): Promise<Routine[]> {
   const gh = opts.gh ?? defaultGh;
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const review = await workspace.readReview(number);
   if (!review?.claims)
     throw new ConfigError(`No claim check of PR #${number}. Run \`bugpatrol review ${number} --claims\` first.`);

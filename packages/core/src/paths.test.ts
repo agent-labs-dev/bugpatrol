@@ -3,7 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config/load.js';
-import { findProjectRoot, instructionsPath, legacyLayout, moveRoutines, paths } from './paths.js';
+import {
+  agentFiles,
+  findProjectRoot,
+  instructionsPath,
+  legacyLayout,
+  moveRoutines,
+  paths,
+  profileOf,
+} from './paths.js';
 
 function project(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'bugpatrol-paths-')));
@@ -33,6 +41,46 @@ describe('paths', () => {
     expect(paths.routine('/repo', 'enter-app')).toBe('/repo/.bugpatrol/routines/enter-app.json');
     expect(paths.routines('/repo')).toBe('/repo/.bugpatrol/routines');
     expect(paths.appMap('/repo')).toBe('/repo/.bugpatrol/appmap.json');
+  });
+});
+
+describe('profiles', () => {
+  it('keeps the committed files of the default config where they were, and of another config in its own folder', () => {
+    const root = project();
+    const yaml = 'version: 1\nrun: { command: pnpm dev, url: http://localhost:3000 }\n';
+    writeFileSync(paths.config(root), yaml);
+    // A `profile:` key in the YAML is not read: the file name decides.
+    writeFileSync(join(root, '.bugpatrol', 'cli.yml'), `${yaml}profile: other\n`);
+    expect(profileOf(root)).toBeUndefined();
+    expect(profileOf(root, '.bugpatrol/bugpatrol.yml')).toBeUndefined();
+    const profile = profileOf(root, '.bugpatrol/cli.yml');
+    expect(profile).toBe('cli');
+    expect(loadConfig(root, {}, '.bugpatrol/cli.yml').profile).toBe('cli');
+    expect(loadConfig(root).profile).toBeUndefined();
+    expect(paths.appMap(root, profile)).toBe(join(root, '.bugpatrol', 'cli', 'appmap.json'));
+    expect(paths.routine(root, 'enter-app', profile)).toBe(
+      join(root, '.bugpatrol', 'cli', 'routines', 'enter-app.json'),
+    );
+    expect(paths.endpointInventory(root, profile)).toBe(join(root, '.bugpatrol', 'cli', 'endpoints.yml'));
+    expect(paths.appMap(root)).toBe(join(root, '.bugpatrol', 'appmap.json'));
+    // The run directory stays shared.
+    expect(paths.memory(root)).toBe(join(root, '.bugpatrol', 'runs', 'memory.json'));
+  });
+
+  it('refuses a config name that would take a folder Bugpatrol uses', () => {
+    const root = project();
+    expect(() => profileOf(root, '.bugpatrol/runs.yml')).toThrow(/cannot use as a folder/);
+    expect(() => profileOf(root, '.bugpatrol/routines.yml')).toThrow(/cannot use as a folder/);
+  });
+
+  it('lists the app maps and routine folders of every profile, and nothing in runs/', () => {
+    const root = project();
+    mkdirSync(join(root, '.bugpatrol', 'cli'));
+    mkdirSync(join(root, '.bugpatrol', 'runs'));
+    mkdirSync(paths.routines(root), { recursive: true });
+    expect(agentFiles(root).sort()).toEqual(
+      [paths.routines(root), paths.appMap(root), paths.routines(root, 'cli'), paths.appMap(root, 'cli')].sort(),
+    );
   });
 });
 

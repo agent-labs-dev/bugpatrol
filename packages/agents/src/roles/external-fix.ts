@@ -59,7 +59,7 @@ export async function attachExternalFix(
   target: ExternalFixTarget,
   opts: { summary?: string; gh?: Gh } = {},
 ): Promise<FixProposal> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const issue = await workspace.readIssue(issueId);
   if (!issue) throw new ConfigError(`No issue ${issueId}`);
   const existing = issue.fixId ? await workspace.readFix(issue.fixId) : undefined;

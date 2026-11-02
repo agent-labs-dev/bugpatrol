@@ -13,12 +13,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src/UNIFONT-LICENSE.txt"
   ],
   "scripts": {
     "build": "tsc --build"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
     "@bugpatrol/contract": "workspace:*",
     "@bugpatrol/core": "workspace:*",
     "@bugpatrol/invariants": "workspace:*",
