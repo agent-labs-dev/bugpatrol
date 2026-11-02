@@ -10,6 +10,10 @@ agent:
     review:
       provider: openai
       model: gpt-6.1-sol
+# Run in MergeLoop's job sandbox after an agent resolves a conflict or commits a fix, before
+# anything is pushed, and offered to the agent to check its own work. They mirror CI's `build`
+# job except `pnpm test`, which needs Chromium and ffmpeg that the sandbox lacks. `build`, a
+# required check, still runs all of it on the head MergeLoop pushes, before any merge.
 verify:
 - pnpm install --frozen-lockfile
 - pnpm check --error-on-warnings
