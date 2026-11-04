@@ -55,14 +55,23 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 }
 
 function redactCredentials(text: string): string {
+  const redacted = redactJson(text, 2);
+  // An event stream is not JSON as a whole, but each `data:` line usually is.
+  return (
+    redacted ??
+    text.replace(/^(data: ?)(.+)$/gm, (line, prefix: string, data: string) => {
+      const value = redactJson(data);
+      return value === undefined ? line : prefix + value;
+    })
+  ).replace(JWT, '[redacted]');
+}
+
+function redactJson(text: string, indent?: number): string | undefined {
   try {
     const value: unknown = JSON.parse(text);
-    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), 2).replace(
-      JWT,
-      '[redacted]',
-    );
+    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), indent);
   } catch {
-    return text.replace(JWT, '[redacted]');
+    return undefined;
   }
 }
 

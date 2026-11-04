@@ -103,7 +103,7 @@ describe('controls the explorer could not see or use', () => {
       <input id="doc" type="file" aria-label="Attach document">
       <p id="files"></p>
       <button id="remove" onclick="document.getElementById('files').textContent = confirm('Remove it?') ? 'removed' : 'kept'">Remove</button>
-      <button id="later" onclick="setTimeout(() => { document.getElementById('files').textContent = confirm('Delete later?') ? 'deleted' : 'spared'; }, 50)">Remove later</button>
+      <button id="later" onclick="setTimeout(() => { document.getElementById('files').textContent = confirm('Delete later?') ? 'deleted' : 'spared'; }, 800)">Remove later</button>
       <script>
         for (const id of ['photo', 'doc'])
           document.getElementById(id).addEventListener('change', (event) => {
@@ -161,9 +161,10 @@ describe('controls the explorer could not see or use', () => {
     expect((await driver.observe()).dialogs).toEqual(['confirm "Remove it?": dismissed']);
   });
 
-  it('dismisses a confirm the tap opens after the click has returned', async () => {
+  it('dismisses a confirm the tap opens after a later wait has started', async () => {
     const later = (await driver.observe()).elements.find((element) => element.name === 'Remove later')!;
     expect((await driver.act({ kind: 'tap', ref: later.ref, dialog: 'dismiss' })).ok).toBe(true);
+    expect((await driver.act({ kind: 'wait', ms: 1200 })).ok).toBe(true);
     await expect.poll(() => other.locator('#files').textContent()).toBe('spared');
   });
 

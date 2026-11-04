@@ -49,7 +49,7 @@ export class WebDriver implements Driver {
   private readonly errors = new Map<Page, string[]>();
   private readonly failures = new Map<Page, string[]>();
   private readonly dialogs = new Map<Page, string[]>();
-  /** How the next native dialog is answered: set by each action, so a confirm the last tap opened late still gets its answer. */
+  /** How the next native dialog is answered: set by a tap and used up by the dialog, so a confirm that opens late still gets it. */
   private dialogAnswer: 'accept' | 'dismiss' = 'accept';
   private readonly watched = new WeakSet<Page>();
   private recording?: { cdp: CDPSession; page: Page; frames: Frame[] };
@@ -141,6 +141,7 @@ export class WebDriver implements Driver {
     page.on('dialog', (dialog) => {
       const message = dialog.message().replace(/\s+/g, ' ').trim().slice(0, 200);
       const answer = this.dialogAnswer;
+      this.dialogAnswer = 'accept';
       if (dialogs.length < 20) dialogs.push(`${dialog.type()} ${JSON.stringify(message)}: ${answer}ed`);
       const response =
         answer === 'accept'
@@ -332,7 +333,8 @@ export class WebDriver implements Driver {
     try {
       const page = this.activePage();
       let result: TargetResult = { degraded: false };
-      this.dialogAnswer = action.kind === 'tap' ? (action.dialog ?? 'accept') : 'accept';
+      // Only a tap sets the answer, and the next dialog uses it up: a `wait` for a late confirm keeps it.
+      if (action.kind === 'tap') this.dialogAnswer = action.dialog ?? 'accept';
       switch (action.kind) {
         case 'tap':
           result = await this.tap(page, action);

@@ -222,10 +222,13 @@ describe('API driver against the fixture API', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response('event: run.queued\ndata: {"id":"r1"}\n\nevent: run.finished\ndata: {"state":"canceled"}\n\n', {
-            status: 200,
-            headers: { 'content-type': 'text/event-stream' },
-          }),
+          new Response(
+            'event: run.queued\ndata: {"id":"r1"}\n\nevent: run.finished\ndata: {"state":"canceled","token":"stream-secret"}\n\n',
+            {
+              status: 200,
+              headers: { 'content-type': 'text/event-stream' },
+            },
+          ),
       ),
     );
     try {
@@ -234,8 +237,11 @@ describe('API driver against the fixture API', () => {
       const observed = await parsed.observe();
       expect(observed.capture.kind === 'http' && observed.capture.exchange?.response?.events).toEqual([
         { event: 'run.queued', data: '{\n  "id": "r1"\n}' },
-        { event: 'run.finished', data: '{\n  "state": "canceled"\n}' },
+        { event: 'run.finished', data: '{\n  "state": "canceled",\n  "token": "[redacted]"\n}' },
       ]);
+      expect(observed.capture.kind === 'http' && observed.capture.exchange?.response?.body).not.toContain(
+        'stream-secret',
+      );
     } finally {
       vi.stubGlobal('fetch', originalFetch);
     }
