@@ -49,6 +49,8 @@ export class WebDriver implements Driver {
   private readonly errors = new Map<Page, string[]>();
   private readonly failures = new Map<Page, string[]>();
   private readonly dialogs = new Map<Page, string[]>();
+  /** How the next native dialog is answered: set by a tap and used up by the dialog, so a confirm that opens late still gets it. */
+  private dialogAnswer: 'accept' | 'dismiss' = 'accept';
   private readonly watched = new WeakSet<Page>();
   private recording?: { cdp: CDPSession; page: Page; frames: Frame[] };
 
@@ -134,12 +136,18 @@ export class WebDriver implements Driver {
     const dialogs: string[] = [];
     this.dialogs.set(page, dialogs);
     // Unhandled, Playwright dismisses a dialog, so whatever waits on a
-    // confirm never runs and looks broken. Accept it, the same way every
-    // run, and say so in the next observation.
+    // confirm never runs and looks broken. Accept it by default, and let the
+    // tap that opened it choose dismiss when it is testing the cancel path.
     page.on('dialog', (dialog) => {
       const message = dialog.message().replace(/\s+/g, ' ').trim().slice(0, 200);
-      if (dialogs.length < 20) dialogs.push(`${dialog.type()} ${JSON.stringify(message)}: accepted`);
-      dialog.accept(dialog.type() === 'prompt' ? dialog.defaultValue() : undefined).catch(() => {});
+      const answer = this.dialogAnswer;
+      this.dialogAnswer = 'accept';
+      if (dialogs.length < 20) dialogs.push(`${dialog.type()} ${JSON.stringify(message)}: ${answer}ed`);
+      const response =
+        answer === 'accept'
+          ? dialog.accept(dialog.type() === 'prompt' ? dialog.defaultValue() : undefined)
+          : dialog.dismiss();
+      response.catch(() => {});
     });
     page.on('requestfailed', (request) => {
       const reason = request.failure()?.errorText ?? 'failed';
@@ -325,6 +333,8 @@ export class WebDriver implements Driver {
     try {
       const page = this.activePage();
       let result: TargetResult = { degraded: false };
+      // Only a tap sets the answer, and the next dialog or interaction uses it up: a `wait` for a late confirm keeps it.
+      if (action.kind !== 'wait') this.dialogAnswer = action.kind === 'tap' ? (action.dialog ?? 'accept') : 'accept';
       switch (action.kind) {
         case 'tap':
           result = await this.tap(page, action);
@@ -352,6 +362,9 @@ export class WebDriver implements Driver {
           break;
         case 'window':
           await this.switchWindow(action);
+          break;
+        case 'viewport':
+          await page.setViewportSize({ width: action.width, height: action.height });
           break;
       }
       await this.activePage()

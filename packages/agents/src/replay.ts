@@ -1,3 +1,4 @@
+import { STATUS_CODES } from 'node:http';
 import { isDeepStrictEqual } from 'node:util';
 import { type Contract, type ContractResponse, checkContract, checkSchema } from '@bugpatrol/contract';
 import {
@@ -22,9 +23,17 @@ export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; d
  * errors of the whole flow: a driver reports each one once only.
  */
 export function bugMisses(check: BugCheck, screen: Observation, errors: string[]): string[] {
+  const response = screen.capture.kind === 'http' ? screen.capture.exchange?.response : undefined;
+  const responseLines = response
+    ? [
+        `HTTP ${response.status}${STATUS_CODES[response.status] ? ` ${STATUS_CODES[response.status]}` : ''}`,
+        ...Object.entries(response.headers).map(([name, value]) => `${name}: ${value}`),
+      ]
+    : [];
   const texts = [
     screen.title,
-    screen.capture.kind === 'http' ? screen.capture.exchange?.response?.body : undefined,
+    ...responseLines,
+    response?.body,
     screen.terminal?.output,
     ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
   ].filter((text): text is string => Boolean(text));
@@ -435,7 +444,8 @@ async function actWhenReady(driver: Driver, action: DriverAction, session: Agent
 
 /** A routine step as a driver action, with its placeholders resolved. */
 export function toAction({ assert: _assert, ...step }: RoutineStep, session: AgentSession): DriverAction {
-  if (step.kind === 'tap') return { kind: 'tap', locator: step.target };
+  if (step.kind === 'tap')
+    return { kind: 'tap', locator: step.target, ...(step.dialog ? { dialog: step.dialog } : {}) };
   if (step.kind === 'type') {
     return {
       kind: 'type',
@@ -448,6 +458,7 @@ export function toAction({ assert: _assert, ...step }: RoutineStep, session: Age
   if (step.kind === 'scroll') return { kind: 'scroll', direction: step.direction, locator: step.target };
   if (step.kind === 'open') return { kind: 'open', url: session.vars.resolve(step.url) };
   if (step.kind === 'window') return { kind: 'window', match: step.match };
+  if (step.kind === 'viewport') return step;
   if (step.kind === 'upload') return { kind: 'upload', locator: step.target, file: step.file };
   if (step.kind === 'request')
     return {

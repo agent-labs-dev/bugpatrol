@@ -321,7 +321,7 @@ The explorer writes the bug check when it reports the bug, and Bugpatrol checks 
 
 | Part | The bug shows when |
 | --- | --- |
-| `shows` | The last screen has this text, in an element's name, text, value or test id, or in the body of an API response |
+| `shows` | The last screen has this text, in an element's name, text, value or test id, or in the status, headers, or body of an API response |
 | `lacks` | The last screen does not have this text |
 | `error` | A console or network error during the replay has this text |
 

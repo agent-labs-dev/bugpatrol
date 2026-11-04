@@ -1,5 +1,5 @@
 import type { RequestPolicy } from '@bugpatrol/contract';
-import { formatHttpExchange, type HttpExchange, type HttpMethod, resolvePointer } from '@bugpatrol/core';
+import { formatHttpExchange, type HttpExchange, type HttpMethod, resolvePointer, type SseEvent } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { z } from 'zod';
 import type { Pacer } from './api-pacer.js';
@@ -28,6 +28,9 @@ type ApiOptions = {
 };
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_STREAM_BYTES = 64 * 1024;
+const MAX_STREAM_MS = 1000;
+const MAX_STREAM_EVENTS = 100;
 const captureSchema = z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string().regex(/^(?:\/(?:[^~]|~[01])*)*$/));
 /** The response headers an exchange keeps. The others can carry credentials or noise. */
 const RESPONSE_HEADERS = ['content-type', 'location', 'retry-after', 'allow', 'www-authenticate', 'x-request-id'];
@@ -51,15 +54,82 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
   );
 }
 
+/** A `"key": value` pair, complete or cut off, in text that is not JSON as a whole. */
+const JSON_PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[{[]|[^\s,{}[\]]+)/g;
+/** The blank line that ends an event-stream frame, as `SseParser` reads it. */
+const FRAME_END = /(\r\n\r\n|\n\n|\r\r)/;
+
 function redactCredentials(text: string): string {
+  // An event stream is not JSON as a whole, but an event's data, joined across its `data:` lines, usually is.
+  const redacted =
+    redactJson(text, 2) ??
+    text
+      .split(FRAME_END)
+      .map((part, index) => (index % 2 ? part : redactFrame(part)))
+      .join('');
+  return redacted.replace(JWT, '[redacted]');
+}
+
+/** One frame with its data redacted as a whole, so a pair split over `data:` lines is still seen as one. */
+function redactFrame(frame: string): string {
+  const eol = /\r\n|\r|\n/.exec(frame)?.[0] ?? '\n';
+  const lines = frame.split(/\r\n|\r|\n/);
+  const isData = (line: string) => /^data(?::|$)/.test(line);
+  const first = lines.findIndex(isData);
+  // Not an event: text cut off at a capture limit, or any other body that is not JSON.
+  if (first < 0) return redactPairs(frame);
+  const data = lines
+    .filter(isData)
+    .map((line) => line.slice(5).replace(/^ /, ''))
+    .join('\n');
+  const redacted = (redactJson(data) ?? redactPairs(data)).split('\n').map((line) => `data: ${line}`);
+  return lines.flatMap((line, index) => (index === first ? redacted : isData(line) ? [] : [line])).join(eol);
+}
+
+/** Credential values in JSON that does not parse, such as JSON cut off at a capture limit. */
+function redactPairs(text: string): string {
+  let redacted = '';
+  let from = 0;
+  const pairs = new RegExp(JSON_PAIR);
+  for (let match = pairs.exec(text); match; match = pairs.exec(text)) {
+    const [pair, key = '', separator = '', value = ''] = match;
+    if (!CREDENTIAL.test(jsonKey(key))) continue;
+    // An object or array is redacted to its closing bracket, or to the end of text cut off inside it.
+    const end = /^[{[]$/.test(value) ? containerEnd(text, match.index + pair.length - 1) : match.index + pair.length;
+    redacted += `${text.slice(from, match.index)}"${key}"${separator}"[redacted]"`;
+    from = pairs.lastIndex = end;
+  }
+  return redacted + text.slice(from);
+}
+
+/** The index after the bracket that closes the one at `start`, or the end of the text. */
+function containerEnd(text: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (char === '"') {
+      for (index++; index < text.length && text[index] !== '"'; index++) if (text[index] === '\\') index++;
+    } else if (char === '{' || char === '[') depth++;
+    else if ((char === '}' || char === ']') && --depth === 0) return index + 1;
+  }
+  return text.length;
+}
+
+/** A key as JSON reads it, so an escaped `to\u006ben` is still a token. */
+function jsonKey(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+function redactJson(text: string, indent?: number): string | undefined {
   try {
     const value: unknown = JSON.parse(text);
-    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), 2).replace(
-      JWT,
-      '[redacted]',
-    );
+    return JSON.stringify(value, (key, item: unknown) => (CREDENTIAL.test(key) ? '[redacted]' : item), indent);
   } catch {
-    return text.replace(JWT, '[redacted]');
+    return undefined;
   }
 }
 
@@ -78,8 +148,9 @@ type Received = {
   text: string;
   bytes: number;
   tooLarge: boolean;
-  /** An event stream, cut after its headers (T8). */
+  /** An event stream, cut at explicit byte, time, or event-count limits. */
   stream?: true;
+  events?: SseEvent[];
 };
 
 /**
@@ -236,6 +307,16 @@ export class ApiDriver implements Driver {
         bytes: answer.bytes,
         ...(answer.tooLarge ? { tooLarge: true as const } : {}),
         ...(answer.stream ? { stream: true as const } : {}),
+        ...(answer.events
+          ? {
+              events: answer.events.map((event) => ({
+                event: redact(event.event),
+                data: redact(event.data),
+                ...(event.id === undefined ? {} : { id: redact(event.id) }),
+                ...(event.retry === undefined ? {} : { retry: event.retry }),
+              })),
+            }
+          : {}),
       },
     };
   }
@@ -287,12 +368,12 @@ export class ApiDriver implements Driver {
 
 /**
  * Reads the body up to 1 MiB. A larger body is kept as its size only, never
- * cut silently. An event stream can run forever, so it stops after its headers.
+ * cut silently. An event stream is read only to explicit byte, time, and event
+ * count limits, then its connection is cancelled.
  */
 async function read(response: Response): Promise<Received> {
   if (/^text\/event-stream\b/i.test(response.headers.get('content-type') ?? '')) {
-    await response.body?.cancel();
-    return { status: response.status, headers: response.headers, text: '', bytes: 0, tooLarge: false, stream: true };
+    return readStream(response);
   }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
@@ -322,6 +403,148 @@ async function read(response: Response): Promise<Received> {
     text: tooLarge ? '' : Buffer.concat(chunks).toString('utf8'),
     bytes: tooLarge && length > bytes ? length : bytes,
     tooLarge,
+  };
+}
+
+type TimedOut = { timedOut: true };
+
+async function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array> | TimedOut> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<TimedOut>((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function readStream(response: Response): Promise<Received> {
+  const reader = response.body?.getReader();
+  if (!reader)
+    return {
+      status: response.status,
+      headers: response.headers,
+      text: '',
+      bytes: 0,
+      tooLarge: false,
+      stream: true,
+      events: [],
+    };
+
+  const parser = new SseParser(MAX_STREAM_EVENTS);
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let eventLimit = false;
+  try {
+    const deadline = Date.now() + MAX_STREAM_MS;
+    try {
+      while (!eventLimit && bytes < MAX_STREAM_BYTES) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const result = await readWithTimeout(reader, remainingMs);
+        if ('timedOut' in result) break;
+        if (result.done) {
+          parser.finish(decoder.decode());
+          break;
+        }
+        const remainingBytes = MAX_STREAM_BYTES - bytes;
+        const chunk = result.value.byteLength > remainingBytes ? result.value.slice(0, remainingBytes) : result.value;
+        bytes += chunk.byteLength;
+        eventLimit = parser.push(decoder.decode(chunk, { stream: true }));
+        if (chunk.byteLength < result.value.byteLength) break;
+      }
+    } catch (error) {
+      if (!isStreamTimeout(error)) throw error;
+    }
+    if (!eventLimit) parser.finish(decoder.decode());
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+  return {
+    status: response.status,
+    headers: response.headers,
+    text: parser.text,
+    bytes,
+    tooLarge: false,
+    stream: true,
+    events: parser.events,
+  };
+}
+
+function isStreamTimeout(error: unknown): boolean {
+  return error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);
+}
+
+class SseParser {
+  private pending = '';
+  private readonly captured: string[] = [];
+  readonly events: SseEvent[] = [];
+
+  constructor(private readonly maxEvents: number) {}
+
+  get text(): string {
+    return this.captured.join('') + this.pending;
+  }
+
+  push(text: string): boolean {
+    this.pending += text;
+    while (true) {
+      const separator = /\r\n\r\n|\n\n|\r\r/.exec(this.pending);
+      if (!separator || separator.index === undefined) return false;
+      const end = separator.index + separator[0].length;
+      const frame = this.pending.slice(0, end);
+      this.pending = this.pending.slice(end);
+      this.captured.push(frame);
+      const event = parseSseFrame(frame);
+      if (!event) continue;
+      this.events.push(event);
+      if (this.events.length >= this.maxEvents) {
+        this.pending = '';
+        return true;
+      }
+    }
+  }
+
+  finish(text: string): void {
+    this.pending += text;
+    if (!this.pending) return;
+    this.captured.push(this.pending);
+    const event = parseSseFrame(this.pending);
+    if (event && this.events.length < this.maxEvents) this.events.push(event);
+    this.pending = '';
+  }
+}
+
+function parseSseFrame(frame: string): SseEvent | undefined {
+  const data: string[] = [];
+  let event = 'message';
+  let id: string | undefined;
+  let retry: number | undefined;
+  for (const line of frame.split(/\r\n|\r|\n/)) {
+    if (!line || line.startsWith(':')) continue;
+    const colon = line.indexOf(':');
+    const name = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (name === 'event') event = value;
+    else if (name === 'data') data.push(value);
+    else if (name === 'id') id = value;
+    else if (name === 'retry' && /^\d+$/.test(value)) retry = Number(value);
+  }
+  if (!data.length) return undefined;
+  return {
+    event,
+    data: data.join('\n'),
+    ...(id === undefined ? {} : { id }),
+    ...(retry === undefined ? {} : { retry }),
   };
 }
 

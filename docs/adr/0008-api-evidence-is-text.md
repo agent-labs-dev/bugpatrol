@@ -35,8 +35,10 @@ about Bugpatrol, not about the app. Chromium also made each API patrol slow.
    the step set, and it hides each header or JSON key that names a credential.
    The configured headers carry the app's credentials, so they never show.
 6. A response body over 1 MiB is evidence with `tooLarge`, not an error. A
-   failed request clears the last exchange, so old evidence never stands for a
-   new request.
+   `text/event-stream` response keeps a bounded text prefix and parsed events,
+   then cancels the connection at its byte, time, or event limit. A failed
+   request clears the last exchange, so old evidence never stands for a new
+   request.
 7. `Driver.lastRaw()` gives the response before redaction, for checks in the
    process only. It never goes into a tool result, a log, or a file.
 8. A session saves an exchange as `NNN-<label>.exchange.json`, not as a PNG.

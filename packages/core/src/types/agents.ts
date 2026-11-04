@@ -80,7 +80,7 @@ export type SampleFile = (typeof SAMPLE_FILES)[number];
  * resolved when the step runs and never stored resolved.
  */
 export type RoutineStep = (
-  | { kind: 'tap'; target: Locator }
+  | { kind: 'tap'; target: Locator; dialog?: 'accept' | 'dismiss' }
   | { kind: 'type'; target?: Locator; value: string; submit?: boolean; append?: boolean }
   | { kind: 'press'; key: string }
   | { kind: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; target?: Locator }
@@ -88,6 +88,8 @@ export type RoutineStep = (
   | { kind: 'open'; url: string }
   | { kind: 'wait'; ms: number }
   | { kind: 'window'; match: string }
+  /** Web and Electron: resize the page before checking its responsive layout. */
+  | { kind: 'viewport'; width: number; height: number }
   /** Web and Electron: attach a sample file to a file input, or to the control that opens the file picker. */
   | { kind: 'upload'; target: Locator; file: SampleFile }
   | {
