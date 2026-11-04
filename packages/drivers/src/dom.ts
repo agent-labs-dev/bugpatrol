@@ -267,7 +267,7 @@ export function stepFor(action: DriverAction, element?: UiElement, fallback?: St
       if (!target) {
         throw new Error('Tap needs a target');
       }
-      return { kind: 'tap', target };
+      return { kind: 'tap', target, ...(action.dialog ? { dialog: action.dialog } : {}) };
     case 'type':
       return {
         kind: 'type',
@@ -288,6 +288,8 @@ export function stepFor(action: DriverAction, element?: UiElement, fallback?: St
       return { kind: 'wait', ms: action.ms };
     case 'window':
       return { kind: 'window', match: action.match };
+    case 'viewport':
+      return { kind: 'viewport', width: action.width, height: action.height };
     case 'upload':
       if (!target) {
         throw new Error('Upload needs a target');

@@ -20,6 +20,9 @@ A routine is small JSON: a list of steps with `{{NAME}}` placeholders, never
 resolved secrets, and no pixels. The app map is the same kind of file. ADR 0004
 already commits the small files and ignores the pixels.
 
+Web and Electron routines can persist a viewport width and height, and a tap
+can persist whether its native dialog should be accepted or dismissed.
+
 ## Decision
 
 Routines and the app map move next to the config and are committed:

@@ -6,7 +6,7 @@ import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
 import { type Assertion, parseConfig, type Routine } from '@bugpatrol/core';
 import { ApiDriver, type DriverAction, type Observation, Pacer } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkAssertions, replayRoutine, replaySteps } from './replay.js';
+import { bugMisses, checkAssertions, replayRoutine, replaySteps } from './replay.js';
 import { AgentSession } from './session.js';
 import { FakeDriver, type FakeScreen } from './testing/fake-driver.js';
 import { Vars } from './vars.js';
@@ -122,6 +122,38 @@ describe('replaySteps', () => {
     );
     expect(result).toMatchObject({ ok: false, failedStep: 0 });
     expect(driver.current).toBe('home');
+  });
+});
+
+describe('bug checks', () => {
+  it('searches an API exchange status line and response headers', () => {
+    const screen: Observation = {
+      platform: 'api',
+      location: 'http://127.0.0.1/items/1',
+      capture: {
+        kind: 'http',
+        exchange: {
+          request: { method: 'GET', path: '/items/1', headers: {} },
+          response: {
+            status: 204,
+            headers: { 'content-type': 'text/event-stream' },
+            contentType: 'text/event-stream',
+            body: '',
+            bytes: 0,
+          },
+          latencyMs: 1,
+          at: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      viewport: { width: 0, height: 0, scale: 1 },
+      elements: [],
+      volatileRegions: [],
+      consoleErrors: [],
+      at: '2026-01-01T00:00:00.000Z',
+    };
+
+    expect(bugMisses({ shows: 'HTTP 204 No Content', lacks: 'x-request-id: unexpected' }, screen, [])).toEqual([]);
+    expect(bugMisses({ shows: 'content-type: text/event-stream' }, screen, [])).toEqual([]);
   });
 });
 

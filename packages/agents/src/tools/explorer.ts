@@ -299,6 +299,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `Switched to the "${action.match}" window`;
     case 'upload':
       return `Uploaded a sample ${action.file} file to ${named(action.ref)}`;
+    case 'viewport':
+      return `Set the viewport to ${action.width}x${action.height}`;
     case 'request':
       return `${action.method} ${session.vars.redact(action.url)}`;
     case 'run':
@@ -459,7 +461,7 @@ function locatorSignature(locator?: Locator): string {
 }
 
 function stepSignature(step: RoutineStep): string {
-  if (step.kind === 'tap') return `tap:${locatorSignature(step.target)}`;
+  if (step.kind === 'tap') return `tap:${locatorSignature(step.target)}:${step.dialog ?? 'accept'}`;
   if (step.kind === 'type') {
     return `type:${locatorSignature(step.target)}:${step.value}:${Boolean(step.submit)}:${Boolean(step.append)}`;
   }
@@ -469,6 +471,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'press') return `press:${step.key}`;
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
+  if (step.kind === 'viewport') return `viewport:${step.width}x${step.height}`;
   if (step.kind === 'upload') return `upload:${locatorSignature(step.target)}:${step.file}`;
   if (step.kind === 'request' || step.kind === 'run') return JSON.stringify(step);
   return step.kind;
@@ -548,6 +551,7 @@ export function explorerTools(
   opts: { replay?: Parameters<typeof replayRoutine>[2] } = {},
 ): Tool[] {
   const api = session.driver instanceof ApiDriver ? session.driver : undefined;
+  const browser = session.driver?.platform === 'web' || session.driver?.platform === 'electron';
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -674,13 +678,42 @@ export function explorerTools(
     {
       name: 'tap',
       description: 'Tap one element by its latest ref.',
-      inputSchema: schema({ ref: string }, ['ref']),
+      inputSchema: schema(
+        { ref: string, ...(browser ? { dialog: { type: 'string', enum: ['accept', 'dismiss'] } } : {}) },
+        ['ref'],
+      ),
       async run(input) {
         const ref = arg(input, 'ref');
         await session.activity(`Tapping ${ref}`);
-        return act(session, { kind: 'tap', ref });
+        const dialog = browser ? z.enum(['accept', 'dismiss']).optional().parse(input.dialog) : undefined;
+        return act(session, { kind: 'tap', ref, ...(dialog ? { dialog } : {}) });
       },
     },
+    ...(browser
+      ? [
+          {
+            name: 'set_viewport',
+            description:
+              'Set the web viewport size in CSS pixels. The change is recorded and replayed with the routine.',
+            inputSchema: schema(
+              {
+                width: { type: 'integer', minimum: 1, maximum: 10000 },
+                height: { type: 'integer', minimum: 1, maximum: 10000 },
+              },
+              ['width', 'height'],
+            ),
+            run(input: Record<string, unknown>) {
+              const { width, height } = z
+                .object({
+                  width: z.number().int().positive().max(10_000),
+                  height: z.number().int().positive().max(10_000),
+                })
+                .parse(input);
+              return act(session, { kind: 'viewport', width, height });
+            },
+          },
+        ]
+      : []),
     {
       name: 'type',
       description: 'Type in a field, preserving {{NAME}} placeholders for secrets.',
@@ -956,9 +989,10 @@ export function explorerTools(
           if (value) bug[key] = value;
         }
         const observation = session.lastObservation!;
-        const misses = bugMisses(bug, observation, [
-          ...observation.consoleErrors,
-          ...(observation.networkErrors ?? []),
+        const redactedObservation = session.vars.redact(observation) as Observation;
+        const misses = bugMisses(bug, redactedObservation, [
+          ...redactedObservation.consoleErrors,
+          ...(redactedObservation.networkErrors ?? []),
         ]);
         if (misses.length)
           return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };

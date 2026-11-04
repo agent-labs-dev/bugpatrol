@@ -103,6 +103,7 @@ describe('controls the explorer could not see or use', () => {
       <input id="doc" type="file" aria-label="Attach document">
       <p id="files"></p>
       <button id="remove" onclick="document.getElementById('files').textContent = confirm('Remove it?') ? 'removed' : 'kept'">Remove</button>
+      <button id="later" onclick="setTimeout(() => { document.getElementById('files').textContent = confirm('Delete later?') ? 'deleted' : 'spared'; }, 50)">Remove later</button>
       <script>
         for (const id of ['photo', 'doc'])
           document.getElementById(id).addEventListener('change', (event) => {
@@ -150,6 +151,30 @@ describe('controls the explorer could not see or use', () => {
     expect(await other.locator('#files').textContent()).toBe('removed');
     expect((await driver.observe()).dialogs).toEqual(['confirm "Remove it?": accepted']);
     expect((await driver.observe()).dialogs).toEqual([]);
+  });
+
+  it('dismisses a native confirm when the tap requests the cancel path', async () => {
+    const remove = (await driver.observe()).elements.find((element) => element.name === 'Remove')!;
+    const result = await driver.act({ kind: 'tap', ref: remove.ref, dialog: 'dismiss' });
+    expect(result).toMatchObject({ ok: true, step: { kind: 'tap', dialog: 'dismiss' } });
+    expect(await other.locator('#files').textContent()).toBe('kept');
+    expect((await driver.observe()).dialogs).toEqual(['confirm "Remove it?": dismissed']);
+  });
+
+  it('dismisses a confirm the tap opens after the click has returned', async () => {
+    const later = (await driver.observe()).elements.find((element) => element.name === 'Remove later')!;
+    expect((await driver.act({ kind: 'tap', ref: later.ref, dialog: 'dismiss' })).ok).toBe(true);
+    await expect.poll(() => other.locator('#files').textContent()).toBe('spared');
+  });
+
+  it('changes the page viewport and records the replayable size', async () => {
+    const result = await driver.act({ kind: 'viewport', width: 320, height: 240 });
+    expect(result).toMatchObject({ ok: true, step: { kind: 'viewport', width: 320, height: 240 } });
+    expect(await other.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({
+      width: 320,
+      height: 240,
+    });
+    expect((await driver.observe()).viewport).toMatchObject({ width: 320, height: 240 });
   });
 });
 

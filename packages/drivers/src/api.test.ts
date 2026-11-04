@@ -199,7 +199,7 @@ describe('API driver against the fixture API', () => {
     expect(fixture.hits().filter((hit) => hit.path.startsWith('/admin'))).toEqual([]);
   });
 
-  it('event-stream is cut and recorded', async () => {
+  it('reads a bounded event-stream body and records its bytes', async () => {
     const started = Date.now();
     expect((await driver.act({ kind: 'request', method: 'GET', url: '/events' })).ok).toBe(true);
     expect(Date.now() - started).toBeLessThan(1000);
@@ -207,11 +207,38 @@ describe('API driver against the fixture API', () => {
     expect(evidence.response).toMatchObject({
       status: 200,
       contentType: 'text/event-stream',
-      body: '',
-      bytes: 0,
+      body: 'data: {"tick":0}\n\n',
+      bytes: expect.any(Number),
       stream: true,
     });
-    expect(formatHttpExchange(evidence)).toContain('[stream cut after 0 bytes]');
+    expect(evidence.response?.bytes).toBeGreaterThan(0);
+    expect(evidence.response?.events).toEqual([{ event: 'message', data: '{\n  "tick": 0\n}' }]);
+    expect(formatHttpExchange(evidence)).toContain('data: {"tick":0}');
+  });
+
+  it('parses named SSE events and their data', async () => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('event: run.queued\ndata: {"id":"r1"}\n\nevent: run.finished\ndata: {"state":"canceled"}\n\n', {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          }),
+      ),
+    );
+    try {
+      const parsed = apiDriver(fixture.url);
+      expect((await parsed.act({ kind: 'request', method: 'GET', url: '/events' })).ok).toBe(true);
+      const observed = await parsed.observe();
+      expect(observed.capture.kind === 'http' && observed.capture.exchange?.response?.events).toEqual([
+        { event: 'run.queued', data: '{\n  "id": "r1"\n}' },
+        { event: 'run.finished', data: '{\n  "state": "canceled"\n}' },
+      ]);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
   });
 
   it('pacer spaces requests at 60 per minute', async () => {

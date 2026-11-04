@@ -330,6 +330,8 @@ export class CuaDriver implements Driver {
             throw new Error('Desktop open is unsupported; use app UI or trusted launch arguments');
           case 'upload':
             throw new Error('Uploads are supported on web and Electron only');
+          case 'viewport':
+            throw new Error('Viewport changes are supported on web and Electron only');
           case 'request':
             throw new Error('HTTP requests require the API driver');
           case 'run':

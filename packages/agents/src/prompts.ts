@@ -8,7 +8,7 @@ import type { ExplorerTarget } from './coverage.js';
  */
 
 const BROWSER_NOTES =
-  'Bugpatrol accepts every native dialog (alert, confirm, prompt) and lists it under Dialogs, so an action behind a confirm goes ahead. Open each collapsed control to see what it hides. To test an upload, use `upload` on the file input or the control that opens the file picker.';
+  'Bugpatrol accepts native dialogs (alert, confirm, prompt) by default and lists them under Dialogs. Use `tap` with `dialog: "dismiss"` to test a cancel path, or omit it to accept. Use `set_viewport` with width and height in CSS pixels to test responsive layouts. Open each collapsed control to see what it hides. To test an upload, use `upload` on the file input or the control that opens the file picker.';
 
 const PLATFORM_NOTES: Record<Platform, string> = {
   desktop:

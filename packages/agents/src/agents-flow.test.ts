@@ -327,6 +327,56 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('redacts observation errors before validating a report check', async () => {
+    const f = await fixture();
+    try {
+      f.screens.home!.consoleErrors = ['POST https://api.test/organizations/super-secret-value/runs → 429'];
+      const tools = explorerTools(f.session);
+      await run(tools, 'look');
+      const reported = await run(tools, 'report_bug', {
+        title: 'The run request is rejected',
+        what_is_wrong: 'The request is rejected unexpectedly',
+        expected: 'The request succeeds',
+        severity: 'major',
+        error: 'POST https://api.test/organizations/super-secret-value/runs → 429',
+      });
+      expect(reported.isError).toBeFalsy();
+      expect((await pendingCandidates(f.session, [f.session.sessionId]))[0]?.evidence.bug).toEqual({
+        error: 'POST https://api.test/organizations/{{SECRET}}/runs → 429',
+      });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('records a viewport change in the routine', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      const viewport = tools.find((tool) => tool.name === 'set_viewport');
+      expect(viewport).toBeDefined();
+      if (!viewport) return;
+      await viewport.run({ width: 390, height: 844 });
+      await run(tools, 'save_routine', { id: 'phone', description: 'Phone viewport' });
+      expect((await f.workspace.readRoutine('phone'))?.steps).toMatchObject([
+        { kind: 'viewport', width: 390, height: 844 },
+      ]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('records the requested native dialog answer in a tap step', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      await run(tools, 'tap', { ref: 'e1', dialog: 'dismiss' });
+      expect(f.session.trail.at(-1)).toMatchObject({ kind: 'tap', dialog: 'dismiss' });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('compacts routines and keeps only steps after the current anchor as evidence', async () => {
     const f = await fixture();
     try {
