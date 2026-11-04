@@ -333,8 +333,8 @@ export class WebDriver implements Driver {
     try {
       const page = this.activePage();
       let result: TargetResult = { degraded: false };
-      // Only a tap sets the answer, and the next dialog uses it up: a `wait` for a late confirm keeps it.
-      if (action.kind === 'tap') this.dialogAnswer = action.dialog ?? 'accept';
+      // Only a tap sets the answer, and the next dialog or interaction uses it up: a `wait` for a late confirm keeps it.
+      if (action.kind !== 'wait') this.dialogAnswer = action.kind === 'tap' ? (action.dialog ?? 'accept') : 'accept';
       switch (action.kind) {
         case 'tap':
           result = await this.tap(page, action);

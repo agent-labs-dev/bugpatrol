@@ -55,7 +55,7 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 }
 
 /** A `"key": value` pair, complete or cut off, in text that is not JSON as a whole. */
-const JSON_PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^\s,}\]]+)/g;
+const JSON_PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[{[]|[^\s,{}[\]]+)/g;
 /** The blank line that ends an event-stream frame, as `SseParser` reads it. */
 const FRAME_END = /(\r\n\r\n|\n\n|\r\r)/;
 
@@ -88,9 +88,31 @@ function redactFrame(frame: string): string {
 
 /** Credential values in JSON that does not parse, such as JSON cut off at a capture limit. */
 function redactPairs(text: string): string {
-  return text.replace(JSON_PAIR, (pair, key: string, separator: string) =>
-    CREDENTIAL.test(jsonKey(key)) ? `"${key}"${separator}"[redacted]"` : pair,
-  );
+  let redacted = '';
+  let from = 0;
+  const pairs = new RegExp(JSON_PAIR);
+  for (let match = pairs.exec(text); match; match = pairs.exec(text)) {
+    const [pair, key = '', separator = '', value = ''] = match;
+    if (!CREDENTIAL.test(jsonKey(key))) continue;
+    // An object or array is redacted to its closing bracket, or to the end of text cut off inside it.
+    const end = /^[{[]$/.test(value) ? containerEnd(text, match.index + pair.length - 1) : match.index + pair.length;
+    redacted += `${text.slice(from, match.index)}"${key}"${separator}"[redacted]"`;
+    from = pairs.lastIndex = end;
+  }
+  return redacted + text.slice(from);
+}
+
+/** The index after the bracket that closes the one at `start`, or the end of the text. */
+function containerEnd(text: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (char === '"') {
+      for (index++; index < text.length && text[index] !== '"'; index++) if (text[index] === '\\') index++;
+    } else if (char === '{' || char === '[') depth++;
+    else if ((char === '}' || char === ']') && --depth === 0) return index + 1;
+  }
+  return text.length;
 }
 
 /** A key as JSON reads it, so an escaped `to\u006ben` is still a token. */
