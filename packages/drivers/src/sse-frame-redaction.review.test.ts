@@ -11,6 +11,15 @@ it.each([
     'data: {\nevent: login\ndata: "token": "new-server-secret",\n: heartbeat\ndata: "ok": true\ndata: }\n\n',
   ],
   ['byte-limited JSON data', `data: {"token":"new-server-secret","payload":"${'x'.repeat(70_000)}"}\n\n`],
+  ['complete CRLF frame', 'data: {\r\ndata: "token":\r\ndata: "new-server-secret"\r\ndata: }\r\n\r\n'],
+  [
+    'byte-limited multiline frame',
+    `data: {\ndata: "token":\ndata: "new-server-secret",\ndata: "payload":"${'x'.repeat(70_000)}"\ndata: }\n\n`,
+  ],
+  [
+    'byte-limited escaped credential key',
+    `data: {"to\\u006ben":"new-server-secret","payload":"${'x'.repeat(70_000)}"}\n\n`,
+  ],
 ])('does not expose credentials in SSE body with %s', async (_name, body) => {
   vi.stubGlobal(
     'fetch',

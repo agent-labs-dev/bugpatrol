@@ -56,45 +56,50 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 
 /** A `"key": value` pair, complete or cut off, in text that is not JSON as a whole. */
 const JSON_PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^\s,}\]]+)/g;
+/** The blank line that ends an event-stream frame, as `SseParser` reads it. */
+const FRAME_END = /(\r\n\r\n|\n\n|\r\r)/;
 
 function redactCredentials(text: string): string {
-  // An event stream is not JSON as a whole, but an event's data usually is,
-  // joined across all `data:` lines of its frame, or else each line on its own.
+  // An event stream is not JSON as a whole, but an event's data, joined across its `data:` lines, usually is.
   const redacted =
     redactJson(text, 2) ??
     text
-      .split(/((?:\r\n|\r|\n){2,})/)
+      .split(FRAME_END)
       .map((part, index) => (index % 2 ? part : redactFrame(part)))
       .join('');
-  // JSON cut off at a capture limit does not parse, and its credentials must not show either.
-  return redacted
-    .replace(JSON_PAIR, (pair, key: string, separator: string) =>
-      CREDENTIAL.test(key) ? `"${key}"${separator}"[redacted]"` : pair,
-    )
-    .replace(JWT, '[redacted]');
+  return redacted.replace(JWT, '[redacted]');
 }
 
+/** One frame with its data redacted as a whole, so a pair split over `data:` lines is still seen as one. */
 function redactFrame(frame: string): string {
   const eol = /\r\n|\r|\n/.exec(frame)?.[0] ?? '\n';
   const lines = frame.split(/\r\n|\r|\n/);
   const isData = (line: string) => /^data(?::|$)/.test(line);
-  const data = lines.filter(isData).map((line) => line.slice(5).replace(/^ /, ''));
-  if (!data.length) return frame;
-  const joined = redactJson(data.join('\n'));
-  if (joined !== undefined) {
-    const first = lines.findIndex(isData);
-    return lines
-      .flatMap((line, index) => (index === first ? [`data: ${joined}`] : isData(line) ? [] : [line]))
-      .join(eol);
+  const first = lines.findIndex(isData);
+  // Not an event: text cut off at a capture limit, or any other body that is not JSON.
+  if (first < 0) return redactPairs(frame);
+  const data = lines
+    .filter(isData)
+    .map((line) => line.slice(5).replace(/^ /, ''))
+    .join('\n');
+  const redacted = (redactJson(data) ?? redactPairs(data)).split('\n').map((line) => `data: ${line}`);
+  return lines.flatMap((line, index) => (index === first ? redacted : isData(line) ? [] : [line])).join(eol);
+}
+
+/** Credential values in JSON that does not parse, such as JSON cut off at a capture limit. */
+function redactPairs(text: string): string {
+  return text.replace(JSON_PAIR, (pair, key: string, separator: string) =>
+    CREDENTIAL.test(jsonKey(key)) ? `"${key}"${separator}"[redacted]"` : pair,
+  );
+}
+
+/** A key as JSON reads it, so an escaped `to\u006ben` is still a token. */
+function jsonKey(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
   }
-  return lines
-    .map((line) =>
-      line.replace(/^(data: ?)(.+)$/, (_, prefix: string, value: string) => {
-        const redacted = redactJson(value);
-        return redacted === undefined ? line : prefix + redacted;
-      }),
-    )
-    .join(eol);
 }
 
 function redactJson(text: string, indent?: number): string | undefined {
