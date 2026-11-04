@@ -93,6 +93,7 @@ const REVIEW_TOOLS = new Set([
   'type',
   'press',
   'scroll',
+  'set_viewport',
   'back',
   'open',
   'wait',

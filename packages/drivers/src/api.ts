@@ -56,12 +56,18 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
 
 function redactCredentials(text: string): string {
   const redacted = redactJson(text, 2);
-  // An event stream is not JSON as a whole, but each `data:` line usually is.
+  // An event stream is not JSON as a whole, but an event's data usually is,
+  // joined across its `data:` lines, or else each line on its own.
   return (
     redacted ??
-    text.replace(/^(data: ?)(.+)$/gm, (line, prefix: string, data: string) => {
-      const value = redactJson(data);
-      return value === undefined ? line : prefix + value;
+    text.replace(/^data:.*(?:(?:\r\n|\r|\n)data:.*)*/gm, (block) => {
+      const lines = block.split(/\r\n|\r|\n/);
+      const joined = redactJson(lines.map((line) => line.slice(5).replace(/^ /, '')).join('\n'));
+      if (joined !== undefined) return `data: ${joined}`;
+      return block.replace(/^(data: ?)(.+)$/gm, (line, prefix: string, data: string) => {
+        const value = redactJson(data);
+        return value === undefined ? line : prefix + value;
+      });
     })
   ).replace(JWT, '[redacted]');
 }
