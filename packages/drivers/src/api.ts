@@ -54,22 +54,47 @@ function responseCaptures(body: string, pointers: Record<string, string>): Recor
   );
 }
 
+/** A `"key": value` pair, complete or cut off, in text that is not JSON as a whole. */
+const JSON_PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^\s,}\]]+)/g;
+
 function redactCredentials(text: string): string {
-  const redacted = redactJson(text, 2);
   // An event stream is not JSON as a whole, but an event's data usually is,
-  // joined across its `data:` lines, or else each line on its own.
-  return (
-    redacted ??
-    text.replace(/^data:.*(?:(?:\r\n|\r|\n)data:.*)*/gm, (block) => {
-      const lines = block.split(/\r\n|\r|\n/);
-      const joined = redactJson(lines.map((line) => line.slice(5).replace(/^ /, '')).join('\n'));
-      if (joined !== undefined) return `data: ${joined}`;
-      return block.replace(/^(data: ?)(.+)$/gm, (line, prefix: string, data: string) => {
-        const value = redactJson(data);
-        return value === undefined ? line : prefix + value;
-      });
-    })
-  ).replace(JWT, '[redacted]');
+  // joined across all `data:` lines of its frame, or else each line on its own.
+  const redacted =
+    redactJson(text, 2) ??
+    text
+      .split(/((?:\r\n|\r|\n){2,})/)
+      .map((part, index) => (index % 2 ? part : redactFrame(part)))
+      .join('');
+  // JSON cut off at a capture limit does not parse, and its credentials must not show either.
+  return redacted
+    .replace(JSON_PAIR, (pair, key: string, separator: string) =>
+      CREDENTIAL.test(key) ? `"${key}"${separator}"[redacted]"` : pair,
+    )
+    .replace(JWT, '[redacted]');
+}
+
+function redactFrame(frame: string): string {
+  const eol = /\r\n|\r|\n/.exec(frame)?.[0] ?? '\n';
+  const lines = frame.split(/\r\n|\r|\n/);
+  const isData = (line: string) => /^data(?::|$)/.test(line);
+  const data = lines.filter(isData).map((line) => line.slice(5).replace(/^ /, ''));
+  if (!data.length) return frame;
+  const joined = redactJson(data.join('\n'));
+  if (joined !== undefined) {
+    const first = lines.findIndex(isData);
+    return lines
+      .flatMap((line, index) => (index === first ? [`data: ${joined}`] : isData(line) ? [] : [line]))
+      .join(eol);
+  }
+  return lines
+    .map((line) =>
+      line.replace(/^(data: ?)(.+)$/, (_, prefix: string, value: string) => {
+        const redacted = redactJson(value);
+        return redacted === undefined ? line : prefix + redacted;
+      }),
+    )
+    .join(eol);
 }
 
 function redactJson(text: string, indent?: number): string | undefined {
