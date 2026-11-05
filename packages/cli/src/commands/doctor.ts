@@ -1,27 +1,51 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
-import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, paths } from '@bugpatrol/core';
+import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, loadConfig, paths } from '@bugpatrol/core';
+import { chromiumProblem } from '@bugpatrol/drivers';
 
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fatal: boolean };
 
-/**
- * `bugpatrol doctor` verifies the determinism contract can actually be honoured
- * here. It runs before anything else because a baseline captured outside the
- * pinned image is worse than no baseline: it will diff against CI forever and
- * nobody will know why.
- */
-export function runChecks(root: string, config: BugpatrolConfig | undefined): DoctorCheck[] {
-  const checks: DoctorCheck[] = [];
+/** The config that doctor checks: the `--config` file, else the default one, and why it did not load. */
+export type DoctorConfig = { path: string; config?: BugpatrolConfig; error?: string };
 
-  checks.push({
-    name: 'config',
-    ok: existsSync(paths.config(root)),
-    detail: existsSync(paths.config(root))
-      ? `${paths.config(root)} found`
-      : (legacyLayout(root) ?? 'No .bugpatrol/bugpatrol.yml. Run `bugpatrol init`.'),
-    fatal: true,
-  });
+/** The machine probes, as a seam for the tests. */
+export type DoctorProbes = { chromium: () => string | undefined };
+
+export function readDoctorConfig(root: string, configFile?: string): DoctorConfig {
+  const path = paths.config(root, configFile);
+  if (!existsSync(path)) return { path };
+  try {
+    return { path, config: loadConfig(root, {}, configFile) };
+  } catch (error) {
+    return { path, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function configCheck(root: string, { path, config, error }: DoctorConfig, selected: boolean): DoctorCheck {
+  const detail = config
+    ? `${path} found`
+    : error
+      ? error
+      : existsSync(path) || selected
+        ? `${path} not found`
+        : (legacyLayout(root) ?? 'No .bugpatrol/bugpatrol.yml. Run `bugpatrol init`.');
+  return { name: 'config', ok: Boolean(config), detail, fatal: true };
+}
+
+/**
+ * `bugpatrol doctor` checks that this machine can run the selected config:
+ * the config itself, Node, the LLM of each agent, and what the platform
+ * needs (the browser and the app URL for web, python3 for cli, Xvfb tools
+ * for desktop). A gate config also gets the determinism checks.
+ */
+export async function runChecks(
+  root: string,
+  loaded: DoctorConfig,
+  probes: DoctorProbes = { chromium: chromiumProblem },
+): Promise<DoctorCheck[]> {
+  const { config } = loaded;
+  const checks: DoctorCheck[] = [configCheck(root, loaded, loaded.path !== paths.config(root))];
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   checks.push({
@@ -31,15 +55,28 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
     fatal: true,
   });
 
-  if (config) checks.push(...agentChecks(config));
-  if (config?.app.platform === 'cli')
+  // With no config there is no platform to check for: `init` writes one.
+  if (!config) return checks;
+  checks.push(...agentChecks(config));
+  if (config.app.platform === 'web' || config.run) {
+    const problem = probes.chromium();
+    checks.push({
+      name: 'browser',
+      ok: !problem,
+      detail: problem ?? 'Chromium for Playwright is installed',
+      fatal: true,
+    });
+  }
+  const url = await urlCheck(config);
+  if (url) checks.push(url);
+  if (config.app.platform === 'cli')
     checks.push({
       name: 'cli:python3',
       ok: onPath('python3'),
       detail: onPath('python3') ? 'Installed' : 'The cli driver runs each command in a terminal through python3',
       fatal: true,
     });
-  if (config?.app.platform === 'desktop') {
+  if (config.app.platform === 'desktop') {
     checks.push({
       name: 'desktop-os',
       ok: process.platform === 'linux',
@@ -62,9 +99,9 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
   }
   // The pinned image and the AppModel belong to the deterministic web gate
   // (`bugpatrol run`). They do not apply to the agents.
-  if (config && !config.run) return checks;
+  if (!config.run) return checks;
 
-  const image = config?.determinism.image ?? '';
+  const image = config.determinism.image;
   const pinned = image.includes('@sha256:');
   checks.push({
     name: 'pinned-image',
@@ -80,7 +117,9 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
   checks.push({
     name: 'app-model',
     ok: existsSync(paths.appModel(root)),
-    detail: existsSync(paths.appModel(root)) ? 'AppModel present' : 'No AppModel. Run `bugpatrol recon`.',
+    detail: existsSync(paths.appModel(root))
+      ? 'AppModel present'
+      : 'No AppModel: `bugpatrol run` captures run.url only',
     fatal: false,
   });
 
@@ -94,6 +133,37 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
   });
 
   return checks;
+}
+
+/**
+ * A web or API app that no setup command starts must already answer at its
+ * URL. Any HTTP response counts: the check is that something listens.
+ */
+async function urlCheck(config: BugpatrolConfig): Promise<DoctorCheck | undefined> {
+  const { platform, setup, connect } = config.app;
+  if (platform !== 'web' && platform !== 'api') return undefined;
+  if (setup.some((command) => command.background)) return undefined;
+  const url = connect.url ?? config.run?.url;
+  if (!url) return undefined;
+  if (/\$\{|\{\{/.test(url))
+    return {
+      name: 'url',
+      ok: true,
+      detail: `${url} is resolved from setup or the environment at connect time`,
+      fatal: false,
+    };
+  try {
+    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    await response.body?.cancel();
+    return { name: 'url', ok: true, detail: `${url} answers (HTTP ${response.status})`, fatal: true };
+  } catch {
+    return {
+      name: 'url',
+      ok: false,
+      detail: `Nothing answers at ${url}, and no setup command starts the app. Start it first, or add a background command to app.setup.`,
+      fatal: true,
+    };
+  }
 }
 
 /** The checks that the agent commands need: an LLM for each agent, and gh for GitHub. */

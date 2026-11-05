@@ -39,7 +39,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | --- | --- |
 | `bugpatrol adopt --config .bugpatrol/<name>.yml` | Move the app map, endpoint inventory and routines of `.bugpatrol/` into the folder of that config, for a config that kept them there before profiles existed. Refer to [Configuration](configuration.md#migrating-an-existing-non-default-config) |
 | `bugpatrol dashboard [--port N]` | The local dashboard, on 127.0.0.1 |
-| `bugpatrol doctor` | Check that this machine can run the deterministic gate |
+| `bugpatrol doctor [--config <file>]` | Check that this machine can run the selected config: the config file, Node, the LLM of each agent, `gh` when `agents.github` is on, and what the platform needs. For web, Chromium for Playwright, with the install command for the pinned version. For web and api with no background setup command, that `connect.url` answers. For cli, `python3`; for desktop, Linux and the launch commands. A config with a `run` block also gets the pinned runner image and the AppModel. Exits 2 when a required check fails |
 | `bugpatrol init [--yes] [--agent a]` | Detect the app and the LLMs, ask for each agent's provider, and write `.bugpatrol/bugpatrol.yml` and `.bugpatrol/instructions.md` |
 | `bugpatrol init --platform api [--url <url>] [--spec <spec>]` | Write a starter config for an API that runs already. It asks for the URL and an optional spec, and detects no start command |
 | `bugpatrol init --gate` | Write a starter `.bugpatrol/bugpatrol.yml` for the deterministic web gate |

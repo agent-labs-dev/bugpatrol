@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { ConfigError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
@@ -5,6 +7,17 @@ import { observeDom, resolveTarget, stepFor } from './dom.js';
 import { sampleFile } from './samples.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
+
+/**
+ * Why the web driver cannot launch its browser: Playwright looks for its own
+ * Chromium build, so the install command names the pinned Playwright version.
+ */
+export function chromiumProblem(): string | undefined {
+  const executable = chromium.executablePath();
+  if (existsSync(executable)) return undefined;
+  const { version } = createRequire(import.meta.url)('playwright/package.json') as { version: string };
+  return `Chromium for Playwright ${version} is not installed (no ${executable}). Run: PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@${version} install chromium`;
+}
 
 export type WebOptions = {
   url: string;
