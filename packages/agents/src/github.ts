@@ -25,7 +25,16 @@ const json = (value: unknown) => JSON.stringify(value);
 const errorText = (error: unknown) => `${String(error)} ${(error as { stderr?: string }).stderr ?? ''}`;
 const missing = (error: unknown) => /404|not found/i.test(errorText(error));
 
-export async function ghReady(gh: Gh = defaultGh): Promise<{ ok: true } | { ok: false; reason: string }> {
+/**
+ * Whether gh can read the target repository, and which it is. The read is the
+ * check, not `gh auth status`: a proxy or a GitHub App can supply gh's
+ * credentials with no personal login saved. A denial keeps gh's own message.
+ */
+export async function ghReady(
+  gh: Gh,
+  config: BugpatrolConfig,
+  source: string,
+): Promise<({ ok: true } & Awaited<ReturnType<typeof resolveRepo>>) | { ok: false; reason: string }> {
   try {
     await gh(['--version']);
   } catch {
@@ -35,11 +44,12 @@ export async function ghReady(gh: Gh = defaultGh): Promise<{ ok: true } | { ok: 
     };
   }
   try {
-    await gh(['auth', 'status']);
-  } catch {
-    return { ok: false, reason: 'GitHub publish skipped: gh is not logged in. Run `gh auth login`.' };
+    return { ok: true, ...(await resolveRepo(gh, config, source)) };
+  } catch (error) {
+    const target = config.agents.github.repo ?? 'the repository of app.source';
+    const detail = ((error as { stderr?: string }).stderr || String(error)).trim();
+    return { ok: false, reason: `GitHub publish skipped: gh cannot read ${target}: ${detail}` };
   }
-  return { ok: true };
 }
 
 export async function resolveRepo(
@@ -123,13 +133,13 @@ export async function syncGitHub(
   const changed = new Set<string>();
   if (!config.agents.github.enabled) return { changed: [] };
   const gh = deps.gh ?? defaultGh;
-  const ready = await ghReady(gh);
+  const ready = await ghReady(gh, config, resolve(root, config.app.source));
   if (!ready.ok) {
     deps.onLog?.(ready.reason);
     return { changed: [] };
   }
   const workspace = new Workspace(root, config.profile);
-  const { repo } = await resolveRepo(gh, config, resolve(root, config.app.source));
+  const { repo } = ready;
   // The PRs and issues from before the rename to Bugpatrol have the old label.
   const labels = [...new Set([config.agents.github.labels[0]!, LEGACY_LABEL])];
   const list = async (kind: 'pr' | 'issue', fields: string) =>
@@ -498,12 +508,12 @@ export async function closeOnGitHub(
 ): Promise<void> {
   if (!config.agents.github.enabled || !issue.github) return;
   try {
-    const ready = await ghReady(gh);
+    const ready = await ghReady(gh, config, resolve(root, config.app.source));
     if (!ready.ok) {
       onLog(ready.reason);
       return;
     }
-    const { repo } = await resolveRepo(gh, config, resolve(root, config.app.source));
+    const { repo } = ready;
     await closeIssue(
       gh,
       repo,

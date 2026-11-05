@@ -49,15 +49,15 @@ The fixer and GitHub are off until you turn them on. The sections below show eac
 - Node 22 or later.
 - `git`, and your app in a git repo with an `origin` remote. Each patrol cycle pulls `origin/main`, and the fixer works in git worktrees.
 - An LLM for the agents: an agent CLI (Claude Code, Codex, Kimi CLI, opencode, or pi), or an API key.
-- For web apps: Chromium for Playwright. Install it one time:
+- For web apps: Chromium for Playwright. Install it one time, with the Playwright that Bugpatrol depends on:
 
   ```bash
-  PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium
+  PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y -p bugpatrol@latest playwright install chromium
   ```
 
 - For iOS: Xcode and a booted simulator. For Android: the Android SDK and a running emulator. For both: [Maestro](https://maestro.mobile.dev).
 - For Electron: an app build that opens a CDP port (`--remote-debugging-port`).
-- For GitHub: a logged-in [`gh`](https://cli.github.com) CLI.
+- For GitHub: a [`gh`](https://cli.github.com) CLI that can read and push to the repo.
 
 You do not need to install Bugpatrol. Run each command with `npx bugpatrol`. You can also add it to your project:
 

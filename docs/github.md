@@ -5,15 +5,17 @@ Bugpatrol can publish its results to your GitHub repo:
 - A **pull request** for each fix that the fixer wrote.
 - A **GitHub issue** for each bug at `issueMinSeverity` or worse that has no fix.
 
-It uses the [`gh`](https://cli.github.com) CLI, with your own login. GitHub is off until you turn it on.
+It uses the [`gh`](https://cli.github.com) CLI, with whatever credentials gh has: your own login, a token, or a proxy or GitHub App behind a `gh` wrapper. GitHub is off until you turn it on.
 
 ## 1. Check gh
 
 ```bash
-gh auth status
+gh repo view <owner>/<repo>
 ```
 
-The account must be able to push branches, and open PRs and issues, in the repo. The default `gh auth login` scopes (`repo`) are enough.
+Bugpatrol checks gh the same way: it reads the repo, and stops with gh's own message when the read fails. It does not need `gh auth status` to pass.
+
+The credentials must be able to push branches, and open PRs and issues, in the repo. The default `gh auth login` scopes (`repo`) are enough.
 
 `bugpatrol doctor` also checks gh when GitHub is on.
 
@@ -405,7 +407,7 @@ With `block` off, `review` sets no check and exits 0 when it only comments. The 
 | --- | --- |
 | `GitHub is off` | Set `agents.github.enabled: true`, or use `publish --dry-run` |
 | `the gh CLI is not installed` | Install it from https://cli.github.com |
-| `gh is not logged in` | Run `gh auth login` |
+| `gh cannot read <repo>` | The rest of the message is gh's own. For `HTTP 401` or a login prompt, run `gh auth login`. For `HTTP 404`, check `agents.github.repo` and that the credentials can see the repo |
 | `PR #<n> comes from a fork` | A review runs the code of the pull request. Read the diff, then add `--allow-fork` |
 | `A patrol runs (pid <n>)` | Stop the patrol, or run `review` when the patrol waits for a new commit |
 | `Nothing to publish` | No item matches the table in [What Bugpatrol publishes](#what-bugpatrol-publishes). Run `bugpatrol issue list`, and check the severities and the fixes |

@@ -50,7 +50,7 @@ export const API_RULES = [
 const apiRequestSchema = z.object({
   method: z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']),
   url: z.string().min(1),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
   capture: z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string()).optional(),
   as: z.enum(['self', 'other']).optional(),

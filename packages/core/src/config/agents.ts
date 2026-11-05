@@ -35,8 +35,9 @@ const PRESETS: Record<CliAgent, { tools: string; fixer: string }> = {
     fixer: 'kimi --quiet --yolo',
   },
   // opencode 1.x (`opencode-ai`). The inline config denies every tool but the
-  // Bugpatrol ones, and `--pure` keeps plugins out. 2.x is refused before the
-  // run (packages/agents/src/runtime/opencode.ts).
+  // Bugpatrol ones, and `--pure` keeps plugins out. Where the installed
+  // opencode is 2.x, the run uses a pinned 1.x through npx
+  // (packages/agents/src/runtime/opencode.ts).
   opencode: {
     tools: `OPENCODE_CONFIG_CONTENT='{"mcp":{"bugpatrol":{"type":"remote","url":"'{mcpUrl}'","oauth":false}},"permission":{"*":"deny","bugpatrol_*":"allow"}}' opencode run --pure --auto --format json`,
     fixer: 'opencode run --auto --format json',

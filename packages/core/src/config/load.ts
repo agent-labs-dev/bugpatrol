@@ -43,7 +43,7 @@ export function parseConfig(raw: unknown, source = '<inline>'): BugpatrolConfig 
   if (!result.success) {
     const issues = result.error.issues
       .flatMap((issue) => {
-        const where = issue.path.join('.') || '<root>';
+        const where = issue.path.map(String).join('.') || '<root>';
         if (issue.code !== 'unrecognized_keys') return [`  ${where}: ${issue.message}`];
         return issue.keys.map((key) => `  ${where}: Unknown key \`${key}\`.${unknownKeyHint(issue.path, key)}`);
       })
@@ -67,7 +67,7 @@ const COMMAND_KEY_HINTS: Record<string, string> = {
  * Bugpatrol rejects a key that it does not read, so a typo never drops a
  * setting in silence. The hint names the supported field when there is one.
  */
-function unknownKeyHint(path: (string | number)[], key: string): string {
+function unknownKeyHint(path: PropertyKey[], key: string): string {
   if (path.length === 0 && key === 'profile')
     return ' The profile comes from the file name of `--config`, so remove the key or rename the file.';
   const inCommand = path.length === 3 && path[0] === 'app' && (path[1] === 'setup' || path[1] === 'teardown');

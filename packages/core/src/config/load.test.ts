@@ -21,6 +21,19 @@ describe('parseConfig', () => {
     expect(c.agents.fixer).toMatchObject({ attempts: 3, retest: { attempts: 2 } });
   });
 
+  it('fills every nested default when whole sections are left out', () => {
+    // A section absent from the file still gets the defaults of its fields:
+    // an omitted `use` is the default model route, not an empty runtime.
+    const c = parseConfig({ version: 1, app: { platform: 'cli' }, agents: { github: { enabled: false } } });
+    expect(c.agents.explorer.use).toEqual({ runtime: 'model', via: 'openrouter', model: 'z-ai/glm-5.3-flash' });
+    expect(c.agents.judge.use).toEqual({ runtime: 'model', via: 'openrouter', model: 'z-ai/glm-5.3-flash' });
+    expect(c.agents.fixer.use).toMatchObject({ runtime: 'cli', agent: 'claude' });
+    expect(c.agents.github.ci).toMatchObject({ enabled: true, attempts: 2 });
+    expect(c.determinism.stabilityGate).toMatchObject({ consecutiveIdenticalFrames: 2, intervalMs: 120 });
+    expect(c.decisions.confidence).toEqual({ high: 0.85, low: 0.55 });
+    expect(c.scope.include).toEqual(['src/**', 'app/**']);
+  });
+
   it('reads declared benchmarks, and rejects a parse rule that is no regular expression or a name used twice', () => {
     const bench = { name: 'p99', command: 'k6 run load.js', metric: 'p99 latency in ms', parse: 'p\\(99\\)=([\\d.]+)' };
     const review = (benches: unknown[]) => parseConfig({ ...minimal, agents: { review: { benches } } });

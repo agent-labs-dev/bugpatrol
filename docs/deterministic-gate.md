@@ -5,7 +5,7 @@ For web apps, `bugpatrol run` is a merge gate that uses no agent. The agents exp
 ## Try it
 
 ```bash
-PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium
+PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y -p bugpatrol@latest playwright install chromium
 npx bugpatrol init --gate           # write a starter .bugpatrol/bugpatrol.yml; correct each TODO value
 npx bugpatrol run --no-models       # capture the baselines
 npx bugpatrol run --no-models       # compare: clean

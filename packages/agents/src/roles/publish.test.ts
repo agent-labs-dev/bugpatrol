@@ -187,11 +187,11 @@ describe('runPublisher', () => {
   it('records unavailable gh without publishing', async () => {
     const f = await fixture();
     const gh: Gh = async (args) => {
-      if (args[0] === 'auth') throw new Error('not logged in');
+      if (args[0] === 'repo') throw Object.assign(new Error('gh failed'), { stderr: 'HTTP 401: Bad credentials' });
       return 'gh version 2';
     };
     expect(await runPublisher(f.root, f.config, { gh, createRuntime })).toEqual([]);
-    expect((await f.workspace.listSessions())[0]?.summary).toContain('gh is not logged in');
+    expect((await f.workspace.listSessions())[0]?.summary).toContain('HTTP 401: Bad credentials');
     expect((await f.workspace.readIssue(f.issue.id))?.github).toBeUndefined();
   });
   it('publishes an API issue with its exchange as an http block, and uploads no file', async () => {

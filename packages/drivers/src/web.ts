@@ -278,9 +278,14 @@ export class WebDriver implements Driver {
     if (target) {
       const resolved = await resolveTarget(page, target, this.lastObservation);
       result = { degraded: resolved.degraded, element: resolved.element };
+      // The wheel scrolls whatever is under the pointer, so put the pointer over the target first.
+      let point = resolved.point;
       if (resolved.locator) {
         await resolved.locator.scrollIntoViewIfNeeded();
+        const box = await resolved.locator.boundingBox();
+        if (box) point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
       }
+      if (point) await page.mouse.move(point.x, point.y);
     }
     const distance = 550;
     const x = action.direction === 'left' ? -distance : action.direction === 'right' ? distance : 0;

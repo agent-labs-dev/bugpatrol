@@ -1,12 +1,10 @@
-import { accessSync, constants } from 'node:fs';
-import { delimiter, join } from 'node:path';
 import type { AgentRole, RoleRuntime } from '@bugpatrol/core';
 import { MODEL_KEYS } from '@bugpatrol/decide';
 import type { Runtime } from '../types.js';
 import { CliRuntime } from './cli.js';
 import { ModelRuntime } from './model.js';
 import { opencodeProblem } from './opencode.js';
-import { commandProgram, isOpencode } from './program.js';
+import { commandProgram, isOpencode, onPath } from './program.js';
 
 /** Selects the configured execution loop without changing the role's tool contract. */
 export function createRuntime(use: RoleRuntime, opts: { fetch?: typeof fetch } = {}): Runtime {
@@ -16,20 +14,6 @@ export function createRuntime(use: RoleRuntime, opts: { fetch?: typeof fetch } =
 /** Gives status displays a stable, short label for a configured runtime. */
 export function describeRuntime(use: RoleRuntime): string {
   return use.runtime === 'model' ? `model:${use.via}/${use.model}` : `cli:${commandProgram(use.command) ?? 'shell'}`;
-}
-
-export function onPath(program: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const candidates = program.includes('/')
-    ? [program]
-    : (env.PATH ?? '').split(delimiter).map((dir) => join(dir, program));
-  return candidates.some((file) => {
-    try {
-      accessSync(file, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
 }
 
 /**
@@ -55,5 +39,5 @@ export function runtimeProblem(
   return undefined;
 }
 
-export { commandProgram } from './program.js';
+export { commandProgram, onPath } from './program.js';
 export { CliRuntime, ModelRuntime };
