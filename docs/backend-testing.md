@@ -165,7 +165,8 @@ spec skips, with the reason, and the cases that no run tested yet.
 
 The evidence of an API is text, not a screenshot
 ([ADR 0008](adr/0008-api-evidence-is-text.md)). Each request gives an HTTP
-exchange: the request line, the headers that the step set, the status, the
+exchange: the request line, the headers that the request sent (the value of a
+credential header shows as `[redacted]`), the status, the
 allowed response headers, the body, and the latency. For a
 `text/event-stream` response, the driver keeps a bounded text prefix and
 parses its events into the exchange. It stops after the byte, time, or event
