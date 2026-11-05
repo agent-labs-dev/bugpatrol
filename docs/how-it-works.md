@@ -29,7 +29,7 @@ A patrol cycle has these steps:
 - The patrol explores and judges only when `main` has new commits. On the same commit, it skips these two steps, but it still finishes the open work: fixes, retests, publish, CI checks, and the GitHub sync. So a patrol that runs all day costs little when nobody merges code, and a fix never waits for the next merge.
 - Bugpatrol keeps the last tested commit in `.bugpatrol/runs/`, so a restart also skips a commit that it tested before. To test again with no new commit, for example after a config change, use `npx bugpatrol --force`.
 - You can change the wait with `agents.patrol.intervalMinutes`. To stop after a number of cycles, set `agents.patrol.cycles`. To run one cycle only, use `npx bugpatrol --once`.
-- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start.
+- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start. To explore and judge from a scheduled GitHub Actions workflow, refer to [GitHub](github.md#explore-and-judge-on-a-schedule).
 - To use a different branch, set `agents.patrol.pull`.
 - Let the patrol run all the time on a dedicated computer or a cloud VM. While it runs, the checkout of the repo is the pulled commit, so do not run it in the checkout where you work. To test your own branch as it is, set `agents.patrol.pull: false`.
 

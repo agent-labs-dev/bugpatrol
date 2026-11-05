@@ -243,6 +243,44 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
+### Explore and judge on a schedule
+
+To find bugs on a schedule without fixes, pull requests or GitHub issues, run `explore` and `judge` from a workflow. The issues stay in the run folder, and the workflow keeps it as an artifact with the screenshots. Add the API key of your LLM provider as a secret:
+
+```yaml
+# .github/workflows/bugpatrol-explore.yml
+name: Bugpatrol explore
+on:
+  schedule: [{ cron: '0 6 * * 1-5' }]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: |
+          npm install --prefix "$RUNNER_TEMP/bugpatrol" --no-audit --no-fund bugpatrol@latest
+          echo "$RUNNER_TEMP/bugpatrol/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: playwright install --with-deps chromium   # web and Electron apps only
+      - run: bugpatrol explore --steps 40
+      - run: bugpatrol judge
+      - run: bugpatrol findings list && bugpatrol issue list
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bugpatrol-runs
+          path: .bugpatrol/runs/
+```
+
+For a profile, add `--config .bugpatrol/<name>.yml` to each `bugpatrol` command, and upload `.bugpatrol/runs/profiles/<name>/`. To keep the issues and lessons from one run to the next, use the patrol with its state branch instead ([Patrol on a schedule](#patrol-on-a-schedule)).
+
 ### The claim check
 
 ```bash
