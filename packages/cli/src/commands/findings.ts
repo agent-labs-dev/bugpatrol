@@ -41,11 +41,12 @@ export async function runFindingsCommand(
   }
   const issues = await workspace.listIssues();
   const triage = (await workspace.readTriage()).fingerprints;
-  const dismissed = new Map((await workspace.readDecisions(session.id)).map((line) => [line.candidateId, line.reason]));
+  const decided = new Map((await workspace.readDecisions(session.id)).map((line) => [line.candidateId, line]));
   const outcome = (candidate: Candidate): string => {
     const issue = issues.find((each) => each.candidateIds.includes(candidate.id));
     if (issue) return `filed as ${issue.id}`;
-    if (dismissed.has(candidate.id)) return `dismissed: ${dismissed.get(candidate.id)}`;
+    const decision = decided.get(candidate.id);
+    if (decision) return `${decision.decision === 'unverified' ? 'unverified' : 'dismissed'}: ${decision.reason}`;
     const earlier = triage[candidate.fingerprint];
     if (earlier) return earlier.decision === 'filed' ? `filed as ${earlier.issueId}` : `dismissed: ${earlier.reason}`;
     if (candidate.route?.to === 'ignore') return `ignored: ${candidate.route.reason}`;

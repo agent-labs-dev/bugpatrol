@@ -78,7 +78,11 @@ async function saveRepro(
 export async function pendingCandidates(session: AgentSession, sessionIds: string[]): Promise<Candidate[]> {
   const issues = await session.workspace.listIssues();
   const filed = issues.flatMap((item) => item.candidateIds);
-  const triaged = Object.keys((await session.workspace.readTriage()).fingerprints);
+  // A fingerprint filed to a fixed issue passes again, so a later sighting can reopen it as a regression.
+  const fixed = new Set(issues.filter((item) => item.status === 'fixed').map((item) => item.id));
+  const triaged = Object.entries((await session.workspace.readTriage()).fingerprints)
+    .filter(([, entry]) => !(entry.decision === 'filed' && entry.issueId && fixed.has(entry.issueId)))
+    .map(([fingerprint]) => fingerprint);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
     // A candidate of another profile belongs to another app: its repro would land in the wrong folder.

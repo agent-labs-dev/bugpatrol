@@ -492,7 +492,7 @@ function minimalBody(
     for (const [name, encoded] of Object.entries(path)) {
       if (!(name in fields)) continue;
       const text = decodeURIComponent(encoded);
-      const types = [deref(doc, fields[name])].flatMap((schema) => (isObject(schema) ? [schema.type].flat() : []));
+      const types = branches(doc, fields[name]).flatMap((schema) => [schema.type].flat());
       const isNumber = types.includes('integer') || types.includes('number');
       if (isNumber && /^\{\{[A-Za-z_][A-Za-z_0-9]*(\|missing)?\}\}$/.test(text)) numeric.push(text);
       body[name] = /^\d+$/.test(text) && isNumber ? Number(text) : text;
