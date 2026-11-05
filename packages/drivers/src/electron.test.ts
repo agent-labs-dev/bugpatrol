@@ -96,6 +96,14 @@ describe('ElectronDriver page choice', () => {
       ],
       expected: 0,
     },
+    {
+      name: 'any 127/8 address is a loopback app page',
+      candidates: [
+        { url: 'https://accounts.example.com/oauth', visible: true, focused: true },
+        { url: 'http://127.0.0.2:5173/', visible: true, focused: false },
+      ],
+      expected: 1,
+    },
   ] as { name: string; candidates: Parameters<typeof appPage>[0]; expected: number }[])(
     '$name',
     ({ candidates, expected }) => {

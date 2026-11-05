@@ -1,3 +1,4 @@
+import { isLoopback } from '@bugpatrol/contract';
 import { InfrastructureError } from '@bugpatrol/core';
 import { chromium, type Page } from 'playwright';
 import { WebDriver } from './web.js';
@@ -17,11 +18,9 @@ const browserOwnedProtocols = new Set([
   'devtools:',
 ]);
 
-const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
-
 /** An app scheme or a loopback dev server, rather than a remote page a window happens to show (an OAuth window). */
 function local(url: URL): boolean {
-  return (url.protocol !== 'http:' && url.protocol !== 'https:') || loopbackHosts.has(url.hostname);
+  return (url.protocol !== 'http:' && url.protocol !== 'https:') || isLoopback(url.href);
 }
 
 /**
