@@ -17,3 +17,17 @@ it('redacts a secret in an OSC hyperlink target before saving the cast', async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('leaves the parameters of a control sequence alone when a short secret matches them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cast-csi-secret-'));
+  try {
+    const cast = new CastRecorder({ width: 80, height: 24 }, (text) => text.replaceAll('18', '{{ROWS}}'));
+    cast.start();
+    cast.push('\u001b[2;18mdim\u001b[0m 18 rows');
+    const text = await readFile(await cast.stop(join(root, 'repro')), 'utf8');
+    expect(text).toContain('\\u001b[2;18mdim');
+    expect(text).toContain('{{ROWS}} rows');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

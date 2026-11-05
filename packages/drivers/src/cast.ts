@@ -5,7 +5,7 @@ import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
 import * as gifenc from 'gifenc';
 import { PNG } from 'pngjs';
-import { type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
+import { controlRanges, type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
 import { GIF_MAX_BYTES } from './video.js';
 
 /**
@@ -953,8 +953,9 @@ export class CastRecorder {
  * The output events with each secret replaced, across the events it spans:
  * its placeholder goes in the event where it starts. A program may break a
  * secret up with escape codes, so the match is made on the stream without
- * them and mapped back to the raw output. A secret inside an escape sequence
- * (a hyperlink target, a window title) is then found in the raw output. When
+ * them and mapped back to the raw output. A secret inside an OSC payload
+ * (a hyperlink target, a window title) is then found in the raw output, and
+ * the parameters of a CSI or other control sequence are never altered. When
  * the redacted stream cannot be lined up with the output, the output is one
  * event, redacted whole.
  */
@@ -973,7 +974,13 @@ async function redactEvents(
     }));
   });
   return hideScreenSecrets(
-    redactSpans(visible, redact, (text) => secretSpans(text, redact)),
+    redactSpans(visible, redact, (text) => {
+      // A control sequence stays whole: a short secret such as `18` in `ESC[2;18m` is a parameter, not text.
+      const controls = controlRanges(text);
+      return secretSpans(text, redact)?.filter((span) =>
+        controls.every(([start, end]) => span.end <= start || span.start >= end),
+      );
+    }),
     size,
     redact,
   );

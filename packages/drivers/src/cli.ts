@@ -8,6 +8,7 @@ import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { CastRecorder, Terminal, terminalPng } from './cast.js';
 import { sessionKeyBytes } from './keys.js';
 import { nativeSnapshot } from './maestro.js';
+import { redactTerminal } from './secret-spans.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
 /** The output of a command is read as text, not drawn, so its lines are as wide as the command prints them. */
@@ -225,7 +226,7 @@ const prompt = (command: string) => `\u001b[1;32m$\u001b[0m ${command}\r\n`;
  * the program shows now. A recording is an asciicast of both.
  *
  * The output of a `run` is redacted line by line, so a secret that arrives
- * in two pieces is still found. A session's screen text and the cells of a
+ * in two pieces is still found, and its control sequences are kept whole. A session's screen text and the cells of a
  * secret on its screenshot are both redacted with the rows read as one text,
  * so a secret the app wrapped onto the next row is found, and the recording
  * is redacted as one stream when it stops.
@@ -375,7 +376,7 @@ export class CliDriver implements Driver {
       partial += chunk;
       const end = partial.lastIndexOf('\n') + 1;
       if (!end) return;
-      this.show(this.redact(partial.slice(0, end)));
+      this.show(redactTerminal(partial.slice(0, end), this.redact));
       partial = partial.slice(end);
     });
     child.stderr?.on('data', (chunk) => {
@@ -397,7 +398,7 @@ export class CliDriver implements Driver {
     const code = await helper.closed;
     clearTimeout(timer);
     this.running = undefined;
-    this.show(this.redact(partial));
+    this.show(redactTerminal(partial, this.redact));
     if (timedOut) {
       this.show('\r\n\u001b[33m[stopped by Bugpatrol]\u001b[0m\r\n', false);
       return {

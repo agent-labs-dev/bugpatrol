@@ -31,6 +31,36 @@ describe('startApp', () => {
     }
   });
 
+  it('leaves a public capture out of redaction, and warns about a short secret capture', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-life-'));
+    const vars = new Vars();
+    const emitted: string[] = [];
+    try {
+      const app = appSchema.parse({
+        setup: [
+          {
+            run: 'echo "Terminal 60 18 pin 42"',
+            capture: { TUI_COLS: 'Terminal (\\d+)', TUI_ROWS: 'Terminal \\d+ (\\d+)', PIN: 'pin (\\d+)' },
+            public: ['TUI_COLS', 'TUI_ROWS'],
+          },
+        ],
+      });
+      const running = await startApp(app, { root, vars, emit: (line) => emitted.push(line) });
+      expect(vars.resolve('{{TUI_COLS}}x{{TUI_ROWS}}')).toBe('60x18');
+      expect(vars.redact('\u001b[2;18m 60 cols, pin 42')).toBe('\u001b[2;18m 60 cols, pin {{PIN}}');
+      expect(emitted.filter((line) => line.includes('short'))).toEqual([
+        expect.stringMatching(/PIN is 2 characters long.*public/),
+      ]);
+      await running.stop();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a public name that the command does not capture', () => {
+    expect(() => appSchema.parse({ setup: [{ run: 'true', capture: {}, public: ['NOPE'] }] })).toThrow(/NOPE/);
+  });
+
   it('loads the contract of an api app from the running app, after setup', async () => {
     const fixture = await startFixtureApi();
     try {

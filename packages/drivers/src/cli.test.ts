@@ -70,6 +70,17 @@ describe('CliDriver', () => {
     }),
   );
 
+  it('keeps the colours of a command whole when a short secret matches their parameters', { timeout: 30_000 }, () =>
+    withDriver(
+      async (driver) => {
+        await driver.act({ kind: 'run', command: `printf '\\033[2;18mdim\\033[0m 18 rows\\n'` });
+        expect((await driver.observe()).terminal!.output).toBe('dim {{ROWS}} rows');
+      },
+      10_000,
+      { redact: (value) => value.replaceAll('18', '{{ROWS}}') },
+    ),
+  );
+
   it('stops a command that runs past the time limit', { timeout: 30_000 }, () =>
     withDriver(async (driver) => {
       const started = Date.now();

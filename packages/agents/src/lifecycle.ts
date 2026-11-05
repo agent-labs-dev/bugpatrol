@@ -4,6 +4,9 @@ import { type Contract, loadContract } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
 import type { Vars } from './vars.js';
 
+/** A secret capture shorter than this also matches ordinary numbers and words of the app's output. */
+const SHORT_SECRET = 6;
+
 type Options = {
   root: string;
   vars: Vars;
@@ -56,9 +59,9 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
       output += chunk.toString();
       for (const [name, pattern] of captures) {
         const match = pattern.exec(output);
-        if (match?.[1] !== undefined) {
-          opts.vars.set(name, match[1]);
-        }
+        if (match?.[1] === undefined) continue;
+        if (command.public.includes(name)) opts.vars.setPublic(name, match[1]);
+        else opts.vars.set(name, match[1]);
       }
     };
     child.stdout?.on('data', append);
@@ -111,6 +114,14 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
         }
       }
       report(`${phase}: ran \`${shell}\` (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+      for (const name of Object.keys(command.capture)) {
+        const length =
+          opts.vars.has(name) && !command.public.includes(name) ? opts.vars.resolve(`{{${name}}}`).length : 0;
+        if (length > 0 && length < SHORT_SECRET)
+          report(
+            `${phase}: capture ${name} is ${length} characters long, a short secret: it is redacted wherever those characters appear in the app's output, numbers included. If it is not a secret, list it under \`public\` of its command.`,
+          );
+      }
     } catch (cause) {
       if (!settled) {
         killGroup(child);

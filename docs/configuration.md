@@ -115,11 +115,12 @@ Each item in `app.setup` and `app.teardown` is one shell command:
 | `run` | The shell command |
 | `cwd` | The folder for the command, relative to the project root |
 | `capture` | A map from a name to a regex. The first group of the match becomes a value, for example `{ CDP_PORT: 'CDP :(\d+)' }` |
+| `public` | Captures that are not secrets, such as a port or a terminal size, for example `[TUI_COLS, TUI_ROWS]` |
 | `background` | `true` keeps the process alive for the session. Use it for a dev server |
 | `readyWhen` | For a background command: Bugpatrol waits until the output matches this regex |
 | `timeoutMs` | The time limit. The default is 10 minutes |
 
-Later commands and `connect` can use a captured value as `${NAME}`. The explorer can use it as `{{NAME}}`. Bugpatrol treats each captured value as a secret.
+Later commands and `connect` can use a captured value as `${NAME}`. The explorer can use it as `{{NAME}}`. Bugpatrol treats each captured value as a secret, and replaces it with `{{NAME}}` wherever it shows in the app's output, except a name in `public`. A short secret such as `18` also matches ordinary numbers, so setup warns about a secret capture shorter than six characters: list it in `public` when it is not a secret. Redaction never changes a terminal's control sequences, so a short value can hide text but not break colours or layout.
 
 ## Secret interpolation
 

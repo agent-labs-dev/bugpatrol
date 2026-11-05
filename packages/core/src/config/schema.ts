@@ -137,22 +137,35 @@ export const determinismSchema = z
  * One setup or teardown command (ADR 0005). `capture` pulls values out of the
  * command's output by regex, first group; later commands, `connect`, and the
  * explorer's `{{NAME}}` placeholders can use them. Captured values are treated
- * as secrets: they are redacted from every log and never sent to a model.
+ * as secrets: they are redacted from every log and never sent to a model,
+ * unless `public` names them.
  */
-export const appCommandSchema = z.object({
-  run: z.string(),
-  cwd: z.string().optional(),
-  capture: z.record(z.string()).default({}),
-  /** Keep the process alive for the session instead of waiting for it to exit. */
-  background: z.boolean().default(false),
-  /** Background only: wait until this regex matches the output. */
-  readyWhen: z.string().optional(),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .default(10 * 60 * 1000),
-});
+export const appCommandSchema = z
+  .object({
+    run: z.string(),
+    cwd: z.string().optional(),
+    capture: z.record(z.string()).default({}),
+    /**
+     * Captures that are not secrets, such as a port or a terminal size. They
+     * are used like any capture, and redaction leaves them alone, so a short
+     * number never turns into `{{NAME}}` across the app's output.
+     */
+    public: z.array(z.string()).default([]),
+    /** Keep the process alive for the session instead of waiting for it to exit. */
+    background: z.boolean().default(false),
+    /** Background only: wait until this regex matches the output. */
+    readyWhen: z.string().optional(),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .default(10 * 60 * 1000),
+  })
+  .superRefine((command, ctx) => {
+    for (const name of command.public)
+      if (!(name in command.capture))
+        ctx.addIssue({ code: 'custom', path: ['public'], message: `${name} is not a capture of this command` });
+  });
 
 export const appSchema = z
   .object({
