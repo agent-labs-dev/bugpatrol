@@ -204,6 +204,11 @@ export class Terminal {
       );
   }
 
+  /** The program turned on application cursor mode, so the arrows send `ESC O`. Flush first. */
+  get applicationCursor(): boolean {
+    return this.emulator.modes.applicationCursorKeysMode;
+  }
+
   /** What the terminal sends back to the program, such as its answer to a cursor-position query. */
   onData(listener: (data: string) => void): void {
     this.emulator.onData(listener);

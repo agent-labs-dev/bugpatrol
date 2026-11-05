@@ -50,3 +50,14 @@ export function keyBytes(key: string): string {
   if (/^[a-z@[\\\]^_]$/i.test(rest)) return String.fromCharCode(rest.toUpperCase().charCodeAt(0) & 0x1f);
   throw new Error(`A terminal has no key ${key}. Use ctrl+ and a letter`);
 }
+
+/**
+ * keyBytes for a terminal in which the program may have turned on application
+ * cursor mode, as a full-screen app does: then the arrows send `ESC O`.
+ */
+export function sessionKeyBytes(key: string, applicationCursor: boolean): string {
+  const bytes = keyBytes(key);
+  const arrow = bytes.slice(-3);
+  if (!applicationCursor || !['\u001b[A', '\u001b[B', '\u001b[C', '\u001b[D'].includes(arrow)) return bytes;
+  return `${bytes.slice(0, -3)}\u001bO${arrow[2]}`;
+}

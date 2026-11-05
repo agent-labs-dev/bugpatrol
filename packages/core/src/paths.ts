@@ -260,11 +260,16 @@ export function moveRoutines(root: string): string | undefined {
  * its app map, routines and endpoint inventory in the Bugpatrol folder itself.
  * Moves them into the profile's folder once, when that folder is still absent,
  * and returns what it did. A file the profile folder already holds wins.
- * When the default config exists, those files are its own, and stay.
+ * Only this profile's config may own them: when the Bugpatrol folder holds
+ * any other config, such as the default one, the files stay where they are.
  */
 export function moveProfileFiles(root: string, profile?: string): string | undefined {
   if (!profile) return undefined;
-  if (existsSync(paths.config(root))) return undefined;
+  if (!existsSync(dir(root))) return undefined;
+  const otherConfig = readdirSync(dir(root)).some(
+    (name) => /\.ya?ml$/i.test(name) && name !== 'endpoints.yml' && name.replace(/\.ya?ml$/i, '') !== profile,
+  );
+  if (otherConfig) return undefined;
   const target = join(dir(root), recordId(profile));
   if (existsSync(target)) return undefined;
   const files = (
