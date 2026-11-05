@@ -1,6 +1,14 @@
 import { type AgentEvent, ConfigError, type RoleRuntime, usageFrom } from '@bugpatrol/core';
 import { MODEL_KEYS, MODEL_ROUTES } from '@bugpatrol/decide';
-import { type EventSink, handsBack, type RoleOutcome, type RoleTask, type Runtime, type ToolResult } from '../types.js';
+import {
+  type EventSink,
+  handsBack,
+  type RoleOutcome,
+  type RoleTask,
+  type Runtime,
+  type ToolResult,
+  useStep,
+} from '../types.js';
 
 type ModelUse = Extract<RoleRuntime, { runtime: 'model' }>;
 type Message = { role: string; content?: unknown; tool_calls?: unknown[]; tool_call_id?: string };
@@ -202,7 +210,8 @@ export class ModelRuntime implements Runtime {
         ];
     const started = Date.now();
     const deadline = started + task.timeoutMs;
-    let steps = 0;
+    // A tool call uses a step, and so does an answer with none: each answer costs, and the loop must end.
+    const budget = { steps: 0, max: task.maxSteps };
     let costUsd = 0;
     let lastText = '';
     let textOnly = 0;
@@ -211,13 +220,13 @@ export class ModelRuntime implements Runtime {
     let handBack: RoleTask | undefined;
     const outcome = (stop: RoleOutcome['stop'], summary?: string, error?: string): RoleOutcome => ({
       stop,
-      steps,
+      steps: budget.steps,
       costUsd,
       summary,
       error,
     });
     for (;;) {
-      if (steps >= task.maxSteps) {
+      if (budget.steps >= task.maxSteps) {
         const finish = task.tools.filter((tool) => handsBack(tool.name));
         if (handBack || !finish.length) {
           return outcome('max-steps', lastText);
@@ -245,7 +254,11 @@ export class ModelRuntime implements Runtime {
         }
         return outcome('error', lastText, String(error));
       }
-      steps++;
+      const before = budget.steps;
+      // The hand-back turn uses no step, as the hand-back tools use none.
+      const charge = () => {
+        if (!handBack && budget.steps === before) budget.steps++;
+      };
       const usage = payload.usage as
         | {
             cost?: number;
@@ -266,6 +279,7 @@ export class ModelRuntime implements Runtime {
       messages.push(parsed.assistantMessage);
       if (parsed.calls.length === 0) {
         emit({ kind: 'tool-result', summary: 'Model replied without a tool call.', costUsd: stepCost, ...step });
+        charge();
         textOnly++;
         if (textOnly >= 3) {
           return outcome('done', lastText);
@@ -273,7 +287,18 @@ export class ModelRuntime implements Runtime {
         tell(messages, 'Call one of the tools. Call finish when you are done.');
       } else {
         textOnly = 0;
-        const calls = await this.runCalls(current, parsed.calls, emit, messages, anthropic, deadline, stepCost, step);
+        const calls = await this.runCalls(
+          current,
+          parsed.calls,
+          emit,
+          messages,
+          anthropic,
+          deadline,
+          stepCost,
+          step,
+          budget,
+        );
+        charge();
         if (calls.timeout) {
           return outcome('timeout', lastText);
         }
@@ -296,6 +321,7 @@ export class ModelRuntime implements Runtime {
     deadline: number,
     stepCost: number,
     step: Pick<AgentEvent, 'tokens' | 'model'>,
+    budget: { steps: number; max: number },
   ): Promise<{ done?: boolean; timeout?: boolean; output?: string }> {
     const anthroResults: Record<string, unknown>[] = [];
     const images: Record<string, unknown>[] = [];
@@ -306,7 +332,10 @@ export class ModelRuntime implements Runtime {
       let result: ToolResult;
       let timer: NodeJS.Timeout | undefined;
       try {
-        if (call.invalidJson) {
+        const refused = useStep(call.name, task.tools, budget);
+        if (refused) {
+          result = refused;
+        } else if (call.invalidJson) {
           result = { content: [{ type: 'text', text: 'Error: the arguments were not valid JSON' }], isError: true };
         } else if (!tool) {
           result = { content: [{ type: 'text', text: `Error: Unknown tool ${call.name}` }], isError: true };

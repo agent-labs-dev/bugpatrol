@@ -172,7 +172,7 @@ describe('ModelRuntime', () => {
     );
     expect(await runtime.run(task([look, finish], 2), () => {})).toMatchObject({
       stop: 'max-steps',
-      steps: 3,
+      steps: 2,
       summary: 'finished',
       finished: true,
     });
@@ -182,6 +182,36 @@ describe('ModelRuntime', () => {
       role: 'user',
       content: [{ type: 'tool_result' }, { type: 'text', text: expect.stringContaining('Call finish now') }],
     });
+  });
+
+  it('runs no action past the step budget, also when one answer asks for several', async () => {
+    let looks = 0;
+    const look: Tool = {
+      name: 'look',
+      description: 'Look',
+      inputSchema: { type: 'object' },
+      async run() {
+        looks++;
+        return { content: [{ type: 'text', text: 'a screen' }] };
+      },
+    };
+    const results: string[] = [];
+    const fake = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { tools: unknown[] };
+      // Every answer asks for three looks; the hand-back turn asks for a look and finish.
+      const names = body.tools.length === 1 ? ['look', 'finish'] : ['look', 'look', 'look'];
+      return response({ choices: [{ message: { tool_calls: names.map((name, index) => call(name, `c${index}`)) } }] });
+    };
+    const runtime = new ModelRuntime(
+      { runtime: 'model', via: 'openai', model: 'test' },
+      { fetch: fake as typeof fetch },
+    );
+    const outcome = await runtime.run(task([look, finish], 4), (event) => {
+      if (event.kind === 'tool-result') results.push(String(event.output));
+    });
+    expect(looks).toBe(4);
+    expect(outcome).toMatchObject({ stop: 'max-steps', steps: 4, finished: true });
+    expect(results.filter((output) => output.includes('step budget is used'))).toHaveLength(3);
   });
 
   it('nudges text-only answers and finishes after three', async () => {

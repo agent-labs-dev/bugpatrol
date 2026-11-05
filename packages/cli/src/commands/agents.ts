@@ -409,6 +409,7 @@ export async function runAgentCommand(
       (value) => vars.redact(value) as string,
       resolve(root, config.app.source),
       app.contract,
+      app.writes,
     );
     await driver.connect();
     if (driver.viewerUrl) {

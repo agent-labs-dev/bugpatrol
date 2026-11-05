@@ -194,6 +194,8 @@ app:
 
 Secrets and captured values reach the model only as `{{NAME}}` placeholders. Bugpatrol puts in the real value only when it acts on the app. It hides the value in all logs.
 
+A never-do list is advice to a model, and opening a screen or pressing Escape can still write. When the app uses a backend whose data must not change, turn on [read-only mode](configuration.md#read-only-mode) as well: Bugpatrol then lets only reads reach the backend, and counts each write that it blocked.
+
 ## 4. Check the model keys
 
 If an agent uses an API key, set the key in your shell:

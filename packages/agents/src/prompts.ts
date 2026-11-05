@@ -37,7 +37,9 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   - A program that stays open, such as a full screen terminal UI: start_session, then press keys, for
     example ["j", "j", "enter"], and read the screen after each press. Use wait_for when the program is
     slow to draw, resize to try a narrow terminal such as 60 by 20, and stop_session when you are done.
-    start_session again starts the program fresh.
+    start_session again starts the program fresh. Bugpatrol stops every process that a command or a
+    session started when the command exits, the session stops, or the explorer ends, so your summary
+    need not say that you stopped anything.
   - Learn the keys from the app guide and from what the program shows: a help screen (often ?), a key bar,
     or a status line. Try each key that it shows, and escape to close what you opened.
   - Each view, dialog or picker of a terminal UI is a screen: record_screen it. save_routine works the

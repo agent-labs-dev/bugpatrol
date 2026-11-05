@@ -30,6 +30,21 @@ describe('parseConfig', () => {
     expect(() => review([bench, bench])).toThrow(ConfigError);
   });
 
+  it('reads app.readOnly, and asks for a proxy where Bugpatrol cannot see the requests', () => {
+    expect(parseConfig(minimal).app.readOnly).toBeUndefined();
+    expect(parseConfig({ ...minimal, app: { readOnly: true } }).app.readOnly).toEqual({
+      proxy: {},
+      websockets: 'block',
+      dropFrames: [],
+    });
+    const cli = (readOnly: unknown) => parseConfig({ version: 1, app: { platform: 'cli', readOnly } });
+    expect(() => cli(true)).toThrow(/app.readOnly.proxy/);
+    expect(cli({ proxy: { API_URL: '${API_URL}' } }).app.readOnly?.proxy).toEqual({ API_URL: '${API_URL}' });
+    expect(() => cli({ proxy: { api: 'https://api.test' } })).toThrow(ConfigError);
+    expect(() => cli({ proxy: { API: 'https://api.test' }, dropFrames: ['push'] })).toThrow(/websockets to pass/);
+    expect(() => cli({ proxy: { API: 'https://api.test' }, mode: 'strict' })).toThrow(ConfigError);
+  });
+
   it('rejects an unknown version rather than guessing', () => {
     expect(() => parseConfig({ ...minimal, version: 2 })).toThrow(ConfigError);
   });

@@ -294,6 +294,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             (value) => vars.redact(value) as string,
             resolve(root, config.app.source),
             app.contract,
+            app.writes,
           );
           await driver.connect();
           let explorerId: string | undefined;

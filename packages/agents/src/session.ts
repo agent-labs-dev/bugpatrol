@@ -32,6 +32,8 @@ export class AgentSession {
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
+  /** Read-only mode: the writes of the app that Bugpatrol blocked in this session. */
+  writesBlocked = 0;
   private spentUsd = 0;
   private runtimeLabel = '';
   private statusQueue: Promise<unknown> = Promise.resolve();
@@ -135,8 +137,21 @@ export class AgentSession {
       file && observation.terminal
         ? await this.workspace.saveTerminalText(file, this.vars.redact(terminalRecord(observation.terminal)) as string)
         : undefined;
+    this.reportBlockedWrites(observation.blockedWrites);
     await this.recordSignals(observation);
     return file;
+  }
+
+  /**
+   * One event for each write that read-only mode blocked. Without `lines`, it
+   * takes those that no observation reported yet, so none goes unreported at
+   * the end of a session.
+   */
+  reportBlockedWrites(lines: string[] = this.driver?.writes?.drain() ?? []): void {
+    for (const line of lines) {
+      this.writesBlocked++;
+      this.emit({ kind: 'write-blocked', summary: `Read-only mode blocked ${line}` });
+    }
   }
 
   /**
