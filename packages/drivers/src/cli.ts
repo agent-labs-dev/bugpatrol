@@ -507,6 +507,8 @@ export class CliDriver implements Driver {
     helper.child.stderr?.resume();
     this.session = session;
     this.view = 'session';
+    // The program starts on a blank terminal, so the recording leaves the shell's screen too.
+    this.cast.push('\u001bc');
   }
 
   /**

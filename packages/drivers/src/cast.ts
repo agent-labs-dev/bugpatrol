@@ -937,9 +937,11 @@ async function redactEvents(
 /**
  * A program can put a secret on the screen with output that holds none, such
  * as by overwriting part of a field. The events are played on a terminal, and
- * one that leaves a secret on the screen is followed by the screen drawn again
- * with the cells of the secret hidden: the whole screen when they cannot be
- * found.
+ * on one fed what the recording keeps. An event that would leave a secret on
+ * the second, on the
+ * screen or scrolled off it, is replaced by a reset and the screen it leads
+ * to, with the cells of the secret hidden: the whole screen when they cannot
+ * be found. The output that assembled the secret is not kept.
  */
 async function hideScreenSecrets(
   events: CastEvent[],
@@ -947,20 +949,41 @@ async function hideScreenSecrets(
   redact: (value: string) => string,
 ): Promise<CastEvent[]> {
   const terminal = new Terminal(size.width, size.height);
+  let playback = new Terminal(size.width, size.height);
   const result: CastEvent[] = [];
   for (const event of events) {
     const [at, text, kind] = event;
     if (kind === 'r') {
       await terminal.flush();
+      await playback.flush();
       const [cols, rows] = text.split('x').map(Number);
       terminal.resize(cols!, rows!);
+      playback.resize(cols!, rows!);
       result.push(event);
       continue;
     }
     terminal.write(text);
+    playback.write(text);
     await terminal.flush();
-    const hidden = secretCells(terminal, terminal.cells(), redact);
-    result.push(hidden.size ? [at, text + terminal.serialize(hidden)] : event);
+    await playback.flush();
+    // The rows are joined with no separator, so a secret that wraps is found.
+    const shown = playback.text().replaceAll('\n', '');
+    if (redact(shown) === shown) {
+      result.push(event);
+      continue;
+    }
+    let redrawn = `\u001bc${terminal.serialize(secretCells(terminal, terminal.cells(), redact))}`;
+    playback = new Terminal(terminal.cols, terminal.rows);
+    playback.write(redrawn);
+    await playback.flush();
+    const left = playback.text().replaceAll('\n', '');
+    if (redact(left) !== left) {
+      // The cells of the secret did not hide it, so the whole screen is hidden.
+      redrawn = `\u001bc${terminal.serialize(new Set(Array.from({ length: terminal.cols * terminal.rows }, (_, cell) => cell)))}`;
+      playback = new Terminal(terminal.cols, terminal.rows);
+      playback.write(redrawn);
+    }
+    result.push([at, redrawn]);
   }
   return result;
 }
