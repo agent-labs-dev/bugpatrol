@@ -1,6 +1,10 @@
 import { chromium, type Page } from 'playwright';
 import { WebDriver } from './web.js';
 
+// An app may open its first window after CDP is ready; this matches the launcher's own readiness timeout.
+const PAGE_TIMEOUT_MS = 30_000;
+const PAGE_POLL_MS = 100;
+
 type LaunchHandle = { cdpUrl: string; close(): Promise<void> };
 
 /** Where the app's CDP endpoint comes from: a running app, or one Bugpatrol launches on connect. */
@@ -39,13 +43,23 @@ export class ElectronDriver extends WebDriver {
     this.context.on('page', (page) => this.watch(page));
   }
 
-  private async choosePage(): Promise<Page> {
-    const pages = this.context!.pages().filter(
-      (page) => !page.url().startsWith('devtools://') && page.url() !== 'about:blank',
-    );
-    if (pages.length === 0) {
-      throw new Error('Electron CDP connection has no app page');
+  /** The app's pages, polled because a window can open, or leave about:blank, after connect. */
+  private async appPages(): Promise<Page[]> {
+    const deadline = Date.now() + PAGE_TIMEOUT_MS;
+    while (true) {
+      const pages = this.context!.pages().filter(
+        (page) => !page.url().startsWith('devtools://') && page.url() !== 'about:blank',
+      );
+      if (pages.length > 0) return pages;
+      if (Date.now() >= deadline) {
+        throw new Error(`Electron CDP connection has no app page after ${PAGE_TIMEOUT_MS / 1000}s`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));
     }
+  }
+
+  private async choosePage(): Promise<Page> {
+    const pages = await this.appPages();
     for (const page of pages) {
       const focused = await page
         .evaluate(() => document.hasFocus() && document.visibilityState === 'visible')
