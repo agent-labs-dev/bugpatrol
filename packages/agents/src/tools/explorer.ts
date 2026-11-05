@@ -557,8 +557,9 @@ export function showsOnly(step: RoutineStep): boolean {
       const script = args.find((arg) => !arg.startsWith('-'))?.replace(/^(['"])(.*)\1$/, '$2') ?? '';
       return /^((\d+|\$|\/[^/]*\/)(,(\d+|\$|\/[^/]*\/))?)?p$/.test(script);
     }
-    if (program === 'find' || program === 'fd')
-      return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint|fls)|^--exec/.test(arg));
+    if (program === 'find') return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint|fls)/.test(arg));
+    // fd runs a program with `-x`/`--exec` and `-X`/`--exec-batch`, also in a bundle such as `-Hx`.
+    if (program === 'fd') return !args.some((arg) => /^--exec|^-[^-]*[xX]/.test(arg));
     if (program === 'sort') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
     // `uniq in out` writes out; a lone `uniq` or `uniq in` only prints.
     if (program === 'uniq') return args.filter((arg) => !arg.startsWith('-')).length < 2;

@@ -73,8 +73,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * of its environment, so neither shows in the process list and the app's
  * variables never reach Python. The helper then writes the pid of the
  * command there, reads `resize <cols> <rows>` lines from it, and kills the
- * command's process group when it closes. The command leads its own session,
- * so a stop, or the end of Bugpatrol, kills every process it started.
+ * command's process group when it closes or the command exits. The command
+ * leads its own session, so a stop, its exit, or the end of Bugpatrol, kills
+ * every process it started.
  */
 const PTY = `
 import fcntl, json, os, pty, select, signal, struct, sys, termios
@@ -137,6 +138,7 @@ while True:
             break
         os.write(1, data)
 status = os.waitpid(pid, 0)[1]
+stop()
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
 `;
 
