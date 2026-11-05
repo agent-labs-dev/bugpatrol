@@ -313,17 +313,9 @@ export class Terminal {
     return out.join('\n');
   }
 
-  /**
-   * Output that draws the visible screen on a blank terminal of the same
-   * size: the alternate screen when it is active, each cell with its colors
-   * and attributes, the scroll region, the cursor, its visibility, and
-   * application cursor mode. Flush first. A cell in `hidden`, as
-   * `row * cols + col`, is drawn as a block in place of its character.
-   */
-  serialize(hidden?: Set<number>): string {
-    const buffer = this.emulator.buffer.active;
-    let out = buffer.type === 'alternate' ? '\u001b[?1049h' : '';
-    out += '\u001b[0m\u001b[H\u001b[2J';
+  /** Clears the screen and draws the rows of `buffer` on it. */
+  private drawRows(buffer: xtermModule.IBuffer, hidden?: Set<number>): string {
+    let out = '\u001b[0m\u001b[H\u001b[2J';
     for (let row = 0; row < this.rows; row++) {
       const line = buffer.getLine(buffer.viewportY + row);
       if (!line) continue;
@@ -347,6 +339,29 @@ export class Terminal {
       }
       out += '\u001b[0m';
     }
+    return out;
+  }
+
+  /**
+   * Output that draws the visible screen on a blank terminal of the same
+   * size: each cell with its colors and attributes, the scroll region, the
+   * cursor, its visibility, and application cursor mode. When the alternate
+   * screen is active, the normal screen is drawn first and the alternate one
+   * over it, so leaving it shows what the app left there. Flush first. `hide`
+   * names the cells of a screen's grid, as `row * cols + col`, drawn as a
+   * block in place of their character.
+   */
+  serialize(hide?: (cells: TerminalCell[][]) => Set<number>): string {
+    const buffer = this.emulator.buffer.active;
+    const hidden = hide?.(this.cells(buffer));
+    let out = '';
+    if (buffer.type === 'alternate') {
+      const normal = this.emulator.buffer.normal;
+      out += this.drawRows(normal, hide?.(this.cells(normal)));
+      // Entering the alternate screen saves this cursor, and leaving it restores it.
+      out += `\u001b[${normal.cursorY + 1};${Math.min(normal.cursorX, this.cols - 1) + 1}H\u001b[?1049h`;
+    }
+    out += this.drawRows(buffer, hidden);
     // xterm keeps the scroll region off its public API. Setting it homes the cursor, so it goes first.
     const margins = (this.emulator as unknown as { _core?: { buffer?: { scrollTop: number; scrollBottom: number } } })
       ._core?.buffer;
@@ -381,8 +396,7 @@ export class Terminal {
   }
 
   /** Returns the visible grid with xterm colors resolved to RGB tuples. */
-  cells(): TerminalCell[][] {
-    const buffer = this.emulator.buffer.active;
+  cells(buffer: xtermModule.IBuffer = this.emulator.buffer.active): TerminalCell[][] {
     const cells: TerminalCell[][] = [];
     for (let row = 0; row < this.rows; row++) {
       const line = buffer.getLine(buffer.viewportY + row);
@@ -1003,14 +1017,15 @@ async function hideScreenSecrets(
       result.push(event);
       continue;
     }
-    let redrawn = `\u001bc${terminal.serialize(secretCells(terminal, terminal.cells(), redact))}`;
+    let redrawn = `\u001bc${terminal.serialize((cells) => secretCells(terminal, cells, redact))}`;
     playback = new Terminal(terminal.cols, terminal.rows);
     playback.write(redrawn);
     await playback.flush();
     const left = playback.text().replaceAll('\n', '');
     if (redact(left) !== left) {
       // The cells of the secret did not hide it, so the whole screen is hidden.
-      redrawn = `\u001bc${terminal.serialize(new Set(Array.from({ length: terminal.cols * terminal.rows }, (_, cell) => cell)))}`;
+      const every = new Set(Array.from({ length: terminal.cols * terminal.rows }, (_, cell) => cell));
+      redrawn = `\u001bc${terminal.serialize(() => every)}`;
       playback = new Terminal(terminal.cols, terminal.rows);
       playback.write(redrawn);
     }
