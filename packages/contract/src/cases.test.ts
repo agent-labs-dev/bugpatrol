@@ -359,6 +359,22 @@ describe('sweepCases', () => {
     });
   });
 
+  it('an upsert PUT, one that declares 201, has no missing-id failure: a missing id creates the resource', () => {
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/secrets/{name}': {
+          put: {
+            parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' }, example: 'KEY' }],
+            responses: { '200': {}, '201': {}, '404': {} },
+          },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const missing = sweepCases(buildContract(doc, {}), { credentials: SELF }).find((c) => c.case === 'missing-id');
+    expect(missing?.blocked).toBe('PUT /secrets/{name} declares 201, so a missing name creates the resource');
+  });
+
   it('a body field mirroring a number path parameter stays a number', () => {
     const item = { type: 'object', required: ['id'], properties: { id: { type: 'integer' } } };
     const doc = {

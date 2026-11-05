@@ -142,7 +142,10 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
 
     if (negative && last && expected('missing-id')) {
       const missing = plan.missing(last);
-      if (isBlocked(missing)) add('missing-id', missing);
+      // An upsert creates what a missing id names, so it has no missing-id failure to find.
+      if (endpoint.method === 'PUT' && codes(doc, endpoint).includes(201))
+        add('missing-id', { blocked: `${endpoint.key} declares 201, so a missing ${last} creates the resource` });
+      else if (isBlocked(missing)) add('missing-id', missing);
       else {
         // Rule 1b: a made-up id can have a wrong format, so a declared 400 or 422 also passes.
         const statuses = missing.madeUp ? [404, ...[400, 422].filter((code) => declared.has(code))] : 404;
