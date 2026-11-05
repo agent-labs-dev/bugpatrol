@@ -40,6 +40,13 @@ export function appPage(candidates: AppPageCandidate[]): number | undefined {
   return best?.index;
 }
 
+/** Scheme and host only: a data: or blob: URL carries the page itself, which can hold anything the app rendered. */
+function pageLabel(url: string): string {
+  if (!URL.canParse(url)) return '(unparsable)';
+  const parsed = new URL(url);
+  return parsed.host ? `${parsed.protocol}//${parsed.host}` : parsed.protocol;
+}
+
 /** Reuse web observation over CDP without taking ownership of the Electron app. */
 export class ElectronDriver extends WebDriver {
   override readonly platform = 'electron' as const;
@@ -79,7 +86,7 @@ export class ElectronDriver extends WebDriver {
     const index = appPage(candidates);
     if (index === undefined) {
       throw new InfrastructureError(
-        `Electron CDP connection has no app page. URLs seen: ${candidates.map(({ url }) => url).join(', ')}`,
+        `Electron CDP connection has no app page. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
       );
     }
     return pages[index]!;

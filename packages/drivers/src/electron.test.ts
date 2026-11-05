@@ -160,7 +160,9 @@ describe('ElectronDriver page choice', () => {
     const error = await driver.connect().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(InfrastructureError);
-    expect((error as Error).message).toContain(dataUrl);
-    expect((error as Error).message).toContain('about:blank');
+    // Each page is named by scheme only: a data: URL's body is the page and stays out of the error.
+    expect((error as Error).message).toContain('data:');
+    expect((error as Error).message).not.toContain('splash');
+    expect((error as Error).message).toContain('about:');
   });
 });

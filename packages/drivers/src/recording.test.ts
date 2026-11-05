@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -75,8 +76,13 @@ describe('Electron recording', () => {
       args: ['--remote-debugging-port=9339', '--disable-gpu'],
     });
     const driver = new ElectronDriver('http://127.0.0.1:9339');
+    // An app page is served, not a data: URL: the driver never takes a browser-owned page for the app.
+    const html = decodeURIComponent(PAGE.slice('data:text/html,'.length));
+    const server = createServer((_, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(html));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
     try {
-      await app.pages()[0]!.goto(PAGE);
+      await app.pages()[0]!.goto(`http://127.0.0.1:${port}/`);
       await driver.connect();
       await driver.startRecording!();
       const save = (await driver.observe()).elements.find((element) => element.name === 'Save')!;
@@ -87,6 +93,7 @@ describe('Electron recording', () => {
     } finally {
       await driver.close();
       await app.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(dir, { recursive: true, force: true });
     }
   });
