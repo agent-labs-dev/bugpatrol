@@ -56,11 +56,9 @@ function validateArguments(args: string[]): void {
   }
 }
 
+/** Keeps the event loop alive: launch and cleanup must finish even after the app has exited. */
 function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-  });
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function groupExists(groupPid: number): boolean {
