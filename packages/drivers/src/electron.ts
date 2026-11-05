@@ -1,19 +1,32 @@
 import { chromium, type Page } from 'playwright';
 import { WebDriver } from './web.js';
 
-/** Reuse web observation over CDP without taking ownership of the Electron app. */
+type LaunchHandle = { cdpUrl: string; close(): Promise<void> };
+
+/** Where the app's CDP endpoint comes from: a running app, or one Bugpatrol launches on connect. */
+export type ElectronTarget = string | (() => Promise<LaunchHandle>);
+
+/** Reuse web observation over CDP; owns the Electron app only when it launched it. */
 export class ElectronDriver extends WebDriver {
   override readonly platform = 'electron' as const;
+  private launched?: LaunchHandle;
 
   constructor(
-    private readonly cdpUrl: string,
+    private readonly target: ElectronTarget,
     allowedOrigins: string[] = [],
   ) {
     super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins });
   }
 
   override async connect(): Promise<void> {
-    this.browser = await chromium.connectOverCDP(this.cdpUrl);
+    let cdpUrl: string;
+    if (typeof this.target === 'string') {
+      cdpUrl = this.target;
+    } else {
+      this.launched = await this.target();
+      cdpUrl = this.launched.cdpUrl;
+    }
+    this.browser = await chromium.connectOverCDP(cdpUrl);
     this.context = this.browser.contexts()[0];
     if (!this.context) {
       throw new Error('Electron CDP connection has no context');
@@ -45,7 +58,11 @@ export class ElectronDriver extends WebDriver {
   }
 
   override async close(): Promise<void> {
-    // CDP browser.close disconnects Playwright; it does not stop Electron.
-    await this.browser?.close();
+    // CDP browser.close disconnects Playwright; it does not stop Electron, so a launched app is stopped here.
+    try {
+      await this.browser?.close();
+    } finally {
+      await this.launched?.close();
+    }
   }
 }

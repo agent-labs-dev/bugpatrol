@@ -158,6 +158,8 @@ async function terminate(
     }
     await Promise.race([child.done.then(() => undefined), wait(TERMINATE_WAIT_MS)]);
   }
+  // A process in uninterruptible sleep can outlive SIGKILL briefly; wait a bounded time for the group to go.
+  for (let waited = 0; groupExists(groupPid) && waited < TERMINATE_WAIT_MS; waited += 50) await wait(50);
 }
 
 async function removeDirectory(directory: string): Promise<void> {
@@ -186,6 +188,7 @@ export async function launchElectron(options: {
   args: string[];
   directory: string;
   userDataDir?: string;
+  cdp?: number | 'auto';
   width: number;
   height: number;
   signal?: AbortSignal;
@@ -211,7 +214,7 @@ export async function launchElectron(options: {
     if (options.signal?.aborted) throw new LaunchFailure('launch aborted');
     const appArgs = [
       `--user-data-dir=${profile}`,
-      '--remote-debugging-port=0',
+      `--remote-debugging-port=${options.cdp === 'auto' || options.cdp === undefined ? 0 : options.cdp}`,
       '--ozone-platform=x11',
       ...options.args,
     ];
@@ -226,13 +229,23 @@ export async function launchElectron(options: {
     });
     const ready = await waitForReady(profile, pidFile, childState, options.signal, timeoutMs);
     let closePromise: Promise<void> | undefined;
+    let removeListeners = () => {};
     const close = async (): Promise<void> => {
       closePromise ??= (async () => {
+        removeListeners();
         await terminate(child!.pid, childState!, ready.pid);
         await removeDirectory(options.directory);
       })();
       return closePromise;
     };
+    // The CLI's own SIGINT and SIGTERM handlers cancel the session and close the driver, which calls close().
+    const onAbort = () => void close().catch(() => undefined);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    removeListeners = () => options.signal?.removeEventListener('abort', onAbort);
+    if (options.signal?.aborted) {
+      await close();
+      throw new LaunchFailure('launch aborted');
+    }
     return { cdpUrl: `http://127.0.0.1:${ready.port}`, pid: ready.pid, close };
   } catch (error) {
     if (child && childState) await terminate(child.pid, childState);

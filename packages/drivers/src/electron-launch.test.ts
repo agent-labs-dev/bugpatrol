@@ -177,6 +177,34 @@ describe('launchElectron', () => {
     },
   );
 
+  it.skipIf(Boolean(reason))(
+    `cleans up after cancellation${reason ? ` (skipped: ${reason})` : ''}`,
+    { timeout: 30_000 },
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'bugpatrol-electron-launch-cancel-'));
+      directories.add(directory);
+      const controller = new AbortController();
+      const launched = await launchElectron({
+        command: chromium.executablePath(),
+        args: ['--no-sandbox', '--disable-gpu', '--no-first-run', 'data:text/html,<title>cancel</title>'],
+        directory,
+        width: 800,
+        height: 600,
+        signal: controller.signal,
+      });
+      const group = await processGroup(launched.pid);
+      expect(group).toBeDefined();
+      controller.abort();
+      await waitFor(async () => {
+        const processes = await groupProcesses(group!);
+        return processes.length === 0 ? processes : undefined;
+      }, 10_000);
+      await waitFor(async () => ((await exists(directory)) ? undefined : true), 10_000);
+      expect(await exists(directory)).toBe(false);
+      await launched.close();
+    },
+  );
+
   it('rejects display and debugging overrides before spawning', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'bugpatrol-electron-launch-args-'));
     directories.add(directory);

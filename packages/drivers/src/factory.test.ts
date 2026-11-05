@@ -8,10 +8,19 @@ import { apiCredentials, createDriver } from './factory.js';
 const vars = (value: string) => value;
 
 describe('createDriver', () => {
-  it('requires a CDP endpoint for Electron', () => {
-    const config = bugpatrolConfigSchema.parse({ version: 1, app: { platform: 'electron' } });
+  const launch = { command: 'electron', args: [] };
+  it.each([
+    ['neither', {}, 'app.connect.cdp', true],
+    ['both', { cdp: 'http://127.0.0.1:9222', launch }, 'app.connect.cdp', true],
+    ['launch-only', { launch }, '', false],
+  ] as const)('accepts only one Electron connection mode: %s', (_name, connect, key, rejects) => {
+    const config = bugpatrolConfigSchema.parse({ version: 1, app: { platform: 'electron', connect } });
+    if (!rejects) {
+      expect(config.app.connect.launch).toMatchObject({ command: 'electron', cdp: 'auto' });
+      return;
+    }
     expect(() => createDriver(config, vars)).toThrow(ConfigError);
-    expect(() => createDriver(config, vars)).toThrow('app.connect.cdp');
+    expect(() => createDriver(config, vars)).toThrow(key);
   });
 
   it.each(['ios', 'android'] as const)('requires an app id for %s', (platform) => {
