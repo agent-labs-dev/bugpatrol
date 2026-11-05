@@ -663,7 +663,7 @@ function blockMask(code: number): Mask {
   if (code === 0x2580) rectangle(bits, 0, 0, 7, 7);
   else if (code >= 0x2581 && code <= 0x2587) rectangle(bits, 0, 16 - (code - 0x2580) * 2, 7, 15);
   else if (code === 0x2588) rectangle(bits, 0, 0, 7, 15);
-  else if (code >= 0x2589 && code <= 0x258f) rectangle(bits, 0, 0, 16 - (code - 0x2588) * 2 - 1, 15);
+  else if (code >= 0x2589 && code <= 0x258f) rectangle(bits, 0, 0, GLYPH.width - (code - 0x2588) - 1, 15);
   else if (code === 0x2590) rectangle(bits, 4, 0, 7, 15);
   else if (code === 0x2591 || code === 0x2592 || code === 0x2593) {
     const spacing = code === 0x2591 ? 3 : code === 0x2592 ? 2 : 1;
