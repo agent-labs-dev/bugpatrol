@@ -189,6 +189,11 @@ export class Terminal {
     return this.emulator.rows;
   }
 
+  /** Whether the app turned on application cursor mode. Await flush first. */
+  get applicationCursor(): boolean {
+    return this.emulator.modes.applicationCursorKeysMode;
+  }
+
   /** Queues output in order. Await flush before reading the terminal. */
   write(text: string): void {
     const font = needsUnifont(text) ? loadUnifont() : undefined;

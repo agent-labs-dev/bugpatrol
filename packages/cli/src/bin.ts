@@ -54,7 +54,8 @@ try {
   if (moved) process.stderr.write(`${moved}\n`);
   // A repo that used a non-default `--config` before profiles kept its app
   // map, routines and endpoint inventory in the shared folder. Move them into
-  // that config's folder once, so they are not silently lost.
+  // that config's folder once, so they are not silently lost. They are copied,
+  // not moved, since they may be the default config's own.
   const adopted = selected.configFile ? moveProfileFiles(root, profileOf(root, selected.configFile)) : undefined;
   if (adopted) process.stderr.write(`${adopted}\n`);
   switch (command) {

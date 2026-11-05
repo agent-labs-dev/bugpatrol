@@ -77,14 +77,14 @@ describe('profiles', () => {
     expect(() => profileOf(root, '.bugpatrol/Routines.yml')).toThrow(/cannot use as a folder/);
   });
 
-  it('moves the shared app map, routines and endpoints into a profile once, when it has none', () => {
+  it('copies the shared app map, routines and endpoints into a profile once, when it has none', () => {
     const root = project();
     mkdirSync(paths.routines(root), { recursive: true });
     writeFileSync(paths.appMap(root), '{}');
     writeFileSync(paths.endpointInventory(root), 'endpoints: []');
     writeFileSync(paths.routine(root, 'enter-app'), '{}');
     const message = moveProfileFiles(root, 'api');
-    expect(message).toMatch(/Moved the app map/);
+    expect(message).toMatch(/Copied the app map/);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'appmap.json'))).toBe(true);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'routines', 'enter-app.json'))).toBe(true);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'endpoints.yml'))).toBe(true);

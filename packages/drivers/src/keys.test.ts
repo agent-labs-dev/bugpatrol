@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyBytes } from './keys.js';
+import { applicationKeyBytes, keyBytes } from './keys.js';
 
 describe('keyBytes', () => {
   it('sends the bytes of an xterm for each named key, in any case', () => {
@@ -19,6 +19,18 @@ describe('keyBytes', () => {
       '\u001b[Z',
     ]);
     expect(['f1', 'f4', 'f5', 'f12'].map(keyBytes)).toEqual(['\u001bOP', '\u001bOS', '\u001b[15~', '\u001b[24~']);
+  });
+
+  it('sends arrows, Home and End as ESC O in application cursor mode', () => {
+    expect(['up', 'down', 'right', 'left', 'home', 'end'].map(applicationKeyBytes)).toEqual([
+      '\u001bOA',
+      '\u001bOB',
+      '\u001bOC',
+      '\u001bOD',
+      '\u001bOH',
+      '\u001bOF',
+    ]);
+    expect(['pageup', 'enter', 'j'].map(applicationKeyBytes)).toEqual(['\u001b[5~', '\r', 'j']);
   });
 
   it('sends ctrl and alt chords', () => {

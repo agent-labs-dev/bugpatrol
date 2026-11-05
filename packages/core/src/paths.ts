@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { ConfigError } from './errors.js';
 
@@ -258,8 +258,9 @@ export function moveRoutines(root: string): string | undefined {
 /**
  * A repo that already used `--config .bugpatrol/api.yml` before profiles kept
  * its app map, routines and endpoint inventory in the Bugpatrol folder itself.
- * Moves them into the profile's folder once, when that folder is still absent,
- * and returns what it did. A file the profile folder already holds wins.
+ * Copies them into the profile's folder once, when that folder is still absent,
+ * and returns what it did. The shared files stay, since they may belong to the
+ * default config: a newly added config must not take them away from it.
  */
 export function moveProfileFiles(root: string, profile?: string): string | undefined {
   if (!profile) return undefined;
@@ -275,20 +276,17 @@ export function moveProfileFiles(root: string, profile?: string): string | undef
   const hasRoutines = existsSync(sharedRoutines);
   if (!files.length && !hasRoutines) return undefined;
   mkdirSync(join(target, 'routines'), { recursive: true });
-  for (const [from, to] of files) renameSync(from, to);
-  let moved = 0;
+  for (const [from, to] of files) copyFileSync(from, to);
+  let copied = 0;
   if (hasRoutines) {
     for (const name of readdirSync(sharedRoutines).filter((file) => file.endsWith('.json'))) {
-      const to = join(target, 'routines', name);
-      if (existsSync(to)) continue;
-      renameSync(join(sharedRoutines, name), to);
-      moved += 1;
+      copyFileSync(join(sharedRoutines, name), join(target, 'routines', name));
+      copied += 1;
     }
-    rmSync(sharedRoutines, { recursive: true, force: true });
   }
   const where = relative(root, dir(root));
   return [
-    `Moved the app map, endpoint inventory and ${moved} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
+    `Copied the app map, endpoint inventory and ${copied} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
     `Commit ${where}/${profile}/ so a fresh clone can replay them.`,
   ].join('\n');
 }

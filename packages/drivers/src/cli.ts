@@ -6,7 +6,7 @@ import type { Duplex } from 'node:stream';
 import type { SessionOp } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { CastRecorder, Terminal, terminalPng } from './cast.js';
-import { keyBytes } from './keys.js';
+import { applicationKeyBytes, keyBytes } from './keys.js';
 import { nativeSnapshot } from './maestro.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
@@ -430,8 +430,10 @@ export class CliDriver implements Driver {
       return { ok: true, step };
     }
     let keys: string[];
+    await session.screen.flush();
+    const applicationCursor = session.screen.applicationCursor;
     try {
-      keys = op.keys.map(keyBytes);
+      keys = op.keys.map(applicationCursor ? applicationKeyBytes : keyBytes);
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
