@@ -1,4 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import * as unicode11Module from '@xterm/addon-unicode11';
 import * as xtermModule from '@xterm/headless';
 import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
@@ -69,6 +70,9 @@ const GIFEncoder = gifenc.GIFEncoder ?? gifenc.default.GIFEncoder;
 type XtermPackage = typeof xtermModule & { default?: typeof xtermModule };
 const xtermPackage = xtermModule as XtermPackage;
 const XtermTerminal = (xtermPackage.default ?? xtermPackage).Terminal;
+type Unicode11Package = typeof unicode11Module & { default?: typeof unicode11Module };
+const unicode11Package = unicode11Module as Unicode11Package;
+const Unicode11Addon = (unicode11Package.default ?? unicode11Package).Unicode11Addon;
 
 type UnifontGlyphs = Map<number, Uint8Array>;
 let unifontGlyphs: UnifontGlyphs | undefined;
@@ -167,6 +171,9 @@ export class Terminal {
       logLevel: 'off',
       theme: XTERM_THEME,
     });
+    // xterm measures with Unicode 6 by default, where an emoji such as 🚀 is one column; terminals draw it in two.
+    this.emulator.loadAddon(new Unicode11Addon());
+    this.emulator.unicode.activeVersion = '11';
     this.emulator.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
       if (params.some((param) => param === 25)) this.cursorVisible = true;
       return false;
