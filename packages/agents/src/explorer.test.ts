@@ -326,6 +326,19 @@ describe('the api explorer', () => {
     expect(outcome.summary).toBe('The explorer used all its steps. 1 candidate(s) raised in 3 steps.');
   });
 
+  it('reads a part of the spec, and of the last response, by JSON pointer', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    const schema = await f.run('spec', { pointer: '/components/schemas/ItemResult' });
+    expect(schema.text).toContain('"$ref": "#/components/schemas/Item"');
+    expect((await f.run('spec', { pointer: '/components/schemas/Nope' })).text).toContain(
+      'Keys at /components/schemas: Health, Version',
+    );
+    await f.run('request', { method: 'GET', url: '/items/1' });
+    const part = await f.run('look', { pointer: '/result/name' });
+    expect(part.text).toBe('/result/name:\n"Alpha"');
+  });
+
   it('as: other uses the other credential set', async () => {
     const f = await apiExplorer();
     closers.push(f.fixture.close);

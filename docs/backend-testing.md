@@ -183,6 +183,12 @@ replay gets a new value. A capture holds an identifier, not a secret: it
 cannot replace a setup variable or a credential. Bugpatrol never guesses that
 a literal value is an id.
 
+A model sees the first 8000 characters of a body. To read further, the
+explorer's `look` takes a JSON pointer into the last response body, such as
+`/result/0`, and its `spec` tool reads one part of the OpenAPI spec, such as
+`/components/schemas/Item`, however large the spec document is. A part over
+the limit names its keys, so the next pointer can go deeper.
+
 ## Run a disposable stack
 
 Put Bugpatrol's config in the repository whose code you intend to investigate.

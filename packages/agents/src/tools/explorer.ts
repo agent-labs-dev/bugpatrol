@@ -9,6 +9,7 @@ import {
   type Evidence,
   fingerprint,
   formatHttpExchange,
+  formatJsonAt,
   type HttpExchange,
   type Locator,
   type Routine,
@@ -868,12 +869,60 @@ export function explorerTools(
           },
         ]
       : []),
-    {
-      name: 'look',
-      description: 'Observe the current screen.',
-      inputSchema: schema({}),
-      run: () => observe(session, 'look'),
-    },
+    api
+      ? {
+          name: 'look',
+          description:
+            'Show the last exchange again. pointer: a JSON pointer into the body of the last response, such as ' +
+            '/result/0, to read a part of it past the body cut, without sending the request again.',
+          inputSchema: schema({ pointer: string }),
+          async run(input) {
+            const pointer = arg(input, 'pointer');
+            if (!pointer) return observe(session, 'look');
+            const response =
+              session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange?.response;
+            if (!response) return { ...text('No response yet: send a request first.'), isError: true };
+            if (response.tooLarge)
+              return {
+                ...text(
+                  `The body of the last response was over the read limit, so none of it was kept (${response.bytes} bytes or more).`,
+                ),
+                isError: true,
+              };
+            let body: unknown;
+            try {
+              body = JSON.parse(response.body);
+            } catch {
+              return {
+                ...text('The body of the last response is not JSON, so a pointer cannot select a part of it.'),
+                isError: true,
+              };
+            }
+            return text(session.vars.redact(formatJsonAt(body, pointer)) as string);
+          },
+        }
+      : {
+          name: 'look',
+          description: 'Observe the current screen.',
+          inputSchema: schema({}),
+          run: () => observe(session, 'look'),
+        },
+    ...(api
+      ? [
+          {
+            name: 'spec',
+            description:
+              'Read one part of the OpenAPI spec that Bugpatrol tests against, by JSON pointer, such as ' +
+              '/components/schemas/Item or /paths/~1items~1{id}/get ("/" in a path is ~1). Use it rather than a ' +
+              'request for the spec document: a response shows only its first 8000 characters, and one over 1 MiB is ' +
+              'not kept. A part over the limit names its keys, so the next pointer can go deeper. No pointer: the top level.',
+            inputSchema: schema({ pointer: string }),
+            async run(input: Record<string, unknown>) {
+              return text(session.vars.redact(formatJsonAt(api.policy.contract.doc, arg(input, 'pointer'))) as string);
+            },
+          },
+        ]
+      : []),
     {
       name: 'tap',
       description: 'Tap one element by its latest ref.',
