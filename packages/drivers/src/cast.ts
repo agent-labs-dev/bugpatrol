@@ -232,6 +232,30 @@ export class Terminal {
     );
   }
 
+  /**
+   * Parses `text` now, one character at a time, and says whether `leaks` held
+   * after any of them for the visible rows and the rows just above them,
+   * joined with no separator. A program can draw a secret and erase it again
+   * within one write, and playback shows every step. Flush first.
+   */
+  writeWatching(text: string, leaks: (shown: string) => boolean): boolean {
+    // xterm parses synchronously only through its core, which keeps writeSync off the public API.
+    const core = (this.emulator as unknown as { _core: { writeSync(data: string): void } })._core;
+    const buffer = this.emulator.buffer;
+    let leaked = false;
+    for (const char of text) {
+      core.writeSync(char);
+      if (leaked) continue;
+      const active = buffer.active;
+      const rows: string[] = [];
+      for (let row = Math.max(0, active.baseY - this.rows); row < active.baseY + this.rows; row++) {
+        rows.push(active.getLine(row)?.translateToString(true) ?? '');
+      }
+      leaked = leaks(rows.join(''));
+    }
+    return leaked;
+  }
+
   /** The visible rows of the screen, with trailing spaces removed. */
   screenRows(): string[] {
     const buffer = this.emulator.buffer.active;
@@ -937,11 +961,11 @@ async function redactEvents(
 /**
  * A program can put a secret on the screen with output that holds none, such
  * as by overwriting part of a field. The events are played on a terminal, and
- * on one fed what the recording keeps. An event that would leave a secret on
- * the second, on the
- * screen or scrolled off it, is replaced by a reset and the screen it leads
- * to, with the cells of the secret hidden: the whole screen when they cannot
- * be found. The output that assembled the secret is not kept.
+ * on one fed what the recording keeps. An event that shows a secret on the
+ * second at any character, on the screen or scrolled off it, even one it
+ * erases again, is replaced by a reset and the screen it leads to, with the
+ * cells of the secret hidden: the whole screen when they cannot be found.
+ * The output that assembled the secret is not kept.
  */
 async function hideScreenSecrets(
   events: CastEvent[],
@@ -963,12 +987,12 @@ async function hideScreenSecrets(
       continue;
     }
     terminal.write(text);
-    playback.write(text);
     await terminal.flush();
     await playback.flush();
+    const leaks = (shown: string) => redact(shown) !== shown;
+    const leaked = playback.writeWatching(text, leaks);
     // The rows are joined with no separator, so a secret that wraps is found.
-    const shown = playback.text().replaceAll('\n', '');
-    if (redact(shown) === shown) {
+    if (!leaked && !leaks(playback.text().replaceAll('\n', ''))) {
       result.push(event);
       continue;
     }
