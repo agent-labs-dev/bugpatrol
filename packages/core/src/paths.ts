@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { ConfigError } from './errors.js';
 
 /**
  * Everything Bugpatrol owns lives in one folder at the project root:
@@ -9,6 +10,7 @@ import { dirname, join, relative, resolve } from 'node:path';
  *     instructions.md    committed: the app guide for the explorer
  *     appmap.json        committed: the screens the explorer found
  *     routines/          committed: replayable flows, including issue repros
+ *     <profile>/         committed: appmap.json and routines/ of another config, see profileOf()
  *     runs/              gitignored: sessions, issues, fixes, worktrees, memory
  *
  * The gate's committed manifest is small, diffs cleanly, and makes a baseline
@@ -43,6 +45,32 @@ export function layout(root: string): { dir: string; config: string } {
 const dir = (root: string) => join(root, layout(root).dir);
 const data = (root: string, ...parts: string[]) => join(dir(root), DATA_DIR, ...parts);
 
+/** Folder names in BUGPATROL_DIR that a profile cannot take. */
+const RESERVED = new Set([DATA_DIR, 'routines']);
+
+/**
+ * The profile of a `--config` file: undefined for the default config, else
+ * the file name without its extension (`.bugpatrol/cli.yml` is `cli`). Each
+ * config of a repo explores its own app, so a profile keeps its app map,
+ * routines and endpoint inventory in `.bugpatrol/<profile>/`. The default
+ * config keeps them in `.bugpatrol/` itself, where they always were.
+ */
+export function profileOf(root: string, configFile?: string): string | undefined {
+  if (!configFile) return undefined;
+  const file = resolve(root, configFile);
+  if (file === join(dir(root), layout(root).config)) return undefined;
+  const name = basename(file).replace(/\.ya?ml$/i, '');
+  // macOS and Windows resolve `Runs` to `runs`, so the check is case-insensitive.
+  if (RESERVED.has(name.toLowerCase()) || !/^[A-Za-z0-9_][\w.-]*$/.test(name))
+    throw new ConfigError(
+      `The config file ${basename(file)} gives the profile name "${name}", which Bugpatrol cannot use as a folder. Rename the file.`,
+    );
+  return name;
+}
+
+/** Where a profile keeps its committed agent files: the Bugpatrol folder, or its profile folder in it. */
+const committed = (root: string, profile?: string) => (profile ? join(dir(root), recordId(profile)) : dir(root));
+
 /**
  * A file-backed id is one path segment. Agents choose some ids (a screen id,
  * a routine id), so an id such as "../x" must not reach a path outside its folder.
@@ -74,10 +102,12 @@ export const paths = {
   run: (root: string, runId: string) => data(root, 'gate', recordId(runId)),
   /** Progress for the gate run currently in flight. Rewritten per screen. */
   live: (root: string) => data(root, 'gate', 'live.json'),
+  // Committed, per profile (see profileOf): the app map, the routines and the
+  // endpoint inventory. Every reader and writer of them passes the profile.
   /** Committed. Small JSON with no pixels, so a fresh clone knows the app (ADR 0006). */
-  appMap: (root: string) => join(dir(root), 'appmap.json'),
+  appMap: (root: string, profile?: string) => join(committed(root, profile), 'appmap.json'),
   /** Committed. The endpoint inventory of an api app without a spec (decision 1b). */
-  endpointInventory: (root: string) => join(dir(root), 'endpoints.yml'),
+  endpointInventory: (root: string, profile?: string) => join(committed(root, profile), 'endpoints.yml'),
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
   triage: (root: string) => data(root, 'triage.json'),
   memory: (root: string) => data(root, 'memory.json'),
@@ -92,8 +122,9 @@ export const paths = {
   agentBaselineSnapshot: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.snapshot.json`),
   worktrees: (root: string) => data(root, 'worktrees'),
   /** Committed, so a fresh clone can replay a routine and an issue's repro (ADR 0006). */
-  routines: (root: string) => join(dir(root), 'routines'),
-  routine: (root: string, id: string) => join(dir(root), 'routines', `${recordId(id)}.json`),
+  routines: (root: string, profile?: string) => join(committed(root, profile), 'routines'),
+  routine: (root: string, id: string, profile?: string) =>
+    join(committed(root, profile), 'routines', `${recordId(id)}.json`),
   issues: (root: string) => data(root, 'issues'),
   issue: (root: string, id: string) => data(root, 'issues', `${recordId(id)}.json`),
   fixes: (root: string) => data(root, 'fixes'),
@@ -113,6 +144,21 @@ export const paths = {
   /** One line for each candidate of the session that the judge or a review dismissed. */
   sessionDecisions: (root: string, id: string) => data(root, 'sessions', recordId(id), 'decisions.jsonl'),
 } as const;
+
+/**
+ * The app maps and routine folders of every profile in the repo: the files
+ * that Bugpatrol itself writes and leaves for the user to commit (ADR 0006).
+ * A profile is any folder in the Bugpatrol folder but the reserved ones.
+ */
+export function agentFiles(root: string): string[] {
+  let profiles: string[] = [];
+  try {
+    profiles = readdirSync(dir(root), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !RESERVED.has(entry.name.toLowerCase()))
+      .map((entry) => entry.name);
+  } catch {}
+  return [undefined, ...profiles].flatMap((profile) => [paths.routines(root, profile), paths.appMap(root, profile)]);
+}
 
 /**
  * The JSON state that a patrol shares through the `bugpatrol-state` branch
@@ -207,6 +253,63 @@ export function moveRoutines(root: string): string | undefined {
     `Moved ${moved} routine(s)${movedMap ? ' and the app map' : ''} from ${where}/${DATA_DIR}/ to ${where}/.`,
     `Commit them (${where}/routines/ and ${where}/appmap.json) so CI and a fresh clone can replay them.`,
   ].join('\n');
+}
+
+/** The default layout's app map and endpoint inventory, each with where profile `profile` keeps it. */
+function sharedFiles(root: string, profile: string): [string, string][] {
+  const target = join(dir(root), recordId(profile));
+  return (
+    [
+      [paths.appMap(root), join(target, 'appmap.json')],
+      [paths.endpointInventory(root), join(target, 'endpoints.yml')],
+    ] as [string, string][]
+  ).filter(([from]) => existsSync(from));
+}
+
+const hasSharedFiles = (root: string, profile: string) =>
+  sharedFiles(root, profile).length > 0 || existsSync(paths.routines(root));
+
+/**
+ * Before profiles, a config such as `--config .bugpatrol/api.yml` kept its app
+ * map, routines and endpoint inventory in the Bugpatrol folder itself. No file
+ * says which config they belong to, so selecting a config never moves them:
+ * `bugpatrol adopt --config <file>` is the user saying they are that profile's.
+ * Moves them into the profile's folder and returns what it did. A file the
+ * profile folder already holds wins.
+ */
+export function adoptSharedFiles(root: string, profile: string): string {
+  const where = relative(root, dir(root));
+  if (!hasSharedFiles(root, profile)) return `Nothing to adopt: ${where}/ holds no app map, endpoints or routines.`;
+  const target = join(dir(root), recordId(profile));
+  mkdirSync(join(target, 'routines'), { recursive: true });
+  for (const [from, to] of sharedFiles(root, profile)) if (!existsSync(to)) renameSync(from, to);
+  let moved = 0;
+  const sharedRoutines = paths.routines(root);
+  if (existsSync(sharedRoutines)) {
+    for (const name of readdirSync(sharedRoutines).filter((file) => file.endsWith('.json'))) {
+      const to = join(target, 'routines', name);
+      if (existsSync(to)) continue;
+      renameSync(join(sharedRoutines, name), to);
+      moved += 1;
+    }
+    if (!readdirSync(sharedRoutines).length) rmSync(sharedRoutines, { recursive: true });
+  }
+  return [
+    `Moved the app map, endpoint inventory and ${moved} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
+    `Commit ${where}/${profile}/ so a fresh clone can replay them.`,
+  ].join('\n');
+}
+
+/**
+ * A note for a profile that has no folder yet while the default layout holds
+ * files and no default config claims them: they may be this profile's from
+ * before profiles. Moving them is the user's call (`adoptSharedFiles`).
+ */
+export function adoptHint(root: string, profile: string | undefined, configFile: string): string | undefined {
+  if (!profile || existsSync(join(dir(root), recordId(profile))) || existsSync(paths.config(root))) return undefined;
+  if (!hasSharedFiles(root, profile)) return undefined;
+  const where = relative(root, dir(root));
+  return `${where}/ holds an app map or routines, and ${where}/${profile}/ does not exist yet. If they belong to this config, run: bugpatrol adopt --config ${configFile}`;
 }
 
 export type BaselineManifest = {

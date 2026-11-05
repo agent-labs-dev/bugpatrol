@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os';
 import { bugpatrolConfigSchema, ConfigError } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import { credentialSets } from './api.js';
@@ -27,6 +28,21 @@ describe('createDriver', () => {
     const driver = createDriver(config, vars, vars, '/work/review-7-head');
     expect(driver).toBeInstanceOf(CliDriver);
     expect(driver.platform).toBe('cli');
+  });
+
+  it('gives a CLI app its own environment, with setup captures and a private folder', { timeout: 15_000 }, async () => {
+    const config = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'cli', connect: { cli: { env: { HOME: '{{PRIVATE_DIR}}/home', PORT: '${PORT}' } } } },
+    });
+    const driver = createDriver(config, (value) => value.replace('${PORT}', '9000'), vars, tmpdir());
+    await driver.connect();
+    try {
+      await driver.act({ kind: 'run', command: 'echo "$HOME $PORT"' });
+      expect((await driver.observe()).terminal!.output).toMatch(/^\S*bugpatrol-app-\S*\/home 9000$/);
+    } finally {
+      await driver.close();
+    }
   });
 
   it('puts connect.headers into each credential set, and a set header wins whatever its case', () => {

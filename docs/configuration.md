@@ -1,6 +1,24 @@
 # Configuration
 
-All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root; choosing a profile never changes the artifact directory.
+All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root.
+
+## Profiles
+
+A repo can test more than one app config, for example its desktop app with `bugpatrol.yml` and its command line tool with `cli.yml`. Each config file is a profile, named after the file without its extension: `--config .bugpatrol/cli.yml` is the `cli` profile. Each profile explores its own app, so it keeps its own committed agent files:
+
+| File | Default config (`bugpatrol.yml`) | Profile `cli` (`cli.yml`) |
+| --- | --- | --- |
+| App map | `.bugpatrol/appmap.json` | `.bugpatrol/cli/appmap.json` |
+| Routines | `.bugpatrol/routines/` | `.bugpatrol/cli/routines/` |
+| Endpoint inventory | `.bugpatrol/endpoints.yml` | `.bugpatrol/cli/endpoints.yml` |
+
+The default config keeps the paths it always had. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folder of that profile: `explore`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, and the dashboard.
+
+### Migrating an existing non-default config
+
+Before profiles existed, a config such as `--config .bugpatrol/api.yml` kept its app map, routines and endpoint inventory in `.bugpatrol/` itself. No file says which config those files belong to, so selecting a config never moves them. When there is no default `bugpatrol.yml` and `.bugpatrol/<profile>/` does not exist yet, a command that uses the config prints a note. If the files are that config's, run `bugpatrol adopt --config .bugpatrol/api.yml` once: it moves `appmap.json`, `endpoints.yml` and the routines in `.bugpatrol/routines/` to `.bugpatrol/api/`, and prints what it moved. Commit that folder. Issues filed before the move name `bugpatrol:routine repro-x` without a profile, so they replay from `.bugpatrol/routines/`.
+
+`.bugpatrol/runs/` stays one folder for all profiles. Sessions, issues and fixes have unique ids, so the dashboard and `bugpatrol issue` see the work of every profile. The memory of lessons is shared too, and so is the review record of a pull request: review a pull request with one profile at a time. The `bugpatrol-state` branch (`agents.patrol.state: branch`) shares the app map and the routines of the default config only.
 
 ## The `.bugpatrol/` folder
 
@@ -12,6 +30,7 @@ Bugpatrol keeps all of its files in one folder at the root of your project:
 | `.bugpatrol/instructions.md` | The app guide for the explorer | Commit it |
 | `.bugpatrol/appmap.json` | The screens that the explorer found | Commit it |
 | `.bugpatrol/routines/` | The routines, and the repro routine of each issue. CI and a fresh clone replay them | Commit it |
+| `.bugpatrol/<profile>/` | The app map, routines and endpoint inventory of another config ([Profiles](#profiles)) | Commit it |
 | `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots | `init` adds it to `.gitignore` |
 
 The project root is the folder that holds `.bugpatrol/`. All paths in the config (`source`, `cwd`, `instructions`) are relative to the project root. You can run a command from any folder in the project: Bugpatrol finds `.bugpatrol/` in the current folder or in a folder above it.
@@ -28,7 +47,7 @@ app:
   source: .                     # the repo that the fixer edits, relative to the project root
   setup: []                     # commands: { run, cwd, capture, background, readyWhen, timeoutMs }
   teardown: []
-  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { timeoutMs: 60000 }
+  connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { command, timeoutMs, cols, rows, env }
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
@@ -105,8 +124,12 @@ Later commands and `connect` can use a captured value as `${NAME}`. The explorer
 ## Secret interpolation
 
 Agent actions and saved routines may expand `{{NAME}}` or `${NAME}` only when the
-name is declared in `app.secrets` or captured by setup. Unknown names fail before
-an action runs. Never put production credentials in a test environment.
+name is declared in `app.secrets` or captured by setup. An unknown `{{NAME}}` fails
+before the action runs. An unknown `${name}` stays as it is, because it is also the
+syntax of the shell: on a `cli` app, `for s in a b; do cat ${s}.txt; done` runs as
+written. A declared name is still filled in, so give a shell variable a name that is
+not a secret or a setup capture. Never put production credentials in a test
+environment.
 
 Repository-owned setup and teardown commands and their `cwd` may also expand
 `${NAME}` from the host environment. Those values are redacted from text output
@@ -122,8 +145,42 @@ not mask screenshots.
 | `electron` | `cdp` | `http://127.0.0.1:${CDP_PORT}` |
 | `ios`, `android` | `appId`, and optional `device` | `com.example.app` |
 | `api` | `url`, and the keys below | `http://127.0.0.1:8000` |
+| `cli` | `cli`, with the keys below | `{ cols: 120, rows: 40 }` |
 
 For mobile, the default device is the booted simulator or the running emulator.
+
+### Connect for a command line app
+
+With `platform: cli`, the explorer runs the app in a terminal from the root of `app.source`. It can run a command until it exits, or start a program that stays open, such as a full screen terminal UI, and drive it with keys. The terminal comes from the `pty` module of `python3`, so `python3` must be on the `PATH`.
+
+Set `connect.cli.command` to a program that stays open, such as `bun src/entry.ts`, and Bugpatrol starts it in the terminal before the explorer begins, with the app's environment. The explorer then starts on its screen, and it needs no rule in the app guide on how to start it. When `bugpatrol explore` ends because the explorer could not test the app at all, it exits with code 4.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `timeoutMs` | `60000` | The time limit of one command. A program that stays open runs until the explorer stops it; this is then the longest that one wait for its screen can take |
+| `cols` | `80` | The width of the terminal in characters |
+| `rows` | `24` | The height of the terminal in characters |
+| `env` | `{}` | Environment variables for the app, on top of the few that it gets from the host |
+
+The app does not get the environment of Bugpatrol. It gets only these variables of the host: `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, the `LC_*` variables, `TZ`, `TMPDIR`, `COLORTERM`, `NO_COLOR`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Its `HOME` is `{{PRIVATE_DIR}}`, an empty folder that Bugpatrol makes for the session and removes after it, and Bugpatrol sets `TERM` to `xterm-256color`. So a token in your shell, such as `AWS_SECRET_ACCESS_KEY`, never reaches the app, `printenv` in a command shows none of them, and a CLI that keeps its sign-in under `~` starts signed out. Give the app each other variable that it needs in `env`.
+
+`env` reaches each command and program that the explorer runs, and each replay of its routines. It never reaches Bugpatrol, the agent CLIs, `gh`, or the terminal helper, so they keep their logins. A value can use a declared secret or a setup capture as `${NAME}`, and `{{PRIVATE_DIR}}`:
+
+```yaml
+app:
+  platform: cli
+  connect:
+    cli:
+      cols: 120
+      rows: 40
+      env:
+        XDG_CONFIG_HOME: '{{PRIVATE_DIR}}/config'
+        API_TOKEN: '${API_TOKEN}'   # declared in app.secrets
+```
+
+A program does not create these folders itself in most cases, so create them first: start it with `mkdir -p "$XDG_CONFIG_HOME" && my-app`, or tell the explorer to in the app guide.
+
+The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you.
 
 ### Connect for an API
 

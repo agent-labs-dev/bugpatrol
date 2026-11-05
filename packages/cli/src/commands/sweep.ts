@@ -54,7 +54,7 @@ export async function runSweepCommand(
 ): Promise<ExitCodeValue> {
   const flags = parseSweepFlags(args);
   if (config.app.platform !== 'api') throw new ConfigError('bugpatrol sweep needs app.platform: api');
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const budget = { ...config.agents.sweep, ...(flags.maxRequests ? { maxRequests: flags.maxRequests } : {}) };
   if (flags.dryRun) {
     const vars = new Vars(config.app.secrets);
@@ -62,7 +62,7 @@ export async function runSweepCommand(
     const { connect } = config.app;
     const url = connect.url ?? config.run?.url;
     if (!url) throw new ConfigError('bugpatrol sweep needs app.connect.url');
-    const contract = await loadContract(root, { ...connect, url }, resolveConfig);
+    const contract = await loadContract(root, { ...connect, url }, resolveConfig, config.profile);
     const policy = requestPolicy(contract, { ...connect, url: resolveConfig(url) });
     // Setup did not run, so the headers keep their placeholders.
     const credentials = apiCredentials(connect, (value) => value);
@@ -83,10 +83,10 @@ export async function runSweepCommand(
   try {
     // The JSON on stdout must parse, so the setup progress goes to stderr.
     const progress = flags.json ? (line: string) => process.stderr.write(`${line}\n`) : log;
-    app = await startApp(config.app, { root, vars, emit: progress });
+    app = await startApp(config.app, { root, vars, emit: progress, profile: config.profile });
     driver = createDriver(
       config,
-      vars.resolve.bind(vars),
+      vars.resolveStrict.bind(vars),
       (value) => vars.redact(value) as string,
       resolve(root, config.app.source),
       app.contract,

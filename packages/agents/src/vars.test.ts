@@ -25,11 +25,29 @@ describe('Vars', () => {
     expect(() => vars.resolve('{{MISSING}}')).not.toThrow('top-secret');
   });
 
-  it('rejects undeclared environment variables in both agent placeholder forms', () => {
+  it('never gives agent input an undeclared environment variable', () => {
     const vars = new Vars([], { PRIVATE_KEY: 'synthetic-secret' });
-    for (const text of ['${PRIVATE_KEY}', '{{PRIVATE_KEY}}']) {
-      expect(() => vars.resolve(text)).toThrow('Unknown variable PRIVATE_KEY');
-    }
+    expect(() => vars.resolve('{{PRIVATE_KEY}}')).toThrow('Unknown variable PRIVATE_KEY');
+    expect(vars.resolve('${PRIVATE_KEY}')).toBe('${PRIVATE_KEY}');
+  });
+
+  it('leaves a shell ${name} in agent input to the shell, and still fills in a declared one', () => {
+    const vars = new Vars(['TOKEN'], { TOKEN: 'top-secret' });
+    const loop = 'for s in a b; do luajit tests/${s}_spec.lua; done';
+    expect(vars.resolve(loop)).toBe(loop);
+    expect(vars.resolve('echo ${HOME} ${TOKEN}')).toBe('echo ${HOME} top-secret');
+  });
+
+  it('fails an unknown ${name} in a driver config value instead of sending the literal text', () => {
+    const vars = new Vars([], { SHELL_VAR: 'host' });
+    expect(() => vars.resolveStrict('http://localhost:${PORT}')).toThrow('Unknown variable PORT');
+    expect(() => vars.resolveStrict('Bearer ${TOKEN}')).toThrow('Unknown variable TOKEN');
+    // A declared value and a shell variable that only turns up for trusted setup still resolve as before.
+    expect(vars.resolveStrict('port ${SHELL_VAR}')).toBe('port host');
+    const declared = new Vars(['TOKEN'], { TOKEN: 'top-secret' });
+    expect(declared.resolveStrict('Bearer ${TOKEN}')).toBe('Bearer top-secret');
+    // The shell-lenient resolver stays for commands that the shell expands.
+    expect(vars.resolve('echo ${PORT}')).toBe('echo ${PORT}');
   });
 
   it('keeps trusted setup expansion separate from agent authority', () => {
@@ -37,7 +55,7 @@ describe('Vars', () => {
     expect(vars.resolveConfig('${SETUP_TOKEN}')).toBe('setup-only');
     expect(vars.redact('setup-only')).toBe('{{SETUP_TOKEN}}');
     expect(vars.names()).toEqual([]);
-    expect(() => vars.resolve('${SETUP_TOKEN}')).toThrow('Unknown variable');
+    expect(vars.resolve('${SETUP_TOKEN}')).toBe('${SETUP_TOKEN}');
     expect(vars.resolveConfig('${SHELL_VAR}')).toBe('${SHELL_VAR}');
   });
 

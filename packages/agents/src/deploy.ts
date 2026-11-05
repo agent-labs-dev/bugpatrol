@@ -79,6 +79,6 @@ export async function probeDeploy(
   } catch (error) {
     deploy = { pending: (error as Error).message };
   }
-  await new Workspace(root).writeDeploy({ version: 1, ...deploy, checkedAt: new Date().toISOString() });
+  await new Workspace(root, config.profile).writeDeploy({ version: 1, ...deploy, checkedAt: new Date().toISOString() });
   return deploy;
 }

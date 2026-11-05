@@ -96,7 +96,8 @@ export function buildReport(input: ReportInput): string {
   parts.push('---', `<sub>Filed by Bugpatrol · ${issue.id}${fix ? ` · ${fix.id}` : ''}</sub>`);
   // First, so the cut below never drops it.
   const repro = kind === 'issue' ? issue.evidence.reproRoutineId : undefined;
-  if (repro) parts.unshift(`<!-- bugpatrol:routine ${repro} -->`);
+  const profile = issue.evidence.reproProfile;
+  if (repro) parts.unshift(`<!-- bugpatrol:routine ${profile ? `${profile}/` : ''}${repro} -->`);
   const text = input.redact(parts.join('\n\n'));
   return text.length <= 60_000
     ? text
@@ -104,9 +105,12 @@ export function buildReport(input: ReportInput): string {
 }
 
 /**
- * The repro routine id hidden in a Bugpatrol issue body, so a fresh clone can
- * map an issue number to its committed routine.
+ * The repro routine hidden in a Bugpatrol issue body, so a fresh clone can
+ * map an issue number to its committed routine: `<profile>/<id>` for a
+ * profile's routine, `<id>` for one of the default config.
  */
-export function reproRoutineId(body: string): string | undefined {
-  return /<!-- bugpatrol:routine ([A-Za-z0-9_][\w.-]*) -->/.exec(body)?.[1];
+export function reproRoutine(body: string): { id: string; profile?: string } | undefined {
+  const match = /<!-- bugpatrol:routine (?:([A-Za-z0-9_][\w.-]*)\/)?([A-Za-z0-9_][\w.-]*) -->/.exec(body);
+  if (!match) return undefined;
+  return { id: match[2]!, ...(match[1] && { profile: match[1] }) };
 }

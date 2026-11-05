@@ -30,7 +30,22 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   electron: `The app is a desktop app. It can have several windows; use \`switch_window\` to change window. ${BROWSER_NOTES}`,
   ios: 'The app runs on an iPhone simulator. `back` swipes from the left edge. `open` takes a deep link.',
   android: 'The app runs on an Android emulator. `back` presses the system back button. `open` takes a deep link.',
-  cli: 'The app is a command line tool. Use run_command to run one command in a terminal, from the root of the source; it returns the screen, the exit code, and the output. A command that waits for input gets it from `input`. There are no elements to tap.',
+  cli: `The app runs in a terminal, from the root of the source. There are no elements or refs: read the
+  screenshot and the screen text.
+  - A command that runs and exits: run_command. It returns the exit code and the output. A command that
+    waits for input gets it from \`input\`. {{NAME}} is a placeholder; \${name} is left to the shell.
+  - A program that stays open, such as a full screen terminal UI: start_session, then press keys, for
+    example ["j", "j", "enter"], and read the screen after each press. Use wait_for when the program is
+    slow to draw, resize to try a narrow terminal such as 60 by 20, and stop_session when you are done.
+    start_session again starts the program fresh.
+  - Learn the keys from the app guide and from what the program shows: a help screen (often ?), a key bar,
+    or a status line. Try each key that it shows, and escape to close what you opened.
+  - Each view, dialog or picker of a terminal UI is a screen: record_screen it. save_routine works the
+    same way, and its steps replay.
+  - Report what a person at the terminal would see as a bug: columns that do not line up, text cut off
+    mid-character instead of with an ellipsis, a wide character (CJK, emoji) that pushes other columns, a
+    layout that collides at a narrow size, a status colour that disagrees with its word, a blank screen for
+    an empty list, a header that scrolls away or jumps, and an action whose key is shown nowhere.`,
 };
 
 function lessonPart(lessons: Lesson[]): string {
@@ -74,12 +89,16 @@ const SCREEN_TOOLS = `- Each action tool returns a screenshot and a list of elem
   the latest list. Always act on a ref from the latest list.
 - Do one action per call. After each action, read the new screenshot before the next action.`;
 
+const TERMINAL_TOOLS = `- Each action tool returns a screenshot of the terminal and its text. There are no refs.
+- After each action, read the new screen before the next action. Send several keys in one press only
+  when you know what each one does.`;
+
 const API_TOOLS = `- Each request returns the HTTP exchange as text and the expected contract of its endpoint.
 - Send one request per call. Read each exchange before the next request.`;
 
 function explorerCommon(platform: Platform, instructions: string, lessons: Lesson[] = []): string {
   return `HOW THE TOOLS WORK
-${platform === 'api' ? API_TOOLS : SCREEN_TOOLS}
+${platform === 'api' ? API_TOOLS : platform === 'cli' ? TERMINAL_TOOLS : SCREEN_TOOLS}
 - Secrets are placeholders such as {{E2E_LOGIN_LINK}}. Pass the placeholder text exactly. Never guess or
   type a real password, token, or code.
 - ${PLATFORM_NOTES[platform]}

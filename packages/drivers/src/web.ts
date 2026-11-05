@@ -329,7 +329,8 @@ export class WebDriver implements Driver {
 
   async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'request') return { ok: false, error: 'HTTP requests require the API driver' };
-    if (action.kind === 'run') return { ok: false, error: 'Commands require the CLI driver' };
+    if (action.kind === 'run' || action.kind === 'session')
+      return { ok: false, error: 'Commands require the CLI driver' };
     try {
       const page = this.activePage();
       let result: TargetResult = { degraded: false };

@@ -475,5 +475,10 @@ export function toAction({ assert: _assert, ...step }: RoutineStep, session: Age
       command: session.vars.resolve(step.command),
       ...(step.input === undefined ? {} : { input: session.vars.resolve(step.input) }),
     };
+  if (step.kind === 'session') {
+    if (step.op === 'start') return { ...step, command: session.vars.resolve(step.command) };
+    if (step.op === 'keys') return { ...step, keys: step.keys.map((key) => session.vars.resolve(key)) };
+    if (step.op === 'wait' && step.text !== undefined) return { ...step, text: session.vars.resolve(step.text) };
+  }
   return step;
 }

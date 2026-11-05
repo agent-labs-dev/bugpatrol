@@ -270,7 +270,16 @@ export async function runFixer(
       )
       .map((fix) => [fix.issueId, fix]),
   );
+  // `runs/issues` is shared by every profile, but a fix edits this profile's
+  // app: an issue another profile filed would be retested against the wrong
+  // config, so only the active profile's issues are eligible.
+  const owned = new Set(
+    all
+      .filter((issue) => (issue.evidence?.reproProfile ?? undefined) === session.workspace.profile)
+      .map((issue) => issue.id),
+  );
   const eligible = all.filter((issue) => {
+    if (!owned.has(issue.id)) return false;
     if (issue.status === 'dismissed') return false;
     if (opts.issueIds && !opts.issueIds.includes(issue.id)) return false;
     if (
@@ -638,5 +647,13 @@ export function stepWords(step: RoutineStep): string {
   if (step.kind === 'request') return `${step.method} ${step.url}`;
   if (step.kind === 'run')
     return `Run \`${step.command}\`${step.input ? ` with the input ${JSON.stringify(step.input)}` : ''}`;
+  if (step.kind === 'session') {
+    if (step.op === 'start') return `Start \`${step.command}\` in a terminal`;
+    if (step.op === 'keys') return `Press ${step.keys.join(' ')}`;
+    if (step.op === 'wait')
+      return step.text === undefined ? 'Wait until the screen is still' : `Wait for ${JSON.stringify(step.text)}`;
+    if (step.op === 'resize') return `Resize the terminal to ${step.cols} by ${step.rows}`;
+    return 'Stop the program';
+  }
   return 'Go back';
 }

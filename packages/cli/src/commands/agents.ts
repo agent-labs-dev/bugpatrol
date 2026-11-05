@@ -4,6 +4,7 @@ import {
   AgentSession,
   applyRetest,
   attachExternalFix,
+  bugMisses,
   createRuntime,
   type ExternalFixTarget,
   pendingCandidates,
@@ -20,6 +21,7 @@ import {
   syncGitHub,
   Vars,
   Workspace,
+  wasBlocked,
   watchCi,
   withSessionLogs,
 } from '@bugpatrol/agents';
@@ -55,7 +57,7 @@ export function parseAgentFlags(command: string, args: string[]): AgentFlags {
   const prNumber = (value: string | undefined) => Number(/^(?:.*\/pull\/)?(\d+)\/?$/.exec(value ?? '')?.[1]);
   if (command === 'replay') {
     if (args.length !== 1 || args[0]?.startsWith('-')) {
-      throw new ConfigError('replay needs one routine id');
+      throw new ConfigError('replay takes one routine id, and no flags');
     }
     return { id: args[0]! };
   }
@@ -190,7 +192,7 @@ export async function runAgentCommand(
 ): Promise<void> {
   const flags = parseAgentFlags(command, args);
   preflight(command, config);
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   if (command === 'patrol') {
     const state = flags.state as 'local' | 'branch' | undefined;
     const { problems } = await runPatrol({
@@ -308,7 +310,13 @@ export async function runAgentCommand(
     // the lesson pass after an explore is also an explorer session, with no
     // candidates. The judge skips the candidates that it already decided.
     const recent = (await workspace.listSessions())
-      .filter((item) => item.role === 'explorer' && item.candidates > 0 && item.status !== 'running')
+      .filter(
+        (item) =>
+          item.role === 'explorer' &&
+          item.profile === workspace.profile &&
+          item.candidates > 0 &&
+          item.status !== 'running',
+      )
       .slice(0, 5)
       .map((item) => item.id);
     const ids = (flags.session as string[] | undefined) ?? recent;
@@ -384,10 +392,10 @@ export async function runAgentCommand(
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
-    app = await startApp(config.app, { root, vars, emit: log });
+    app = await startApp(config.app, { root, vars, emit: log, profile: config.profile });
     driver = createDriver(
       config,
-      vars.resolve.bind(vars),
+      vars.resolveStrict.bind(vars),
       (value) => vars.redact(value) as string,
       resolve(root, config.app.source),
       app.contract,
@@ -405,6 +413,14 @@ export async function runAgentCommand(
       const record = await workspace.startSession('explorer');
       const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
       activeSession = session;
+      // A web observation drains the errors it reports, so the bug check reads every one seen during the replay.
+      const errors: string[] = [];
+      const observe = driver.observe.bind(driver);
+      driver.observe = async () => {
+        const observation = await observe();
+        errors.push(...observation.consoleErrors, ...(observation.networkErrors ?? []));
+        return observation;
+      };
       const replay = await replayRoutine(session, String(flags.id));
       await workspace.endSession(record.id, {
         status: replay.ok ? 'finished' : 'failed',
@@ -412,12 +428,22 @@ export async function runAgentCommand(
       });
       if (!replay.ok) throw new InfrastructureError(`Replay failed: ${replay.error}`);
       log(`Replayed ${flags.id}${replay.degraded ? ' (degraded)' : ''}`);
-      return;
+      // A repro routine holds the check of its bug, which holds at its end.
+      const check = (await workspace.readRoutine(String(flags.id)))?.bug;
+      if (!check) return;
+      await driver.settle();
+      const screen = await driver.observe();
+      const misses = bugMisses(check, screen, errors);
+      if (misses.length) {
+        log(`The bug no longer shows: ${misses.join(', and ')}`);
+        return;
+      }
+      throw new BugpatrolError(`The bug of ${flags.id} still shows`, ExitCode.Regression);
     }
     const record = await workspace.startSession('explorer');
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
     activeSession = session;
-    await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>
+    const outcome = await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>
       runExplorer(session, createRuntime(config.agents.explorer.use), {
         goal: flags.goal as string | undefined,
         maxSteps: flags.steps as number | undefined,
@@ -425,6 +451,8 @@ export async function runAgentCommand(
     );
     // The session-end event already printed the summary.
     await logUsage(workspace, record.id, log);
+    // A session that could not reach the app tested nothing, which a script must not read as a pass.
+    if (wasBlocked(outcome)) throw new BugpatrolError('The explorer could not test the app', ExitCode.Infrastructure);
     log('Next: run `bugpatrol judge` to file the real bugs as issues, or open `bugpatrol dashboard`.');
   } finally {
     try {

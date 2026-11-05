@@ -107,7 +107,7 @@ export async function watchCi(
     deps.onLog?.(ready.reason);
     return { problems };
   }
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const fixes = (await workspace.listFixes()).filter(
     (fix) =>
       !fix.external &&
@@ -215,7 +215,7 @@ async function fixCi(
   log: string,
   deps: CiDeps,
 ): Promise<boolean> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const record = await workspace.startSession('fixer');
   const session = new AgentSession(
     root,

@@ -259,10 +259,21 @@ export const appSchema = z
         allowedOrigins: z.array(z.string()).default([]),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
-        /** CLI: each command runs in a terminal of 80 by 24 from the app source, and is stopped after this long. */
+        /**
+         * CLI: each command runs in a terminal of `cols` by `rows` from the
+         * app source, and is stopped after `timeoutMs`; a session waits at
+         * most that long. `env` is set for the app's processes only, never
+         * for Bugpatrol or the agent CLIs. `command`, when set, is a
+         * program that stays open, such as a full screen terminal UI, which
+         * the driver starts on connect, so the explorer begins in it.
+         */
         cli: z
           .object({
+            command: z.string().min(1).optional(),
             timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+            cols: z.number().int().min(20).max(500).default(80),
+            rows: z.number().int().min(5).max(200).default(24),
+            env: z.record(z.string()).default({}),
           })
           .default({}),
         /** Mobile: the bundle id or package name. */
@@ -637,7 +648,10 @@ export const bugpatrolConfigSchema = z
     }
   });
 
-export type BugpatrolConfig = z.infer<typeof bugpatrolConfigSchema>;
+export type BugpatrolConfig = z.infer<typeof bugpatrolConfigSchema> & {
+  /** Not read from YAML: loadConfig sets it from the `--config` file name (profileOf). */
+  profile?: string;
+};
 export type AppConfig = z.infer<typeof appSchema>;
 export type AppCommand = z.infer<typeof appCommandSchema>;
 export type AgentsConfig = z.infer<typeof agentsSchema>;

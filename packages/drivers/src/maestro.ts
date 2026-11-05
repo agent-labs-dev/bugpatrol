@@ -542,7 +542,8 @@ export class MaestroDriver implements Driver {
 
   async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'request') return { ok: false, error: 'HTTP requests require the API driver' };
-    if (action.kind === 'run') return { ok: false, error: 'Commands require the CLI driver' };
+    if (action.kind === 'run' || action.kind === 'session')
+      return { ok: false, error: 'Commands require the CLI driver' };
     if (action.kind === 'upload') return { ok: false, error: 'Uploads are supported on web and Electron only' };
     try {
       let target: Target = {};

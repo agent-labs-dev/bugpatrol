@@ -128,7 +128,7 @@ export async function syncGitHub(
     deps.onLog?.(ready.reason);
     return { changed: [] };
   }
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const { repo } = await resolveRepo(gh, config, resolve(root, config.app.source));
   // The PRs and issues from before the rename to Bugpatrol have the old label.
   const labels = [...new Set([config.agents.github.labels[0]!, LEGACY_LABEL])];

@@ -78,6 +78,29 @@ describe('MCP and CLI runtime', () => {
     }
   });
 
+  it.skipIf(!canListen)('still takes a bug report once the steps are used, and counts no step for it', async () => {
+    const report: Tool = { ...echo, name: 'report_bug' };
+    const steps: boolean[] = [];
+    const server = await serveTools([echo, report, finish], {
+      maxCalls: 1,
+      onCall: (_name, _input, _result, _ms, step) => steps.push(step),
+    });
+    try {
+      const client = new Client({ name: 'test', version: '1' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+      const text = async (name: string) =>
+        ((await client.callTool({ name, arguments: { value: 'hi' } })).content as { text: string }[])[0]?.text;
+      expect(await text('echo')).toBe('hi');
+      expect(await text('echo')).toContain('Report each bug that you found');
+      expect(await text('report_bug')).toBe('hi');
+      expect(await text('finish')).toBe('all done');
+      expect(steps).toEqual([true, false, false, false]);
+      await client.close();
+    } finally {
+      await server.close();
+    }
+  });
+
   it.skipIf(!canListen)('runs a CLI that calls echo and finish over MCP', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-cli-test-'));
     const script = join(root, 'client.mjs');

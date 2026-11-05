@@ -112,7 +112,7 @@ export async function retestFix(
   deps: Deps,
   options: { build?: 'main' } = {},
 ): Promise<Retest> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const targets = await loadRetestTargets(workspace, issue);
   const retest: Retest = {
     attempt,
@@ -160,10 +160,11 @@ export async function retestFix(
       vars,
       emit: deps.onLog,
       source: options.build === 'main' ? undefined : fix.worktree,
+      profile: config.profile,
     });
     driver = (deps.createDriver ?? makeDriver)(
       config,
-      vars.resolve.bind(vars),
+      vars.resolveStrict.bind(vars),
       (value) => vars.redact(value) as string,
       options.build === 'main' ? resolve(root, config.app.source) : fix.worktree,
       app.contract,
@@ -398,7 +399,7 @@ async function findMerge(fix: FixProposal, branch: string): Promise<Merge | unde
  */
 async function deployed(root: string, config: BugpatrolConfig, fix: FixProposal): Promise<boolean> {
   if (!config.app.connect.version) return true;
-  const commit = (await new Workspace(root).readDeploy())?.commit;
+  const commit = (await new Workspace(root, config.profile).readDeploy())?.commit;
   if (!commit || !fix.mergeCommit) return false;
   // The deployed commit can be newer than the last fetch.
   await exec('git', ['-C', fix.repo, 'fetch', '-q', 'origin']).catch(() => {});
@@ -416,7 +417,7 @@ export async function recheckMerged(
   config: BugpatrolConfig,
   deps: Deps = {},
 ): Promise<{ closed: string[] }> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const closed: string[] = [];
   if (!config.agents.explorer.enabled || !config.agents.judge.enabled) return { closed };
   const external = externalBackend(config.app);
@@ -425,6 +426,8 @@ export async function recheckMerged(
     if (!fix.pr && !fix.branch) continue;
     let issue = await workspace.readIssue(fix.issueId);
     if (!issue || !['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy'].includes(issue.status)) continue;
+    // Fixes share one folder across profiles; only the profile that reproduced the issue can recheck it.
+    if ((issue.evidence?.reproProfile ?? undefined) !== config.profile) continue;
     // The first verdict on the main build is final. A waiting issue has no verdict that counts.
     if (
       issue.status !== 'waits-for-deploy' &&
@@ -498,7 +501,7 @@ export async function runFixCycle(
   config: BugpatrolConfig,
   deps: Deps & { issueIds?: string[] } = {},
 ): Promise<FixProposal[]> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const changed = new Map<string, FixProposal>();
   // The first pass takes new issues; later passes only refix what the judge
   // sent back, so a retry loop never grows into a queue of new fixes.
@@ -535,6 +538,8 @@ export async function runFixCycle(
       if (deps.isInterrupted?.()) break;
       const issue = await workspace.readIssue(fix.issueId);
       if (!issue) continue;
+      // `runs/fixes` is shared by every profile; only retest the active one's issues.
+      if (!deps.issueIds && (issue.evidence?.reproProfile ?? undefined) !== config.profile) continue;
       const result = await retestFix(root, config, issue, fix, (fix.retests?.length ?? 0) + 1, deps);
       applyRetest(config, fix, result);
       if (fix.status === 'retesting' && result.outcome === 'not-fixed') retryIds.push(fix.issueId);

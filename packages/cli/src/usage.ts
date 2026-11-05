@@ -4,6 +4,7 @@ Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
   bugpatrol doctor                        verify env: pinned image, fonts, browser, network, disk
+  bugpatrol adopt --config <file>         move the shared app map and routines into that config's folder
 
 Recon
   bugpatrol recon [--review] [--max-screens N] [--budget-usd X]
@@ -125,8 +126,14 @@ export const COMMAND_HELP: Record<string, string> = {
   --claims        test what the pull request says it does, also when agents.review.claims is off
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
 `,
+  adopt: `bugpatrol adopt --config .bugpatrol/<name>.yml
+  Move .bugpatrol/appmap.json, endpoints.yml and the routines in .bugpatrol/routines/ into .bugpatrol/<name>/.
+  Use it once, for a config that kept those files in .bugpatrol/ before profiles existed.
+  Selecting a config never moves them, since no file says which config they belong to.
+  A file that .bugpatrol/<name>/ already holds stays, and its shared copy too.`,
   promote: `bugpatrol promote <pr> <claim>...
   Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
+  With --config .bugpatrol/<name>.yml, the routines go to .bugpatrol/<name>/routines/.
   Commit the routines, and the patrol replays them from then on. A review never does this by itself.
   It refuses a pull request that is not merged, a review of another commit than the one that merged,
   and a claim that is not proven or has no claim routine.
@@ -159,7 +166,8 @@ export const COMMAND_HELP: Record<string, string> = {
   endpoints: `bugpatrol endpoints [--spec URL|file] [--json]
   Print the endpoints of the api contract, and each operation that Bugpatrol skips, with the reason.
   With no --spec, read app.connect.spec, or .bugpatrol/endpoints.yml when there is no spec,
-  and write the endpoints to .bugpatrol/appmap.json. Bugpatrol never uses the servers value of a spec.
+  and write the endpoints to .bugpatrol/appmap.json. With --config .bugpatrol/<name>.yml, both files
+  are in .bugpatrol/<name>/. Bugpatrol never uses the servers value of a spec.
   --spec URL|file   read this spec, and write nothing
   --json            print JSON
 `,

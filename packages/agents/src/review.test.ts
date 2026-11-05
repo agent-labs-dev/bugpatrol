@@ -1820,8 +1820,12 @@ function saveApp(fixed: boolean) {
 }
 
 /** Writes the committed routines of issue #12, as a fresh clone has them: no run directory. */
-async function commitRepro(root: string, bug: Routine['bug'] | null = { shows: 'Save failed', lacks: 'Saved' }) {
-  const workspace = new Workspace(root);
+async function commitRepro(
+  root: string,
+  bug: Routine['bug'] | null = { shows: 'Save failed', lacks: 'Saved' },
+  profile?: string,
+) {
+  const workspace = new Workspace(root, profile);
   const at = '2026-10-01T00:00:00.000Z';
   await workspace.saveRoutine({
     version: 1,
@@ -1857,13 +1861,20 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
     f: Awaited<ReturnType<typeof fixture>>,
     fixed: { head: boolean; base: boolean } | ((build: 'head' | 'base', index: number) => boolean),
     review: Record<string, unknown> = {},
+    profiles: { issue?: string; review?: string } = {},
   ) => {
     const app = builds(f.root, (build, index) =>
       saveApp(typeof fixed === 'function' ? fixed(build, index) : fixed[build]),
     );
-    const github = fakeGh({ body: claimsBody('Saving works again.'), issues: [reproIssue] });
+    const issue = profiles.issue
+      ? { ...reproIssue, body: reproIssue.body.replace('routine ', `routine ${profiles.issue}/`) }
+      : reproIssue;
+    const github = fakeGh({ body: claimsBody('Saving works again.'), issues: [issue] });
     const agents = claimAgents({ explore: {}, verdicts: {} });
-    const config = claimConfig(app.prepare, { enabled: true, repo: 'o/r' }, review);
+    const config = {
+      ...claimConfig(app.prepare, { enabled: true, repo: 'o/r' }, review),
+      ...(profiles.review && { profile: profiles.review }),
+    };
     const result = await reviewPullRequest(f.root, config, 7, {
       gh: github.gh,
       createRuntime: agents.createRuntime,
@@ -1898,6 +1909,40 @@ describe('issue repro claim', { timeout: 30_000 }, () => {
       ]);
       expect(review.claims![1]!.steps).toHaveLength(2);
       expect(app.drivers.base[0]!.current).toBe('saved');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('replays the repro routine of a profile from its profile folder', async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root, undefined, 'cli');
+      const { review } = await reviewRepro(f, { head: true, base: false }, {}, { issue: 'cli', review: 'cli' });
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'proven',
+        routine: '.bugpatrol/cli/routines/repro-a1b2c3.json',
+      });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the repro routine of another profile untested, since this config's driver cannot replay it", async () => {
+    const f = await fixture();
+    try {
+      await commitRepro(f.root, undefined, 'cli');
+      await commitRepro(f.root);
+      const { review, app } = await reviewRepro(f, { head: true, base: false }, {}, { issue: 'cli' });
+      expect(review.claims![1]).toMatchObject({
+        verdict: 'untested',
+        claim: {
+          testable: false,
+          untestable:
+            'The repro routine repro-a1b2c3 of issue #12 belongs to the cli profile. Review with that config to replay it.',
+        },
+      });
+      expect(app.drivers.base).toHaveLength(0);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

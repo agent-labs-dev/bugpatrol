@@ -76,6 +76,19 @@ export const SAMPLE_FILES = ['image', 'pdf', 'text'] as const;
 export type SampleFile = (typeof SAMPLE_FILES)[number];
 
 /**
+ * A step of a terminal session: `start` a program, send it `keys` (named
+ * keys such as `enter` and `ctrl+p`, or text), `wait` until `text` is on its
+ * screen (or, with no text, until the screen is quiet), `resize` its terminal,
+ * or `stop` it. Starting a session stops the one before.
+ */
+export type SessionOp =
+  | { op: 'start'; command: string }
+  | { op: 'keys'; keys: string[] }
+  | { op: 'wait'; text?: string; timeoutMs: number }
+  | { op: 'resize'; cols: number; rows: number }
+  | { op: 'stop' };
+
+/**
  * One replayable action. `value` may hold `{{NAME}}` placeholders; they are
  * resolved when the step runs and never stored resolved.
  */
@@ -104,6 +117,8 @@ export type RoutineStep = (
     }
   /** CLI: runs a command in a terminal until it exits. `input` is typed into it at the start. */
   | { kind: 'run'; command: string; input?: string }
+  /** CLI: one step of a program that stays open across steps, such as a full screen terminal UI. */
+  | ({ kind: 'session' } & SessionOp)
 ) & {
   at?: string;
   /** Exact checks on the result of this step. A routine replay fails at the first step whose checks fail. */
@@ -284,6 +299,8 @@ export type IssueEvidence = {
   steps?: RoutineStep[];
   /** The committed routine that replays `routineId` and then `steps`. Set when the issue is filed. */
   reproRoutineId?: string;
+  /** The profile whose routines folder holds `reproRoutineId` (profileOf). Absent for the default config. */
+  reproProfile?: string;
   /** How a replay of the flow tells that the bug shows. */
   bug?: BugCheck;
   console?: string[];
@@ -751,6 +768,8 @@ export type SessionSummary = {
   version: 1;
   id: string;
   role: AgentRole;
+  /** The config profile the session ran under (see profileOf). Absent for the default config. */
+  profile?: string;
   /** The process that runs the session, so a crash does not look like a session in progress. */
   pid?: number;
   startedAt: string;

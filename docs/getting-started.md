@@ -98,6 +98,7 @@ npx bugpatrol init
   instructions.md    # the app guide for the explorer: commit it
   appmap.json        # the screens the explorer found: commit it
   routines/          # the routines Bugpatrol replays with no model: commit them
+  <profile>/         # appmap.json and routines/ of another config, such as cli.yml: commit it
   runs/              # sessions, issues, fixes, and screenshots: init adds it to .gitignore
 ```
 

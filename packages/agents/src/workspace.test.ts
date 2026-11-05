@@ -7,6 +7,33 @@ import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
 describe('Workspace', () => {
+  it("keeps a profile's app map and routines apart from the default config's, and shares runs/", async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
+    try {
+      const cli = new Workspace(root, 'cli');
+      const main = new Workspace(root);
+      const at = '2026-10-01T00:00:00.000Z';
+      await cli.upsertScreen({ id: 'menu', platform: 'cli' });
+      await cli.saveRoutine({
+        version: 1,
+        id: 'open',
+        description: 'Opens',
+        platform: 'cli',
+        steps: [],
+        createdAt: at,
+        updatedAt: at,
+      });
+      expect(JSON.parse(await readFile(paths.appMap(root, 'cli'), 'utf8')).screens[0].id).toBe('menu');
+      expect(await readdir(paths.routines(root, 'cli'))).toEqual(['open.json']);
+      expect(await main.readAppMap()).toBeUndefined();
+      expect(await main.listRoutines()).toEqual([]);
+      await cli.upsertLessons([{ role: 'explorer', text: 'Press q to quit.', source: 'agent' }]);
+      expect((await main.readMemory()).lessons).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('merges screens and persists sessions with relative screenshots and append-only events', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
     const workspace = new Workspace(root);

@@ -23,7 +23,7 @@ import { captureParts } from '../evidence.js';
 import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, confirmFailure, replaySteps } from '../replay.js';
-import { reproRoutineId } from '../report.js';
+import { reproRoutine } from '../report.js';
 import { short, stoppedAt } from '../review-comment.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
@@ -99,9 +99,12 @@ export async function reproClaims(
   const claims: Claim[] = [];
   const flows = new Map<string, ClaimFlow>();
   for (const issue of ctx.pr.issues) {
-    const id = reproRoutineId(issue.body);
-    if (!id) continue;
-    const routine = await ctx.workspace.readRoutine(id);
+    const repro = reproRoutine(issue.body);
+    if (!repro) continue;
+    const { id } = repro;
+    // A routine of another profile drives another app config, so this review cannot replay it.
+    const other = (repro.profile ?? '') !== (ctx.workspace.profile ?? '');
+    const routine = other ? undefined : await ctx.workspace.readRoutine(id);
     const claim: Claim = {
       id: `claim-${first + claims.length}`,
       text: `Fixes #${issue.number}: ${issue.title}`,
@@ -110,6 +113,12 @@ export async function reproClaims(
       testable: Boolean(routine?.bug),
     };
     claims.push(claim);
+    if (other) {
+      claim.untestable = `The repro routine ${id} of issue #${issue.number} belongs to ${
+        repro.profile ? `the ${repro.profile} profile` : 'the default config'
+      }. Review with that config to replay it.`;
+      continue;
+    }
     if (!routine) {
       claim.untestable = `Issue #${issue.number} names the repro routine ${id}, and this checkout has no such routine.`;
       continue;
@@ -125,7 +134,7 @@ export async function reproClaims(
       did: `Replayed the repro routine of #${issue.number}, and checked whether the last screen ${checkWords(routine.bug)}.`,
       routine: { ...routine, steps, requires: undefined },
       check: routine.bug,
-      path: relative(ctx.root, paths.routine(ctx.root, id)),
+      path: relative(ctx.root, paths.routine(ctx.root, id, ctx.workspace.profile)),
     });
   }
   return { claims, flows };

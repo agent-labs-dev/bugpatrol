@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { cleanWorktrees, syncGitHub } from '@bugpatrol/agents';
-import { BugpatrolError, ExitCode, findProjectRoot, loadConfig, moveRoutines } from '@bugpatrol/core';
+import {
+  adoptHint,
+  adoptSharedFiles,
+  BugpatrolError,
+  ExitCode,
+  findProjectRoot,
+  loadConfig,
+  moveRoutines,
+  profileOf,
+} from '@bugpatrol/core';
 import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
@@ -44,6 +53,9 @@ try {
   }
   const moved = moveRoutines(root);
   if (moved) process.stderr.write(`${moved}\n`);
+  // Nothing says which config owns the shared files, so selecting one only points at `adopt`.
+  const hint = selected.configFile && adoptHint(root, profileOf(root, selected.configFile), selected.configFile);
+  if (hint && command !== 'adopt') process.stderr.write(`${hint}\n`);
   switch (command) {
     case '--version':
     case '-v':
@@ -121,6 +133,13 @@ try {
 
     case 'sweep': {
       process.exit(await runSweepCommand(args, root, readConfig(), (line) => process.stdout.write(`${line}\n`)));
+      break;
+    }
+
+    case 'adopt': {
+      const { profile } = readConfig();
+      if (args.length || !profile) throw new Error('Use bugpatrol adopt --config .bugpatrol/<name>.yml');
+      process.stdout.write(`${adoptSharedFiles(root, profile)}\n`);
       break;
     }
 
