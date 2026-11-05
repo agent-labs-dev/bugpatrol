@@ -324,7 +324,7 @@ const findingFingerprint = (finding: SweepFinding) =>
  * case that the explorer gave its last request. A request without one, for
  * example a step of a replayed routine, takes the case from its credentials.
  * A report that no contract check confirms is a bug that only the judge sees,
- * `judge:<rule>`.
+ * `judge:<rule>`, keyed on the shape of its request too.
  */
 export function reportFingerprint(session: AgentSession, named?: SweepCaseId, rule?: string): string | undefined {
   const { driver, lastObservation: screen } = session;
@@ -342,7 +342,19 @@ export function reportFingerprint(session: AgentSession, named?: SweepCaseId, ru
     endpoint: endpoint?.key ?? (`${request.method} ${request.path.split('?')[0]}` as EndpointKey),
     case: named ?? (as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok'),
     assertionId: failed ? assertionId(failed.assertion) : `judge:${rule ?? 'explorer'}`,
+    ...(failed ? {} : { shape: requestShape(request) }),
   });
+}
+
+/** The query parameter names and top-level JSON body keys of a request, sorted, without values. */
+function requestShape(request: HttpExchange['request']): string {
+  const query = [...new URLSearchParams(request.path.split('?')[1] ?? '').keys()];
+  let body: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(request.body ?? '');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = Object.keys(parsed);
+  } catch {}
+  return [...[...new Set(query)].sort().map((name) => `?${name}`), ...body.sort().map((key) => `.${key}`)].join(',');
 }
 
 /**

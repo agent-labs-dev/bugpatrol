@@ -149,4 +149,47 @@ describe('api evidence', () => {
     const key = { endpoint: 'GET /health' as EndpointKey, case: 'ok' as const, assertionId: 'judge:explorer' };
     expect(prints).toEqual([fingerprint(key), fingerprint(key)]);
   });
+
+  it('keys two judge-only reports on one endpoint apart when their requests differ in shape', async () => {
+    const { session, call, workspace } = await explorer();
+    for (const url of ['/health', '/health?verbose=1', '/health?verbose=2']) {
+      await call('request', { method: 'GET', url });
+      await call('report_bug', {
+        title: `Report on ${url}`,
+        what_is_wrong: 'The body is wrong.',
+        expected: 'A right body.',
+        severity: 'minor',
+      });
+    }
+    const prints = (await workspace.readCandidates(session.sessionId)).map((candidate) => candidate.fingerprint);
+    // A query value is data, so the same parameters are the same request.
+    expect(prints[1]).toBe(prints[2]);
+    expect(prints[0]).not.toBe(prints[1]);
+  });
+
+  it('files every pending candidate of a fingerprint into the issue, and says so', async () => {
+    const { session, call, workspace } = await explorer();
+    await call('request', { method: 'GET', url: '/health' });
+    for (const title of ['Health reports the database down', 'GET /health hides a db outage'])
+      await call('report_bug', {
+        title,
+        what_is_wrong: 'GET /health says db is down with status 200.',
+        expected: 'A 503, or db up.',
+        severity: 'major',
+      });
+    const [first, second] = await workspace.readCandidates(session.sessionId);
+    const judge = new AgentSession(root, session.config, new Vars(), 'judge-session', 'judge');
+    const file = judgeTools(judge, [session.sessionId], 'test').find((tool) => tool.name === 'file_issue')!;
+    const filed = await file.run({
+      candidate_ids: [first!.id],
+      title: 'Health hides a database outage',
+      body: 'GET /health says db is down with status 200.',
+      severity: 'major',
+      reason: 'A 200 for a failing dependency.',
+    });
+    const text = filed.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+    expect(text).toContain(second!.id);
+    const [issue] = await workspace.listIssues();
+    expect(issue?.candidateIds).toEqual([first!.id, second!.id]);
+  });
 });
