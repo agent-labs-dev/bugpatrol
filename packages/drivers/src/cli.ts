@@ -195,6 +195,8 @@ type Session = {
   /** The visible screen of the program. */
   screen: Terminal;
   running: boolean;
+  /** Set once the session gave the recording back its own terminal size. */
+  left?: boolean;
   exitCode?: number;
   /** Resolves once the program and its helper exited. */
   closed: Promise<void>;
@@ -498,14 +500,20 @@ export class CliDriver implements Driver {
     this.view = 'session';
   }
 
-  /** Kills the program of the session and every process it started. */
+  /**
+   * Kills the program of the session and every process it started, and gives
+   * the recording back the terminal's own size, whether or not it still ran.
+   */
   private async stopSession(): Promise<void> {
     const session = this.session;
-    if (!session?.running) return;
-    await this.kill(session.helper);
-    await session.closed;
-    // A program that was killed never left its alternate screen.
-    this.cast.push('\u001b[?1049l\u001b[?25h');
+    if (!session || session.left) return;
+    session.left = true;
+    if (session.running) {
+      await this.kill(session.helper);
+      await session.closed;
+      // A program that was killed never left its alternate screen.
+      this.cast.push('\u001b[?1049l\u001b[?25h');
+    }
     if (session.screen.cols !== this.cols || session.screen.rows !== this.rows) this.cast.resize(this.cols, this.rows);
   }
 
