@@ -153,7 +153,7 @@ describe('runSweep', () => {
     fixture.failOnce('GET', '/health');
     const { result, candidates } = await run();
     const flaky = result.findings.find((finding) => finding.key === 'GET /health ok');
-    expect(flaky).toMatchObject({ repeats: false, failed: ['contract:status', 'contract:no-5xx'] });
+    expect(flaky).toMatchObject({ repeats: false, failed: ['contract:status', 'contract:no-5xx', 'status'] });
     const candidate = candidates.find((item) => item.summary.startsWith('GET /health ok'));
     expect(candidate).toMatchObject({ blocking: false, route: { to: 'judge' } });
     expect(candidate?.route?.reason).toContain('does not repeat');
@@ -385,4 +385,122 @@ describe('runSweep', () => {
       { key: 'DELETE /admin/things/{thing_id} repeat-delete', reason: 'app.connect.deny has /admin/**' },
     ]);
   });
+
+  it('judges each case against its own expectation, and blocks on an unmet prerequisite', async () => {
+    const server = createServer((request, response) => {
+      const send = (status: number, body: unknown) =>
+        response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+      const path = request.url ?? '';
+      if (path === '/auth/start') return send(503, { error: 'oauth is not configured' });
+      if (!request.headers.authorization) return send(401, { error: 'no credentials' });
+      // A session-only route: the API key of the sweep is never enough.
+      if (path === '/plans' || path.startsWith('/invitations/')) return send(401, { error: 'session required' });
+      if (path === '/webhooks' && request.method === 'POST') return send(422, { error: 'bad url' });
+      if (path === '/vaults') return send(200, []);
+      send(404, { error: 'not found' });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    cleanups.push(() => new Promise((done) => server.close(() => done())));
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-sweep-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const error = { 'application/json': { schema: { type: 'object', properties: { error: { type: 'string' } } } } };
+    const fail = (description: string) => ({ description, content: error });
+    const json = (schema: unknown) => ({ description: 'ok', content: { 'application/json': { schema } } });
+    const id = (name: string) => [{ name, in: 'path', required: true, schema: { type: 'string' } }];
+    const doc = {
+      openapi: '3.1.0',
+      security: [{ key: [] }],
+      paths: {
+        '/plans': { get: { responses: { '200': json({}), '401': fail('no session') } } },
+        '/webhooks': {
+          post: {
+            requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+            responses: { '201': json({}), '401': fail('no key'), '422': fail('bad body') },
+          },
+        },
+        '/invitations/{token}/accept': {
+          post: {
+            parameters: id('token'),
+            responses: { '200': json({}), '401': fail('no session'), '404': fail('gone') },
+          },
+        },
+        '/auth/start': {
+          get: { security: [], responses: { '302': { description: 'redirect' }, '503': fail('not configured') } },
+        },
+        '/vaults': {
+          get: {
+            responses: { '200': json({ type: 'array', items: { properties: { id: {} } } }), '401': fail('no key') },
+          },
+        },
+        '/vaults/{id}': {
+          get: { parameters: id('id'), responses: { '200': json({}), '401': fail('no key'), '404': fail('gone') } },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const config = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        connect: {
+          url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+          perMinute: 60_000,
+          headers: { Authorization: 'Bearer key' },
+        },
+      },
+    });
+    const contract = buildContract(doc, config.app.connect);
+    const driver = createDriver(config, (value) => value, undefined, root, contract);
+    const workspace = new Workspace(root);
+    const record = await workspace.startSession('explorer');
+    const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
+    const cases = sweepCases(contract, { credentials: apiCredentials(config.app.connect, (value) => value) });
+    const result = await runSweep(session, cases, BUDGET);
+
+    const cell = (key: string) => {
+      const found = result.cells.find((item) => `${item.endpoint} ${item.case}` === key);
+      return found && { status: found.status, ok: found.ok, failed: found.failed, blocked: found.blocked };
+    };
+    const SESSION = 'credentials not accepted for this endpoint: the user self got 401';
+    expect(
+      Object.fromEntries(
+        [
+          'GET /plans ok',
+          'GET /plans no-auth',
+          'GET /plans declared:401',
+          'POST /webhooks ok',
+          'POST /webhooks declared:422',
+          'POST /invitations/{token}/accept missing-id',
+          'POST /invitations/{token}/accept declared:401',
+          'GET /auth/start ok',
+          'GET /auth/start declared:503',
+        ].map((key) => [key, cell(key)]),
+      ),
+    ).toEqual({
+      // 157, 133: a 401 to the configured key is a blocked prerequisite, not a pass and not a regression.
+      'GET /plans ok': { status: 401, ok: false, failed: [], blocked: SESSION },
+      'GET /plans no-auth': { status: 401, ok: true, failed: [], blocked: undefined },
+      'GET /plans declared:401': { status: 401, ok: true, failed: [], blocked: undefined },
+      // 157: a 422 on the ok case fails it. 158: the declared:422 cell expects that 422, so it passes.
+      'POST /webhooks ok': { status: 422, ok: false, failed: ['status'], blocked: undefined },
+      'POST /webhooks declared:422': { status: 422, ok: true, failed: [], blocked: undefined },
+      // 133: the missing-id case never reached its lookup.
+      'POST /invitations/{token}/accept missing-id': { status: 401, ok: false, failed: [], blocked: SESSION },
+      'POST /invitations/{token}/accept declared:401': { status: 401, ok: true, failed: [], blocked: undefined },
+      // 138: a declared 503 is a missing dependency, not a contract violation.
+      'GET /auth/start ok': {
+        status: 503,
+        ok: false,
+        failed: [],
+        blocked: 'the endpoint answered 503, which its contract declares: a dependency that it needs is not available',
+      },
+      'GET /auth/start declared:503': { status: 503, ok: true, failed: [], blocked: undefined },
+    });
+    // 159: an empty list says that no id is known.
+    expect(cell('GET /vaults/{id} ok')?.blocked).toMatch(
+      /^no known id: GET \/vaults gave none\. .*\/0\/id did not resolve in the 200 response$/,
+    );
+    expect(result.findings.map(({ key, blocking }) => ({ key, blocking }))).toEqual([
+      { key: 'POST /webhooks ok', blocking: true },
+    ]);
+  }, 30_000);
 });

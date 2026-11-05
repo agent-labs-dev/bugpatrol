@@ -51,6 +51,29 @@ such as no credentials, a bad body, a missing id, the data of another user,
 and a second delete. Bugpatrol checks each response against the spec: the
 status, the content type, and the body schema.
 
+The request that must succeed passes only on a 2xx or 3xx that the operation
+declares, or on any 2xx when it declares none. A declared error status is
+not a success. A status that the spec declares also fills its own
+`declared:<code>` column of the matrix, which checks only the content type
+and the body of that status.
+
+Some responses show that a case could not test what it is for. The case is
+then blocked, with the reason, and it gives no finding:
+
+- A 401 to the configured credentials: the endpoint needs another scheme, for
+  example a session cookie, so the credentials are not accepted for it.
+- A 503 that the spec or `connect.errors` declares: the API lacks a dependency,
+  for example an optional OAuth provider. A declared 503 also passes
+  `contract:no-5xx`. A declared 500 does not.
+
+A path parameter takes a known id from the spec example, a credential
+header, the list on its collection, or the create on its collection, in that
+order, for each method on the path. A DELETE that deletes a resource uses only
+an id that the sweep created; its missing-id case can use a listed id. A
+list that returns no id blocks the case as `no known id`. A body field with
+the name of a path parameter takes the value of that parameter, so an upsert
+such as `PUT /secrets/{name}` sends the same name in its path and its body.
+
 For a missing id, Bugpatrol changes a known id and keeps its shape: the
 prefix, the length, and the character classes. Without a known id, the made-up
 id can have a wrong format, so a declared 400 or 422 also passes.

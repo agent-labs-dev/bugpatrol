@@ -1,7 +1,7 @@
 import { fixtureSpecPath } from '@bugpatrol/api-fixture';
-import type { RoutineStep } from '@bugpatrol/core';
+import type { EndpointKey, RoutineStep } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { missingId, type SweepCase, specLacksErrors, sweepCases } from './cases.js';
+import { type CaseVerdict, coverageCells, missingId, type SweepCase, specLacksErrors, sweepCases } from './cases.js';
 import { buildContract } from './contract.js';
 import { loadSpec, type OpenApiDoc } from './load.js';
 
@@ -33,17 +33,17 @@ describe('sweepCases', () => {
     const contract = buildContract(await loadSpec({ file: fixtureSpecPath }), { errors: { statuses: [401, 409] } });
     expect(specLacksErrors(contract)).toBe(false);
     expect(golden(sweepCases(contract, { credentials: SELF }))).toEqual([
-      { case: 'GET /health ok', steps: ['GET /health expect contract'] },
-      { case: 'GET /version ok', steps: ['GET /version expect contract'] },
-      { case: 'GET /version/fleet ok', steps: ['GET /version/fleet expect contract'] },
-      { case: 'GET /items ok', steps: ['GET /items expect contract'] },
+      { case: 'GET /health ok', steps: ['GET /health expect contract,200'] },
+      { case: 'GET /version ok', steps: ['GET /version expect contract,200'] },
+      { case: 'GET /version/fleet ok', steps: ['GET /version/fleet expect contract,200'] },
+      { case: 'GET /items ok', steps: ['GET /items expect contract,200'] },
       { case: 'GET /items no-auth', steps: ['as none GET /items expect contract,401'] },
-      { case: 'POST /items ok', steps: ['POST /items {"name":"bugpatrol"} expect contract'] },
+      { case: 'POST /items ok', steps: ['POST /items {"name":"bugpatrol"} expect contract,201'] },
       { case: 'POST /items no-auth', steps: ['as none POST /items {"name":"bugpatrol"} expect contract,401'] },
       { case: 'POST /items invalid-input', steps: ['POST /items {} expect contract,422'] },
       {
         case: 'GET /items/{id} ok',
-        steps: ['GET /items capture {"RESPONSE_ID":"/result/0/id"}', 'GET /items/{{RESPONSE_ID}} expect contract'],
+        steps: ['GET /items capture {"RESPONSE_ID":"/result/0/id"}', 'GET /items/{{RESPONSE_ID}} expect contract,200'],
       },
       {
         case: 'GET /items/{id} no-auth',
@@ -61,28 +61,28 @@ describe('sweepCases', () => {
       {
         case: 'PATCH /items/{id} ok',
         steps: [
-          'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
-          'PATCH /items/{{RESPONSE_ID}} {"name":"bugpatrol"} expect contract',
+          'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
+          'PATCH /items/{{RESPONSE_ID}} {"name":"bugpatrol"} expect contract,200',
         ],
       },
       {
         case: 'PATCH /items/{id} no-auth',
         steps: [
-          'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
+          'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
           'as none PATCH /items/{{RESPONSE_ID}} {"name":"bugpatrol"} expect contract,401',
         ],
       },
       {
         case: 'PATCH /items/{id} invalid-input',
         steps: [
-          'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
+          'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
           'PATCH /items/{{RESPONSE_ID}} {} expect contract,422',
         ],
       },
       {
         case: 'PATCH /items/{id} missing-id',
         steps: [
-          'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
+          'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
           'PATCH /items/{{RESPONSE_ID|missing}} {"name":"bugpatrol"} expect contract,404',
         ],
       },
@@ -90,7 +90,7 @@ describe('sweepCases', () => {
         case: 'DELETE /items/{id} ok',
         steps: [
           'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
-          'DELETE /items/{{RESPONSE_ID}} expect contract',
+          'DELETE /items/{{RESPONSE_ID}} expect contract,204',
         ],
       },
       {
@@ -103,7 +103,7 @@ describe('sweepCases', () => {
       {
         case: 'DELETE /items/{id} missing-id',
         steps: [
-          'POST /items {"name":"bugpatrol"} capture {"RESPONSE_ID":"/result/id"}',
+          'GET /items capture {"RESPONSE_ID":"/result/0/id"}',
           'DELETE /items/{{RESPONSE_ID|missing}} expect contract,404',
         ],
       },
@@ -115,12 +115,12 @@ describe('sweepCases', () => {
           'DELETE /items/{{RESPONSE_ID}} expect contract,404',
         ],
       },
-      { case: 'GET /search ok', steps: ['GET /search expect contract'] },
+      { case: 'GET /search ok', steps: ['GET /search expect contract,200'] },
       { case: 'GET /search no-auth', steps: ['as none GET /search expect contract,401'] },
-      { case: 'GET /events ok', steps: ['GET /events expect contract'] },
-      { case: 'GET /export ok', steps: ['GET /export expect contract'] },
+      { case: 'GET /events ok', steps: ['GET /events expect contract,200'] },
+      { case: 'GET /export ok', steps: ['GET /export expect contract,200'] },
       { case: 'GET /export no-auth', steps: ['as none GET /export expect contract,401'] },
-      { case: 'POST /admin/wipe ok', steps: ['POST /admin/wipe expect contract'] },
+      { case: 'POST /admin/wipe ok', steps: ['POST /admin/wipe expect contract,204'] },
       { case: 'POST /admin/wipe no-auth', steps: ['as none POST /admin/wipe expect contract,401'] },
     ]);
   });
@@ -217,7 +217,7 @@ describe('sweepCases', () => {
         case: 'GET /workspaces/{workspace_id}/threads/{id} ok',
         steps: [
           'GET /workspaces/{{WORKSPACE_A}}/threads capture {"RESPONSE_ID":"/0/id"}',
-          'GET /workspaces/{{WORKSPACE_A}}/threads/{{RESPONSE_ID}} expect contract',
+          'GET /workspaces/{{WORKSPACE_A}}/threads/{{RESPONSE_ID}} expect contract,200',
         ],
       },
       {
@@ -237,5 +237,189 @@ describe('sweepCases', () => {
         ],
       },
     ]);
+  });
+
+  it.each([
+    { declares: ['200', '401'], expects: [200] },
+    { declares: ['201', '422'], expects: [201] },
+    { declares: ['302', '404', '503'], expects: [302] },
+    // Without a declared success, any 2xx passes, and no 4xx does.
+    { declares: ['default'], expects: Array.from({ length: 100 }, (_, index) => 200 + index) },
+  ])('the ok case of an operation that declares $declares expects only a success', ({ declares, expects }) => {
+    const doc = {
+      openapi: '3.1.0',
+      paths: { '/plans': { get: { responses: Object.fromEntries(declares.map((code) => [code, {}])) } } },
+    } as unknown as OpenApiDoc;
+    const [ok] = sweepCases(buildContract(doc, {}), { credentials: SELF });
+    expect(ok?.steps.at(-1)).toMatchObject({ assert: [{ kind: 'contract' }, { kind: 'status', value: expects }] });
+  });
+
+  it('resolves an id from the list first, then the create, on each method of a path', () => {
+    const json = (schema: unknown) => ({ description: 'ok', content: { 'application/json': { schema } } });
+    const param = (name: string) => [{ name, in: 'path', required: true, schema: { type: 'string' } }];
+    const named = { type: 'object', properties: { name: { type: 'string' } } };
+    const listed = json({ type: 'array', items: named });
+    const secret = {
+      type: 'object',
+      required: ['name', 'value'],
+      properties: { name: { type: 'string' }, value: { type: 'string' } },
+    };
+    const body = { content: { 'application/json': { schema: secret } } };
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        // A vault of secrets: a list and no create.
+        '/secrets': { get: { responses: { '200': listed } } },
+        '/secrets/{name}': {
+          parameters: param('name'),
+          get: { responses: { '200': json(named), '404': {} } },
+          put: { requestBody: body, responses: { '200': json(named), '404': {}, '422': {} } },
+          delete: { responses: { '204': {}, '404': {} } },
+        },
+        // A list and a create.
+        '/hooks': {
+          get: { responses: { '200': json({ type: 'array', items: { properties: { id: {} } } }) } },
+          post: { responses: { '201': json({ properties: { id: {} } }), '422': {} } },
+        },
+        '/hooks/{id}/rotate': { parameters: param('id'), post: { responses: { '200': json({}), '404': {} } } },
+        '/hooks/{id}': { parameters: param('id'), delete: { responses: { '204': {}, '404': {} } } },
+      },
+    } as unknown as OpenApiDoc;
+    const cases = sweepCases(buildContract(doc, {}), { credentials: SELF });
+    const first = (key: string) => {
+      const item = cases.find((one) => `${one.endpoint.key} ${one.case}` === key)!;
+      return item.blocked ?? line(item.steps[0]!);
+    };
+    const LIST = 'GET /secrets capture {"RESPONSE_NAME":"/0/name"}';
+    const HOOKS = 'GET /hooks capture {"RESPONSE_ID":"/0/id"}';
+    expect(
+      Object.fromEntries(
+        [
+          'GET /secrets/{name} ok',
+          'PUT /secrets/{name} ok',
+          'PUT /secrets/{name} missing-id',
+          'DELETE /secrets/{name} missing-id',
+          'DELETE /secrets/{name} ok',
+          'POST /hooks/{id}/rotate ok',
+          'POST /hooks/{id}/rotate missing-id',
+          'DELETE /hooks/{id} missing-id',
+          'DELETE /hooks/{id} ok',
+        ].map((key) => [key, first(key)]),
+      ),
+    ).toEqual({
+      'GET /secrets/{name} ok': LIST,
+      'PUT /secrets/{name} ok': LIST,
+      'PUT /secrets/{name} missing-id': LIST,
+      // A missing id only takes the shape of a listed one, so a DELETE may list.
+      'DELETE /secrets/{name} missing-id': LIST,
+      // A DELETE deletes only a resource that it made.
+      'DELETE /secrets/{name} ok':
+        'no known name: the spec has no example, and a DELETE deletes only a resource that the sweep made, which needs a create on /secrets',
+      'POST /hooks/{id}/rotate ok': HOOKS,
+      'POST /hooks/{id}/rotate missing-id': HOOKS,
+      'DELETE /hooks/{id} missing-id': HOOKS,
+      'DELETE /hooks/{id} ok': 'POST /hooks capture {"RESPONSE_ID":"/id"}',
+    });
+  });
+
+  it.each([
+    { name: 'a known id', example: undefined, ok: '{{RESPONSE_NAME}}', missing: '{{RESPONSE_NAME|missing}}' },
+    { name: 'a spec example', example: 'API_KEY', ok: 'API_KEY', missing: 'API_ZZZ' },
+  ])('a body field with the name of a path parameter takes its value, from $name', ({ example, ok, missing }) => {
+    const json = (schema: unknown) => ({ description: 'ok', content: { 'application/json': { schema } } });
+    const secret = {
+      type: 'object',
+      required: ['name', 'value'],
+      properties: { name: { type: 'string' }, value: { type: 'string' } },
+    };
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/secrets': { get: { responses: { '200': json({ type: 'array', items: secret }) } } },
+        '/secrets/{name}': {
+          put: {
+            parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' }, example }],
+            requestBody: { content: { 'application/json': { schema: secret } } },
+            responses: { '200': json(secret), '404': {} },
+          },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const bodies = Object.fromEntries(
+      sweepCases(buildContract(doc, {}), { credentials: SELF })
+        .filter((item) => (item.case === 'ok' && item.endpoint.method === 'PUT') || item.case === 'missing-id')
+        .map((item) => {
+          const step = item.steps.at(-1)!;
+          return [item.case, step.kind === 'request' ? JSON.parse(step.body!) : undefined];
+        }),
+    );
+    expect(bodies).toEqual({
+      ok: { name: ok, value: 'bugpatrol' },
+      'missing-id': { name: missing, value: 'bugpatrol' },
+    });
+  });
+
+  it('a body field mirroring a number path parameter stays a number', () => {
+    const item = { type: 'object', required: ['id'], properties: { id: { type: 'integer' } } };
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/items/{id}': {
+          put: {
+            parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' }, example: 7 }],
+            requestBody: { content: { 'application/json': { schema: item } } },
+            responses: { '200': {} },
+          },
+        },
+      },
+    } as unknown as OpenApiDoc;
+    const [ok] = sweepCases(buildContract(doc, {}), { credentials: SELF });
+    const step = ok!.steps.at(-1)!;
+    expect(step.kind === 'request' && JSON.parse(step.body!)).toEqual({ id: 7 });
+  });
+});
+
+describe('coverageCells', () => {
+  const base = { endpoint: 'POST /invitations/{token}/accept' as EndpointKey, at: 'now', exchange: 'x.exchange.json' };
+  const shape = (cells: ReturnType<typeof coverageCells>) =>
+    Object.fromEntries(
+      cells.map((cell) => [
+        cell.case,
+        { ok: cell.ok, failed: cell.failed, ...(cell.blocked ? { blocked: true } : {}) },
+      ]),
+    );
+  it.each<{ name: string; verdict: Omit<CaseVerdict, keyof typeof base>; cells: ReturnType<typeof shape> }>([
+    {
+      // The case expected 404, the 401 is declared: each cell keeps its own expectation.
+      name: 'a missing-id case that got a declared 401',
+      verdict: { case: 'missing-id', status: 401, declared: true, failed: ['status'] },
+      cells: { 'missing-id': { ok: false, failed: ['status'] }, 'declared:401': { ok: true, failed: [] } },
+    },
+    {
+      name: 'a declared 401 whose body breaks its schema',
+      verdict: { case: 'missing-id', status: 401, declared: true, failed: ['contract:schema', 'status'] },
+      cells: {
+        'missing-id': { ok: false, failed: ['contract:schema', 'status'] },
+        'declared:401': { ok: false, failed: ['contract:schema'] },
+      },
+    },
+    {
+      // Credentials that the endpoint does not accept block the case, and the 401 still covers its column.
+      name: 'a blocked case with a declared 401',
+      verdict: { case: 'missing-id', status: 401, declared: true, failed: [], blocked: 'credentials not accepted' },
+      cells: { 'missing-id': { ok: false, failed: [], blocked: true }, 'declared:401': { ok: true, failed: [] } },
+    },
+    {
+      name: 'an ok case that got a declared 2xx',
+      verdict: { case: 'ok', status: 200, declared: true, failed: [] },
+      cells: { ok: { ok: true, failed: [] } },
+    },
+    {
+      name: 'an undeclared 404',
+      verdict: { case: 'missing-id', status: 404, declared: false, failed: ['contract:status'] },
+      cells: { 'missing-id': { ok: false, failed: ['contract:status'] } },
+    },
+  ])('$name', ({ verdict, cells }) => {
+    expect(shape(coverageCells({ ...base, ...verdict }))).toEqual(cells);
   });
 });

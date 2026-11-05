@@ -50,25 +50,36 @@ export type CaseVerdict = {
 
 /**
  * The cells of one run of a case: its own cell, and for a declared error
- * status, a copy under `declared:<code>`, so the status covers its own column
- * of the matrix. `repeats` stays only on a failure.
+ * status, a cell under `declared:<code>`, so the status covers its own column
+ * of the matrix. The two cells share the exchange, and each is judged against
+ * its own expectation: the `declared:<code>` cell expects that status, so the
+ * `status` check of the case does not count there. A case that was blocked
+ * after its response came (credentials that the endpoint does not accept)
+ * still fills its `declared:<code>` cell. `repeats` stays only on a failure.
  */
 export function coverageCells(verdict: CaseVerdict): CoverageCell[] {
-  const { status, failed, blocked, repeats, exchange } = verdict;
-  const cell: CoverageCell = {
+  const { status, blocked, repeats, exchange } = verdict;
+  const cell = (id: CaseId, failed: string[], blocked?: string): CoverageCell => ({
     endpoint: verdict.endpoint,
-    case: verdict.case,
+    case: id,
     ...(status === undefined ? {} : { status }),
     ok: !blocked && !failed.length,
     failed,
-    ...(!blocked && failed.length && repeats !== undefined ? { repeats } : {}),
+    ...(failed.length && repeats !== undefined ? { repeats } : {}),
     ...(blocked ? { blocked } : {}),
     ...(exchange ? { exchange } : {}),
     at: verdict.at,
-  };
-  return !blocked && verdict.declared && status !== undefined && status >= 400
-    ? [cell, { ...cell, case: `declared:${status}` }]
-    : [cell];
+  });
+  const own = cell(verdict.case, blocked ? [] : verdict.failed, blocked);
+  return verdict.declared && status !== undefined && status >= 400
+    ? [
+        own,
+        cell(
+          `declared:${status}`,
+          verdict.failed.filter((id) => id !== 'status'),
+        ),
+      ]
+    : [own];
 }
 
 /** The statuses that a negative case expects, best first. A case exists only when the contract declares one. */
@@ -107,7 +118,7 @@ export function sweepCases(contract: Contract, options: SweepOptions): SweepCase
       );
     const base = plan.base();
     const last = plan.pathNames.at(-1);
-    add('ok', isBlocked(base) ? base : [...base.setup, plan.request(base, { assert: [CONTRACT] })]);
+    add('ok', isBlocked(base) ? base : [...base.setup, plan.request(base, { assert: checks(success(doc, endpoint)) })]);
 
     const noAuth = expected('no-auth');
     if (negative && noAuth && plan.needsAuth())
@@ -186,6 +197,15 @@ export function specLacksErrors(contract: Contract): boolean {
   return bare.length / endpoints.length >= 0.9;
 }
 
+/**
+ * The statuses that the ok case expects: each 2xx and 3xx that the operation
+ * declares, else any 2xx. A declared error status is not a success.
+ */
+function success(doc: OpenApiDoc, endpoint: Endpoint): number[] {
+  const declared = codes(doc, endpoint).filter((code) => code >= 200 && code < 400);
+  return declared.length ? declared : Array.from({ length: 100 }, (_, index) => 200 + index);
+}
+
 const CONTRACT: Assertion = { kind: 'contract' };
 const checks = (status: number | number[]): Assertion[] => [CONTRACT, { kind: 'status', value: status }];
 
@@ -228,14 +248,15 @@ class Plan {
         continue;
       }
       if (name !== this.pathNames.at(-1)) return { blocked: `no known ${name}: the spec has no example` };
-      const made = producer(this.contract, this.endpoint, name, path);
+      // A DELETE never deletes a listed resource, only one that it made.
+      const made = producer(this.contract, this.endpoint, name, path, this.endpoint.method === 'DELETE');
       if (isBlocked(made)) return made;
       setup.push(made.step);
       path[name] = made.value;
     }
     const query = this.query();
     if (isBlocked(query)) return query;
-    const body = this.body();
+    const body = this.body(path);
     if (isBlocked(body)) return body;
     return { path, query, ...(body ? { body } : {}), setup };
   }
@@ -275,16 +296,20 @@ class Plan {
     }
     const query = this.query();
     if (isBlocked(query)) return query;
-    const body = this.body();
-    if (isBlocked(body)) return body;
-    const parts = { path, query, ...(body ? { body } : {}) };
+    const withId = (value: string, setup: RoutineStep[], madeUp?: true): Built<Parts> => {
+      const full = { ...path, [name]: value };
+      const body = this.body(full);
+      if (isBlocked(body)) return body;
+      return { path: full, query, ...(body ? { body } : {}), setup, ...(madeUp ? { madeUp } : {}) };
+    };
     const fixed = fixedMissing(this.contract.doc, this.param('path', name)?.schema);
-    if (fixed !== undefined) return { ...parts, path: { ...path, [name]: fixed }, setup: [] };
+    if (fixed !== undefined) return withId(fixed, []);
     const known = this.known(name);
-    if (known !== undefined) return { ...parts, path: { ...path, [name]: missingOf(known) }, setup: [] };
-    const made = producer(this.contract, this.endpoint, name, path);
-    if (!isBlocked(made)) return { ...parts, path: { ...path, [name]: missingOf(made.value) }, setup: [made.step] };
-    return { ...parts, path: { ...path, [name]: 'bugpatrol-missing' }, setup: [], madeUp: true };
+    if (known !== undefined) return withId(missingOf(known), []);
+    // The missing id only takes the shape of a known one, so a DELETE may take it from a list too.
+    const made = producer(this.contract, this.endpoint, name, path, false);
+    if (!isBlocked(made)) return withId(missingOf(made.value), [made.step]);
+    return withId('bugpatrol-missing', [], true);
   }
 
   /** The request as the user `other`: each path parameter but the last takes the header value of that user. */
@@ -332,8 +357,9 @@ class Plan {
     return query;
   }
 
-  private body(): Built<Parts['body'] | undefined> {
-    return minimalBody(this.contract.doc, this.operation);
+  /** The minimal body, where a field with the name of a path parameter takes its value. */
+  private body(path: Record<string, string>): Built<Parts['body'] | undefined> {
+    return minimalBody(this.contract.doc, this.operation, path);
   }
 }
 
@@ -356,35 +382,39 @@ function request(
 }
 
 /**
- * A request that makes a known value of the path parameter `name`: a list on
- * the collection above it for a read, a create for a write. A DELETE never
- * deletes a listed resource, only one that it made.
+ * A request that makes a known value of the path parameter `name`. Each
+ * method on a path takes it from the same sources: the list on the
+ * collection above it first, then the create. With `ownOnly`, only the
+ * create counts, for a request that would delete the resource.
  */
 function producer(
   contract: Contract,
   endpoint: Endpoint,
   name: string,
   known: Record<string, string>,
+  ownOnly: boolean,
 ): Built<{ step: RoutineStep; value: string }> {
   const segments = endpoint.template.split('/');
   const collection = segments.slice(0, segments.indexOf(`{${name}}`)).join('/') || '/';
-  const list = endpoint.method === 'DELETE' ? [] : [find(contract, 'GET', collection)];
-  const create = find(contract, 'POST', collection);
-  const reads = ['GET', 'HEAD', 'OPTIONS'].includes(endpoint.method);
+  const sources = [...(ownOnly ? [] : [find(contract, 'GET', collection)]), find(contract, 'POST', collection)];
   const capture = `RESPONSE_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-  for (const source of reads ? [...list, create] : [create, ...list]) {
+  for (const source of sources) {
     if (!source) continue;
     const pointer = idPointer(contract.doc, successSchema(contract.doc, source), name);
     const params = [...source.template.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1]!);
     if (!pointer || params.some((param) => known[param] === undefined)) continue;
-    const body = minimalBody(contract.doc, operationOf(contract.doc, source));
+    const body = minimalBody(contract.doc, operationOf(contract.doc, source), known);
     if (isBlocked(body)) continue;
     return {
       step: request(source, { path: known, query: {}, ...(body ? { body } : {}) }, { capture: { [capture]: pointer } }),
       value: `{{${capture}}}`,
     };
   }
-  return { blocked: `no known ${name}: the spec has no example, and no list or create on ${collection} gives one` };
+  return {
+    blocked: ownOnly
+      ? `no known ${name}: the spec has no example, and a DELETE deletes only a resource that the sweep made, which needs a create on ${collection}`
+      : `no known ${name}: the spec has no example, and no list or create on ${collection} gives one`,
+  };
 }
 
 const find = (contract: Contract, method: HttpMethod, template: string) =>
@@ -431,14 +461,37 @@ function successSchema(doc: OpenApiDoc, endpoint: Endpoint): unknown {
   return undefined;
 }
 
-/** The body of a request from the minimal value of its schema: JSON, a form, or multipart (decision 8). */
-function minimalBody(doc: OpenApiDoc, operation: Json): Built<Parts['body'] | undefined> {
+/**
+ * The body of a request from the minimal value of its schema: JSON, a form,
+ * or multipart (decision 8). A top-level field with the name of a path
+ * parameter takes the value of that parameter, so an upsert such as
+ * `PUT /secrets/{name}` sends the name of its path.
+ */
+function minimalBody(
+  doc: OpenApiDoc,
+  operation: Json,
+  path: Record<string, string> = {},
+): Built<Parts['body'] | undefined> {
   const media = bodyMedia(doc, operation);
   if (!media) return undefined;
   if (isBlocked(media)) return media;
   const value = sample(doc, media.schema);
   if (!value) return { blocked: `no value for the ${media.type} body` };
-  return encode(media.type, value.value);
+  // A copy: the value can be an example object of the spec.
+  const body = structuredClone(value.value);
+  if (isObject(body)) {
+    const fields = Object.assign(
+      {},
+      ...branches(doc, media.schema).map((branch) => (isObject(branch.properties) ? branch.properties : {})),
+    ) as Json;
+    for (const [name, encoded] of Object.entries(path)) {
+      if (!(name in fields)) continue;
+      const text = decodeURIComponent(encoded);
+      const types = [deref(doc, fields[name])].flatMap((schema) => (isObject(schema) ? [schema.type].flat() : []));
+      body[name] = /^\d+$/.test(text) && (types.includes('integer') || types.includes('number')) ? Number(text) : text;
+    }
+  }
+  return encode(media.type, body);
 }
 
 /** A body that its schema rejects: an object without its required properties, or a value of the wrong type. */

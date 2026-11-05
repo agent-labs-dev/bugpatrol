@@ -185,6 +185,7 @@ function printResult(
     log(`${label}  ${finding.summary}${note}`);
   }
   for (const item of result.skipped) log(`skipped  ${item.key}: ${item.reason}`);
+  for (const cell of result.cells) if (cell.blocked) log(`blocked  ${cell.endpoint} ${cell.case}: ${cell.blocked}`);
   log(
     `\n${result.requests} request(s), ${result.cells.length} cell(s) written, ${result.remaining} case(s) left for the next run` +
       `${result.stopped ? ` (stopped: ${result.stopped})` : ''}.`,
