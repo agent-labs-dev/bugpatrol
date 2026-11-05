@@ -694,6 +694,8 @@ export type PrReview = {
   /** The check run of the claim check. Absent when blocking is off. */
   check?: ClaimCheckRun;
   findings: ReviewFinding[];
+  /** Why the base build did not run, so no finding was compared with it. */
+  baseError?: string;
   /** The review on GitHub. */
   posted?: { url: string; at: string };
   error?: string;

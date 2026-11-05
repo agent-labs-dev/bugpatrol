@@ -530,6 +530,7 @@ async function captureBase(
   } catch (error) {
     const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
     ctx.log(reason);
+    review.baseError = new Vars(ctx.config.app.secrets).redact(reason) as string;
     for (const target of targets)
       if (!target.capture.after) {
         target.capture.reached = false;
@@ -705,6 +706,8 @@ async function judgeFindings(
  * session. It must not file a problem that exists only on this pull request
  * as an issue of the main branch, so the review decides those candidates
  * here. A pre-existing problem stays open for that judge: the base build has it.
+ * An unclear finding is held back as `unverified`: the comparison did not
+ * finish, which disproves nothing.
  */
 async function settleCandidates(ctx: ReviewContext, sessionId: string, findings: ReviewFinding[]): Promise<void> {
   const lines = findings
@@ -712,8 +715,9 @@ async function settleCandidates(ctx: ReviewContext, sessionId: string, findings:
     .map((finding) =>
       JSON.stringify({
         candidateId: finding.candidateId,
-        decision: 'dismiss',
-        reason: `Review of PR #${ctx.pr.number}: ${finding.verdict}`,
+        ...(finding.verdict === 'unclear'
+          ? { decision: 'unverified', reason: `Review of PR #${ctx.pr.number}: not compared with the base build` }
+          : { decision: 'dismiss', reason: `Review of PR #${ctx.pr.number}: ${finding.verdict}` }),
         at: new Date().toISOString(),
       }),
     );

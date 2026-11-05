@@ -459,6 +459,34 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('holds an unclear finding back from the normal judge as unverified, not as dismissed', async () => {
+    const f = await fixture();
+    try {
+      const { gh, sticky } = fakeGh();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('unclear').createRuntime,
+        createDriver: screens,
+      });
+      const decisions = (
+        await readFile(join(paths.session(f.root, review.sessions.explorer!), 'decisions.jsonl'), 'utf8')
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(decisions).toMatchObject([
+        {
+          candidateId: review.findings[0]!.candidateId,
+          decision: 'unverified',
+          reason: 'Review of PR #7: not compared with the base build',
+        },
+      ]);
+      expect(sticky()).toContain('**Comparison incomplete**');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('with a name, replaces only the older reviews of the same name', async () => {
     const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'dashboard' });
     try {
@@ -2648,6 +2676,39 @@ describe('review rendering', () => {
     expect(body).toContain('| _Not reached on the base build. The screen is new._ | <img src="https://img/head.png"');
     expect(body).toContain('<details><summary>Screenshots and steps</summary>');
     expect(body).toContain('1. Run the routine enter-app\n2. Tap Save');
+  });
+
+  it('says the comparison is incomplete when a finding could not be compared, never that nothing was introduced', () => {
+    const unclear = review.findings.filter((finding) => finding.verdict === 'unclear');
+    const only = renderReview(
+      { ...review, findings: unclear },
+      (path) => path,
+      () => false,
+    ).body;
+    expect(only).not.toContain('No problem introduced');
+    expect(only).toContain('**Comparison incomplete** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(only).toContain('> 1 finding could not be compared with the base build.');
+    expect(only).toContain('| Unclear | minor | Could not compare | No base. |');
+
+    const down = renderReview(
+      {
+        ...review,
+        findings: unclear,
+        baseError:
+          'The base build did not run: InfrastructureError: Cannot fetch the spec http://127.0.0.1:18080/openapi.json',
+      },
+      (path) => path,
+      () => false,
+    ).body;
+    expect(down).toContain('**Base unavailable** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(down).toContain(
+      '> The base build did not run: InfrastructureError: Cannot fetch the spec http://127.0.0.1:18080/openapi.json',
+    );
+
+    // Introduced problems still lead, and the incomplete comparison is said under them.
+    const { body } = render();
+    expect(body).toContain('**3 problems introduced** · tested');
+    expect(body).toContain('> 1 finding could not be compared with the base build.');
   });
 
   it('shows an API capture as an http block under the table', () => {

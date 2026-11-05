@@ -106,6 +106,19 @@ function triageEntries(
   return entries;
 }
 
+/** The pending candidates outside `chosen` that share a fingerprint with one in it: a decision on it decides them. */
+function sameFingerprint(pending: Candidate[], chosen: Candidate[]): Candidate[] {
+  const prints = new Set(chosen.filter((item) => item.source !== 'pixel-diff').map((item) => item.fingerprint));
+  return pending.filter((item) => !chosen.includes(item) && prints.has(item.fingerprint));
+}
+
+/** The sentence that names the candidates a decision took along, so none leaves the list unseen. */
+function joined(siblings: Candidate[], verb: string): string {
+  if (!siblings.length) return '';
+  const names = siblings.map((item) => `${item.id} (${item.summary})`).join(', ');
+  return ` With the same fingerprint, ${names} ${verb}. If one is a different problem, say so in finish.`;
+}
+
 /** Judge tools make every acceptance or dismissal auditable. */
 export function judgeTools(session: AgentSession, sessionIds: string[], runtimeLabel: string): Tool[] {
   return [
@@ -204,11 +217,17 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             isError: true,
           };
         }
-        const ids = input.candidate_ids as string[];
-        const candidates = (await pendingCandidates(session, sessionIds)).filter((item) => ids.includes(item.id));
-        if (candidates.length !== ids.length || !ids.length) {
+        const requested = input.candidate_ids as string[];
+        const pending = await pendingCandidates(session, sessionIds);
+        const chosen = pending.filter((item) => requested.includes(item.id));
+        if (chosen.length !== requested.length || !requested.length) {
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
+        // Filing decides a fingerprint, so a pending candidate with the same one joins the issue
+        // by name, rather than drop out of the pending list with no issue holding it.
+        const siblings = sameFingerprint(pending, chosen);
+        const candidates = [...chosen, ...siblings];
+        const ids = candidates.map((item) => item.id);
         const first = candidates[0]!;
         const now = new Date().toISOString();
         // A named issue wins; otherwise the same fingerprint means the same issue.
@@ -263,7 +282,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
         const verb =
           existing?.status === 'fixed' ? 'Regression:' : merged ? `Added to (x${issue.occurrences})` : 'Filed';
         session.emit({ kind: 'issue', summary: `${verb} ${issue.title}` });
-        return response(`${verb} ${issue.id}: ${issue.title}`);
+        return response(`${verb} ${issue.id}: ${issue.title}${joined(siblings, 'joins the issue')}`);
       },
     },
     {
@@ -279,10 +298,12 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
       ),
       async run(input) {
         const ids = input.candidate_ids as string[];
-        const candidates = (await pendingCandidates(session, sessionIds)).filter((item) => ids.includes(item.id));
+        const pending = await pendingCandidates(session, sessionIds);
+        const candidates = pending.filter((item) => ids.includes(item.id));
         if (candidates.length !== ids.length || !ids.length) {
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
+        const siblings = sameFingerprint(pending, candidates);
         for (const candidate of candidates) {
           const { capture } = candidate.evidence;
           if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
@@ -326,7 +347,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
               },
             ]);
           }
-        return response(`Dismissed ${candidates.length} candidate(s).`);
+        return response(`Dismissed ${candidates.length} candidate(s).${joined(siblings, 'is dismissed with them')}`);
       },
     },
     {

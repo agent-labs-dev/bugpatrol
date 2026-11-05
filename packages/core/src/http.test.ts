@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatHttpExchange, httpBlock } from './http.js';
+import { formatHttpExchange, formatJsonAt, httpBlock } from './http.js';
 import type { HttpExchange } from './types/evidence.js';
 
 const at = '2026-10-29T12:00:00.000Z';
@@ -113,5 +113,34 @@ describe('formatHttpExchange', () => {
     });
     expect(block.startsWith('````http\nGET /md\n')).toBe(true);
     expect(block.endsWith('\n```\n````')).toBe(true);
+  });
+});
+
+describe('formatJsonAt', () => {
+  const doc = {
+    components: {
+      schemas: {
+        StepView: { type: 'object', properties: { attempt: { type: 'integer' } } },
+        Big: { description: 'x'.repeat(200) },
+      },
+    },
+  };
+
+  it('shows the whole value at a pointer, however deep in the document', () => {
+    const text = formatJsonAt(doc, '/components/schemas/StepView');
+    expect(text).toContain('"attempt": {');
+    expect(JSON.parse(text.slice(text.indexOf('\n') + 1))).toEqual(doc.components.schemas.StepView);
+  });
+
+  it('cuts a value over the limit with a marker, and names the keys to go deeper', () => {
+    const text = formatJsonAt(doc, '/components/schemas', { maxChars: 100 });
+    expect(text).toContain('[value cut: 100 of');
+    expect(text).toContain('Keys at /components/schemas: StepView, Big');
+  });
+
+  it('names the keys where a pointer stops resolving', () => {
+    expect(formatJsonAt(doc, '/components/schemas/Missing/type')).toBe(
+      'Nothing at /components/schemas/Missing/type. Keys at /components/schemas: StepView, Big',
+    );
   });
 });

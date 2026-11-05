@@ -135,7 +135,8 @@ const ALL = { maxBodyChars: Number.POSITIVE_INFINITY };
  * it. `ignored`: the decider did not send it to the judge.
  */
 export type SessionCandidate = Candidate & {
-  state: 'waiting' | 'filed' | 'dismissed' | 'ignored';
+  /** `unverified`: a pull request review could not compare it with the base build, so it decided nothing. */
+  state: 'waiting' | 'filed' | 'dismissed' | 'unverified' | 'ignored';
   issueId?: string;
   /** The exchange of an API capture, as the server formats it. */
   text?: string;
@@ -277,7 +278,11 @@ export class AgentReader {
     const issueOf = new Map(
       this.issues().flatMap((issue) => issue.candidateIds.map((cid) => [cid, issue.id] as const)),
     );
-    const dismissed = this.dismissed(id);
+    const decided = this.decisions(id);
+    const dismissed = new Set(decided.map((line) => line.candidateId));
+    const unverified = new Set(
+      decided.filter((line) => line.decision === 'unverified').map((line) => line.candidateId),
+    );
     const triage = this.triage();
     const candidates = this.candidates(id).map((candidate): SessionCandidate => {
       // A later run can find the same failure again: the judge's decision on its fingerprint counts.
@@ -285,11 +290,13 @@ export class AgentReader {
       const issueId = issueOf.get(candidate.id) ?? (triaged?.decision === 'filed' ? triaged.issueId : undefined);
       const state = issueId
         ? 'filed'
-        : dismissed.has(candidate.id) || triaged?.decision === 'dismissed'
-          ? 'dismissed'
-          : awaitsJudge(candidate, dismissed)
-            ? 'waiting'
-            : 'ignored';
+        : unverified.has(candidate.id)
+          ? 'unverified'
+          : dismissed.has(candidate.id) || triaged?.decision === 'dismissed'
+            ? 'dismissed'
+            : awaitsJudge(candidate, dismissed)
+              ? 'waiting'
+              : 'ignored';
       const { capture } = candidate.evidence;
       return {
         ...candidate,
@@ -306,12 +313,10 @@ export class AgentReader {
     return jsonLines<Candidate>(join(paths.session(this.root, sessionId, this.profile), 'candidates.jsonl'));
   }
 
-  /** The candidate ids of one session that the judge or a review dismissed. */
-  private dismissed(sessionId: string): Set<string> {
-    return new Set(
-      jsonLines<{ candidateId: string }>(paths.sessionDecisions(this.root, sessionId, this.profile)).map(
-        (line) => line.candidateId,
-      ),
+  /** The decisions of the judge or a review on the candidates of one session. */
+  private decisions(sessionId: string): { candidateId: string; decision?: string }[] {
+    return jsonLines<{ candidateId: string; decision?: string }>(
+      paths.sessionDecisions(this.root, sessionId, this.profile),
     );
   }
 
@@ -325,7 +330,7 @@ export class AgentReader {
     const filed = [...this.issues().flatMap((issue) => issue.candidateIds), ...Object.keys(this.triage())];
     return this.sessions(Infinity)
       .flatMap((session) => {
-        const decided = new Set([...filed, ...this.dismissed(session.id)]);
+        const decided = new Set([...filed, ...this.decisions(session.id).map((line) => line.candidateId)]);
         return this.candidates(session.id).filter((candidate) => awaitsJudge(candidate, decided));
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));

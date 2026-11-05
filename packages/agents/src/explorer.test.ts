@@ -6,7 +6,7 @@ import { buildContract, caseKey, loadSpec, sweepCases } from '@bugpatrol/contrac
 import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { explorerSystem } from './prompts.js';
+import { explorerPrompt, explorerSystem, judgeReviewSystem, judgeSystem } from './prompts.js';
 import { runExplorer, wasBlocked } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
@@ -144,6 +144,14 @@ describe('the explorer prompt', () => {
     for (const words of ['record_screen', 'Each action tool returns a screenshot', 'FULL COVERAGE'])
       expect(api).not.toContain(words);
     expect(explorerSystem('web', '')).toContain('record_screen');
+    // A denial that does not depend on whether the id exists discloses nothing, whichever status it has.
+    for (const system of [api, judgeSystem([], 'api'), judgeReviewSystem()]) {
+      expect(system).not.toMatch(/must get 404|403 where 404/);
+      expect(system).toContain('an existing id and a missing one');
+    }
+    const prompt = { screens: [], routines: [], placeholders: [], maxSteps: 5 };
+    expect(explorerPrompt({ ...prompt, endpoints: [] })).not.toContain('SCREENS');
+    expect(explorerPrompt(prompt)).toContain('KNOWN SCREENS\n(none yet)\n\nKNOWN ROUTINES');
   });
 });
 
@@ -296,6 +304,92 @@ describe('the api explorer', () => {
     expect(cell).toMatchObject({ ok: false, failed: ['contract:status'], repeats: false });
     expect(cell?.exchange).toMatch(/^\.bugpatrol\/.*\.exchange\.json$/);
     expect(cell?.at).not.toBe('2024-01-01T00:00:00Z');
+  });
+
+  it('reports a bug and sums up the session with no screen wording', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    await f.run('request', { method: 'GET', url: '/items/1' });
+    const reported = await f.run('report_bug', {
+      title: 'Item 1 has the wrong name',
+      what_is_wrong: 'The name is Alpha',
+      expected: 'Beta',
+      severity: 'minor',
+    });
+    expect(reported.isError).toBeFalsy();
+    expect(reported.text).not.toMatch(/screen/i);
+    const report = f.tools.find((tool) => tool.name === 'report_bug')!;
+    expect((report.inputSchema as { required: string[] }).required).not.toContain('screen_id');
+    expect(report.description).not.toMatch(/screen/i);
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run() {
+        return { stop: 'max-steps', steps: 3, costUsd: 0 };
+      },
+    };
+    const outcome = await runExplorer(f.session, runtime);
+    expect(outcome.summary).toBe('The explorer used all its steps. 1 candidate(s) raised in 3 steps.');
+  });
+
+  it('reads a part of the spec, and of the last response, by JSON pointer', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    const schema = await f.run('spec', { pointer: '/components/schemas/ItemResult' });
+    expect(schema.text).toContain('"$ref": "#/components/schemas/Item"');
+    expect((await f.run('spec', { pointer: '/components/schemas/Nope' })).text).toContain(
+      'Keys at /components/schemas: Health, Version',
+    );
+    await f.run('request', { method: 'GET', url: '/items/1' });
+    const part = await f.run('look', { pointer: '/result/name' });
+    expect(part.text).toBe('/result/name:\n"Alpha"');
+  });
+
+  it('puts the endpoints that the goal names first, and reports the ones the run did not reach', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    const prompts: string[] = [];
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run(task) {
+        prompts.push(task.prompt);
+        await task.tools.find((tool) => tool.name === 'request')!.run({ method: 'GET', url: '/search?q=A' });
+        return { stop: 'max-steps', steps: 1, costUsd: 0 };
+      },
+    };
+    const outcome = await runExplorer(f.session, runtime, { goal: 'Audit the search and the export endpoints.' });
+    const listed = prompts[0]!.split('ENDPOINTS TO TEST FIRST\n')[1]!.split('\n');
+    expect(listed.slice(0, 2)).toEqual(['- GET /search: named by the goal', '- GET /export: named by the goal']);
+    expect(outcome.summary).toContain(
+      'Goal not met: 1 of the 2 endpoint(s) that the goal names got no request: GET /export.',
+    );
+
+    const paths = await runExplorer(f.session, runtime, { goal: 'Only test /items/* endpoints' });
+    const named = prompts[1]!
+      .split('ENDPOINTS TO TEST FIRST\n')[1]!
+      .split('\n')
+      .filter((line) => line.endsWith('named by the goal'));
+    expect(named.map((line) => line.split(':')[0])).toEqual([
+      '- GET /items',
+      '- POST /items',
+      '- GET /items/{id}',
+      '- PATCH /items/{id}',
+      '- DELETE /items/{id}',
+    ]);
+    expect(paths.summary).toContain('Goal not met: 5 of the 5 endpoint(s)');
+  });
+
+  it('gives a report the statuses that the spec declares, so the judge reads the contract it claims', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    await f.run('request', { method: 'GET', url: '/items/1', as: 'other' });
+    await f.run('report_bug', {
+      title: 'Another user gets 403 instead of 404',
+      what_is_wrong: 'The 403 tells user b that item 1 exists.',
+      expected: '404',
+      severity: 'major',
+    });
+    const [candidate] = await f.workspace.readCandidates(f.session.sessionId);
+    expect(candidate?.detail).toContain('Declared statuses of GET /items/{id}: 200; connect.errors: 401, 409.');
   });
 
   it('as: other uses the other credential set', async () => {

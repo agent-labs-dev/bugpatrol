@@ -387,11 +387,23 @@ export function renderReview(
     .map(([count, words]) => `${count} ${words}`);
   const coverage = review.coverage;
   const hint = nextRunHint(review);
+  // A finding that was not compared is not a clean result, so the headline never says "No problem introduced" then.
+  const uncompared = of('unclear').length;
+  const headline = introduced.length
+    ? `${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'} introduced`
+    : review.baseError
+      ? 'Base unavailable'
+      : uncompared
+        ? 'Comparison incomplete'
+        : 'No problem introduced';
   const body = [
     reviewMarker(name),
     name ? `### Bugpatrol review: ${name}` : '### Bugpatrol review',
-    `**${introduced.length ? `${introduced.length} ${introduced.length === 1 ? 'problem' : 'problems'}` : 'No problem'} introduced** · ` +
-      `tested ${head} against \`${review.baseRef}\` ${base}`,
+    `**${headline}** · tested ${head} against \`${review.baseRef}\` ${base}`,
+    ...(review.baseError ? [`> ${review.baseError}`] : []),
+    ...(uncompared
+      ? [`> ${uncompared} ${uncompared === 1 ? 'finding' : 'findings'} could not be compared with the base build.`]
+      : []),
     ...(hint ? [`> **Next run:** ${hint}`] : []),
     ...(introduced.length
       ? [`#### Problems this pull request introduces (${introduced.length})`, ...introduced.map(problem)]

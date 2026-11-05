@@ -9,10 +9,12 @@ import {
   type Evidence,
   fingerprint,
   formatHttpExchange,
+  formatJsonAt,
   type HttpExchange,
   type Locator,
   type Routine,
   type RoutineStep,
+  resolvePointer,
   SAMPLE_FILES,
   type ScreenTransition,
   shortHash,
@@ -625,6 +627,22 @@ function testedCase(session: AgentSession): SweepCaseId | undefined {
   return step && responses.get(step)?.case;
 }
 
+/**
+ * The statuses that the spec declares for the endpoint of the last exchange,
+ * so a judge reads what the contract establishes before it accepts a claimed status.
+ */
+function declaredStatuses(session: AgentSession, api: ApiDriver): string | undefined {
+  const exchange = session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange;
+  if (!exchange) return undefined;
+  const { contract } = api.policy;
+  const endpoint = contract.match(exchange.request.method, exchange.request.path);
+  if (!endpoint) return undefined;
+  const operation = resolvePointer(contract.doc, endpoint.specRef)?.value as { responses?: object } | undefined;
+  const statuses = Object.keys(operation?.responses ?? {});
+  const errors = contract.errors.statuses.length ? `; connect.errors: ${contract.errors.statuses.join(', ')}` : '';
+  return `Declared statuses of ${endpoint.key}: ${statuses.join(', ') || 'none'}${errors}.`;
+}
+
 /** The request steps since the last anchor: the ones that save_routine numbers from 1. */
 const pendingRequests = (session: AgentSession) =>
   session.trail.slice(session.anchor.index).filter((step) => step.kind === 'request');
@@ -881,12 +899,60 @@ export function explorerTools(
           },
         ]
       : []),
-    {
-      name: 'look',
-      description: 'Observe the current screen.',
-      inputSchema: schema({}),
-      run: () => observe(session, 'look'),
-    },
+    api
+      ? {
+          name: 'look',
+          description:
+            'Show the last exchange again. pointer: a JSON pointer into the body of the last response, such as ' +
+            '/result/0, to read a part of it past the body cut, without sending the request again.',
+          inputSchema: schema({ pointer: string }),
+          async run(input) {
+            const pointer = arg(input, 'pointer');
+            if (!pointer) return observe(session, 'look');
+            const response =
+              session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange?.response;
+            if (!response) return { ...text('No response yet: send a request first.'), isError: true };
+            if (response.tooLarge)
+              return {
+                ...text(
+                  `The body of the last response was over the read limit, so none of it was kept (${response.bytes} bytes or more).`,
+                ),
+                isError: true,
+              };
+            let body: unknown;
+            try {
+              body = JSON.parse(response.body);
+            } catch {
+              return {
+                ...text('The body of the last response is not JSON, so a pointer cannot select a part of it.'),
+                isError: true,
+              };
+            }
+            return text(session.vars.redact(formatJsonAt(body, pointer)) as string);
+          },
+        }
+      : {
+          name: 'look',
+          description: 'Observe the current screen.',
+          inputSchema: schema({}),
+          run: () => observe(session, 'look'),
+        },
+    ...(api
+      ? [
+          {
+            name: 'spec',
+            description:
+              'Read one part of the OpenAPI spec that Bugpatrol tests against, by JSON pointer, such as ' +
+              '/components/schemas/Item or /paths/~1items~1{id}/get ("/" in a path is ~1). Use it rather than a ' +
+              'request for the spec document: a response shows only its first 8000 characters, and one over 1 MiB is ' +
+              'not kept. A part over the limit names its keys, so the next pointer can go deeper. No pointer: the top level.',
+            inputSchema: schema({ pointer: string }),
+            async run(input: Record<string, unknown>) {
+              return text(session.vars.redact(formatJsonAt(api.policy.contract.doc, arg(input, 'pointer'))) as string);
+            },
+          },
+        ]
+      : []),
     {
       name: 'tap',
       description: 'Tap one element by its latest ref.',
@@ -1179,15 +1245,19 @@ export function explorerTools(
     },
     {
       name: 'report_bug',
-      description:
-        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
-        'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
-        'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
-        'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
-        'this screen. Without them, a fix of the bug cannot be proven by a replay.',
+      description: api
+        ? 'Report a product bug in the last exchange for judge review. Name how a replay can tell that the bug ' +
+          'shows, with no one looking, in one or more of: shows (text in the response only while the bug is there), ' +
+          'lacks (text that the response should have and lacks), error (part of a network error that you saw). ' +
+          'Bugpatrol checks each against the last exchange. Without them, a fix of the bug cannot be proven by a replay.'
+        : "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+          'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+          'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+          'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+          'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
-          screen_id: string,
+          ...(api ? {} : { screen_id: string }),
           title: string,
           what_is_wrong: string,
           expected: string,
@@ -1199,7 +1269,7 @@ export function explorerTools(
             ? { rule: { type: 'string', enum: API_RULES, description: 'The API rule that the bug breaks.' } }
             : {}),
         },
-        ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
+        [...(api ? [] : ['screen_id']), 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
@@ -1226,7 +1296,9 @@ export function explorerTools(
         const requested = arg(input, 'screen_id');
         const known = (await session.workspace.readAppMap())?.screens.some((screen) => screen.id === requested);
         const screenId = known ? requested : currentScreenId(session);
-        const fallback = known ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
+        // An API has no screens, so a missing screen_id is no fallback worth naming.
+        const fallback =
+          known || api ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
         const candidate: Candidate = {
           id: `can_${shortHash(`${session.sessionId}:${title}:${randomUUID()}`)}`,
           sessionId: session.sessionId,
@@ -1237,7 +1309,15 @@ export function explorerTools(
             reportFingerprint(session, testedCase(session), rule) ??
             fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
-          detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
+          detail: session.vars.redact(
+            [
+              arg(input, 'what_is_wrong'),
+              `Expected: ${arg(input, 'expected')}`,
+              ...(api ? [declaredStatuses(session, api)] : []),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          ) as string,
           severity: input.severity as Candidate['severity'],
           evidence: {
             capture,
