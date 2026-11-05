@@ -5,6 +5,7 @@ import {
   runSweep,
   type SweepPlan,
   type SweepResult,
+  sessionRevision,
   startApp,
   Vars,
   Workspace,
@@ -93,7 +94,7 @@ export async function runSweepCommand(
     );
     if (!(driver instanceof ApiDriver)) throw new ConfigError('bugpatrol sweep needs the api driver');
     await driver.connect();
-    const record = await workspace.startSession('explorer');
+    const record = await workspace.startSession('explorer', await sessionRevision(root, config));
     session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
     const credentials = apiCredentials(config.app.connect, (value) => value);
     const cases = sweepCases(driver.policy.contract, { credentials });

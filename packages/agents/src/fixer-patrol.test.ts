@@ -1042,6 +1042,55 @@ describe('patrol', () => {
     }
   });
 
+  it('the judge leaves out a waiting finding recorded at another revision of the source, and says so', async () => {
+    const f = await repoFixture();
+    try {
+      const head = (await git(f.source, 'rev-parse', 'HEAD')).stdout.trim();
+      const waiting = async (revision: string | undefined, summary: string) => {
+        const earlier = await f.workspace.startSession('explorer', revision);
+        await f.workspace.appendCandidate(earlier.id, {
+          id: `can_${summary.length}`,
+          sessionId: earlier.id,
+          source: 'explorer',
+          fingerprint: `fp-${summary}`,
+          summary,
+          severity: 'minor',
+          evidence: { capture: { kind: 'image', screenshot: 'reported.png' }, steps: [] },
+          route: { to: 'judge', reason: 'Explorer reported a visible bug' },
+          createdAt: new Date().toISOString(),
+        });
+        await f.workspace.endSession(earlier.id, { summary: 'Stopped' });
+        return earlier.id;
+      };
+      const stale = await waiting('0000000000000000000000000000000000000000', 'Fixed since');
+      await waiting(undefined, 'Revision not known');
+      await waiting(head, 'Still at this revision');
+      const prompts: string[] = [];
+      const logs: string[] = [];
+      await runPatrol({
+        root: f.root,
+        config: parseConfig({ ...config, app: { source: 'source', connect: { url: 'fake://home' } } }),
+        once: true,
+        onLog: (line) => logs.push(line),
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'judge') prompts.push(task.prompt);
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('Still at this revision');
+      expect(prompts[0]).not.toContain('Fixed since');
+      expect(prompts[0]).not.toContain('Revision not known');
+      expect(logs).toContainEqual(expect.stringMatching(new RegExp(`Did not judge 2 candidate.*${stale}`)));
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('tears down when explorer throws, and reports the problem without a crash', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
     const driver = new FakeDriver({ home: { elements: [] } });

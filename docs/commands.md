@@ -7,7 +7,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | Command | What it does |
 | --- | --- |
 | `bugpatrol explore [--goal "..."] [--steps N]` | One explorer session: start the app, explore, report, stop the app |
-| `bugpatrol judge [--session <id>]` | Judge the recent explorer sessions that have new candidates (or the sessions that you name) |
+| `bugpatrol judge [--session <id>]` | Judge the recent explorer sessions that have new candidates (or the sessions that you name). A session recorded at another commit of the source is skipped and named, since its findings may be fixed; `--session` judges it anyway. A patrol's judge reads an earlier session's candidates only when that session tested the same revision |
 | `bugpatrol fix [--issue <id>]` | Fix the worst open issues, then retest each fix |
 | `bugpatrol retest --issue <id>` | Retest one fix in the app, from its worktree |
 | `bugpatrol retest --issue <id> --pr <n>` (or `--branch <ref>`, `--worktree <path>`) | Retest a fix that someone else wrote, for example with Claude Code. Bugpatrol only judges it: it never rewrites, pushes to, or opens a PR for it. After the fix merges, the patrol rechecks it on main and closes the issue |

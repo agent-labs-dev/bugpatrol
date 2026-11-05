@@ -17,6 +17,7 @@ import {
   runPatrol,
   runPublisher,
   runtimeProblem,
+  sessionRevision,
   startApp,
   syncGitHub,
   Vars,
@@ -317,9 +318,18 @@ export async function runAgentCommand(
           item.candidates > 0 &&
           item.status !== 'running',
       )
-      .slice(0, 5)
-      .map((item) => item.id);
-    const ids = (flags.session as string[] | undefined) ?? recent;
+      .slice(0, 5);
+    // A session that tested another commit may hold findings that this one fixed: --session judges it anyway.
+    const revision = await sessionRevision(root, config);
+    const stale = recent.filter((item) => item.revision && revision && item.revision !== revision);
+    if (stale.length && !flags.session)
+      log(
+        `Skipped ${stale.length} session(s) recorded at another commit than ${revision!.slice(0, 7)}: ` +
+          `${stale.map((item) => `${item.id} (${item.revision!.slice(0, 7)})`).join(', ')}. ` +
+          'Judge one with `bugpatrol judge --session <id>`.',
+      );
+    const ids =
+      (flags.session as string[] | undefined) ?? recent.filter((item) => !stale.includes(item)).map((item) => item.id);
     if (!ids.length)
       throw new ConfigError('No explorer session has candidates to judge. Run `bugpatrol explore` first.');
     const record = await workspace.startSession('judge');
@@ -440,7 +450,7 @@ export async function runAgentCommand(
       }
       throw new BugpatrolError(`The bug of ${flags.id} still shows`, ExitCode.Regression);
     }
-    const record = await workspace.startSession('explorer');
+    const record = await workspace.startSession('explorer', await sessionRevision(root, config));
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
     activeSession = session;
     const outcome = await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>

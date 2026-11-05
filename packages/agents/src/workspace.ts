@@ -320,7 +320,8 @@ export class Workspace {
     await atomic(paths.sessionFlow(this.root, sessionId), flow);
   }
 
-  async startSession(role: AgentRole): Promise<SessionSummary> {
+  /** `revision`: the revision of the app that the session tests, when it is known. */
+  async startSession(role: AgentRole, revision?: string): Promise<SessionSummary> {
     const now = new Date();
     const id = `ses_${now
       .toISOString()
@@ -332,6 +333,7 @@ export class Workspace {
       role,
       ...(this.profile && { profile: this.profile }),
       pid: process.pid,
+      ...(revision && { revision }),
       startedAt: now.toISOString(),
       status: 'running',
       steps: 0,

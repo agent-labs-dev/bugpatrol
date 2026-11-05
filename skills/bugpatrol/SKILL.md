@@ -343,7 +343,7 @@ Run each command in the project. Bugpatrol finds `.bugpatrol/` in the current fo
    npx bugpatrol@latest judge
    ```
 
-   The judge reads the recent explorer sessions that have candidates, and it skips the candidates that it already decided. Its first line names the sessions and the number of new candidates. To judge one session only, add `--session <id>`.
+   The judge reads the recent explorer sessions that have candidates, and it skips the candidates that it already decided. Its first line names the sessions and the number of new candidates. It skips, and names, a session recorded at another commit of the source. To judge one session only, add `--session <id>`.
 
 5. Show the issues:
 

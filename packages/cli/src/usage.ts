@@ -92,7 +92,8 @@ export const COMMAND_HELP: Record<string, string> = {
   judge: `bugpatrol judge [--session <id>]...
   File the real bugs from the explorer's candidates as issues, and dismiss the rest.
   With no --session, the judge reads the recent explorer sessions that have candidates.
-  It skips the candidates that it already decided.
+  It skips the candidates that it already decided, and names each session that it
+  skips because it was recorded at another commit of the source.
   --session <id>  judge this session only. You can give the flag more than one time.
 `,
   fix: `bugpatrol fix [--issue <id>]...

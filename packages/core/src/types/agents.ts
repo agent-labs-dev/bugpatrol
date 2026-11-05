@@ -772,6 +772,13 @@ export type SessionSummary = {
   profile?: string;
   /** The process that runs the session, so a crash does not look like a session in progress. */
   pid?: number;
+  /**
+   * The revision of the app that the session tested: the source commit, or
+   * the deployed commit of an external backend. Absent when it is not known,
+   * such as with uncommitted changes. The judge of a patrol reads a finding
+   * of an earlier session only when it was recorded at the revision it tests.
+   */
+  revision?: string;
   startedAt: string;
   endedAt?: string;
   status: 'running' | 'finished' | 'failed';

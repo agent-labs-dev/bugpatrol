@@ -85,6 +85,14 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
   }
 }
 
+/**
+ * The revision that a session outside a patrol tests: the source commit. An
+ * external backend's revision is its deploy, which only a patrol probes.
+ */
+export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | undefined> {
+  return externalBackend(config.app) ? undefined : sourceCommit(root, config);
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -246,7 +254,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
           // L14: an explorer that runs out of time still has candidates, so the judge runs before the cycle fails.
           let timedOut: RoleOutcome | undefined;
           if (config.agents.explorer.enabled && !interrupted) {
-            const record = await workspace.startSession('explorer');
+            const record = await workspace.startSession('explorer', commit);
             explorerId = record.id;
             const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, options.onLog);
             activeSession = session;
@@ -287,10 +295,24 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, options.onLog);
             activeSession = session;
             // The judge reads every finding that waits, also from an earlier
-            // session (a sweep alone, a cycle that stopped), not only this one.
+            // session (a sweep alone, a cycle that stopped), not only this one,
+            // when that session tested this revision: a finding recorded at
+            // another one may be fixed in this one.
             const earlier: string[] = [];
-            for (const { id } of await workspace.listSessions(Infinity))
-              if (id !== explorerId && (await pendingCandidates(session, [id])).length) earlier.push(id);
+            const stale: { id: string; candidates: number }[] = [];
+            for (const { id, revision } of await workspace.listSessions(Infinity)) {
+              if (id === explorerId) continue;
+              const waiting = (await pendingCandidates(session, [id])).length;
+              if (!waiting) continue;
+              if (revision === commit) earlier.push(id);
+              else stale.push({ id, candidates: waiting });
+            }
+            if (stale.length)
+              options.onLog?.(
+                `Did not judge ${stale.reduce((sum, item) => sum + item.candidates, 0)} candidate(s) of ` +
+                  `${stale.length} earlier session(s) recorded at another revision than ${commit?.slice(0, 7) ?? 'this unknown one'}: ` +
+                  `${stale.map((item) => item.id).join(', ')}. Judge one with \`bugpatrol judge --session <id>\`.`,
+              );
             unfinished(
               'Judge',
               await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId, ...earlier] }),
