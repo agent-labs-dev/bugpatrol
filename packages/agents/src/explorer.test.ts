@@ -111,6 +111,7 @@ describe('a command that only shows something', () => {
       'tree -o out.txt src',
       "sed -n '1w out.txt' file",
       "sed -n '1e touch x' file",
+      "sed -n 's/old/new/w out.txt' file",
       'cat <(touch x)',
       'for s in a b; do echo $s; done',
     ])

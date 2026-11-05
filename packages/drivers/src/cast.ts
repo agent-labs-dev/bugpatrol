@@ -285,8 +285,8 @@ export class Terminal {
   /**
    * Output that draws the visible screen on a blank terminal of the same
    * size: the alternate screen when it is active, each cell with its colors
-   * and attributes, the cursor, its visibility, and application cursor mode.
-   * Flush first.
+   * and attributes, the scroll region, the cursor, its visibility, and
+   * application cursor mode. Flush first.
    */
   serialize(): string {
     const buffer = this.emulator.buffer.active;
@@ -311,6 +311,12 @@ export class Terminal {
         out += cell.chars;
       }
       out += '\u001b[0m';
+    }
+    // xterm keeps the scroll region off its public API. Setting it homes the cursor, so it goes first.
+    const margins = (this.emulator as unknown as { _core?: { buffer?: { scrollTop: number; scrollBottom: number } } })
+      ._core?.buffer;
+    if (margins && (margins.scrollTop !== 0 || margins.scrollBottom !== this.rows - 1)) {
+      out += `\u001b[${margins.scrollTop + 1};${margins.scrollBottom + 1}r`;
     }
     out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
     if (!this.cursorVisible) out += '\u001b[?25l';

@@ -538,10 +538,13 @@ export function showsOnly(step: RoutineStep): boolean {
   return command.split(/&&|\|\||[;|\n]/).every((part) => {
     const [program = '', ...args] = part.trim().split(/\s+/);
     if (program === '') return true;
-    // A sed script that writes a file or runs a command is not a read: `1w out`, `w out`, `1e cmd`.
+    // Only a sed script that prints lines is a read, such as `-n 300,420p` or `-n '/re/p'`. Anything
+    // else may write a file or run a command: `1w out`, `s/a/b/w out`, `1e cmd`, `-i`.
     if (program === 'sed') {
-      if (!args.includes('-n') || args.some((arg) => /^-\w*i/.test(arg))) return false;
-      return !/(^|[\s;'"])[0-9,$/]*[wWe](\s|$|['"])/.test(part);
+      const flags = args.filter((arg) => arg.startsWith('-'));
+      if (!flags.some((flag) => /^-[Ern]*n/.test(flag)) || flags.some((flag) => !/^-[Ern]+$/.test(flag))) return false;
+      const script = args.find((arg) => !arg.startsWith('-'))?.replace(/^(['"])(.*)\1$/, '$2') ?? '';
+      return /^((\d+|\$|\/[^/]*\/)(,(\d+|\$|\/[^/]*\/))?)?p$/.test(script);
     }
     if (program === 'find' || program === 'fd')
       return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint)|^--exec/.test(arg));
