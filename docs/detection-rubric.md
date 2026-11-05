@@ -19,7 +19,7 @@ The highest-value detectors in the product: deterministic, free, and they catch 
 
 | Detector | Rule id | Signal | Catches |
 | -------- | ------- | ------ | ------- |
-| Occlusion | `layout/occlusion` | Interactive element covered at its centre (`elementFromPoint`) | "The button does nothing" bugs |
+| Occlusion | `layout/occlusion` | Interactive element covered at its centre (`elementFromPoint`). An element scrolled out of its scroll box is not judged | "The button does nothing" bugs |
 | Overlap | `layout/overlap` | Interactive/text boxes intersecting unexpectedly | Broken nav bars, colliding tooltips |
 | Overflow / clipping | `layout/overflow` | `scrollWidth > clientWidth` under `overflow: hidden` | Truncated labels, text out of a card |
 | Off-viewport | `layout/off-viewport` | Was visible in the baseline, now outside the viewport | Layout-shift regressions |

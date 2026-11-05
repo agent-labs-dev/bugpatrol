@@ -115,6 +115,49 @@ describe('probe: zero-size interactive elements', () => {
   });
 });
 
+describe('probe: occlusion inside a scroll container', () => {
+  // A board wider than its scroll box, keys rotated and absolutely placed, as
+  // on a narrow screen. Keys past the right edge are scrolled out of view: a
+  // point test there lands on the shell around the board.
+  const board = (extra = '') => `
+    <div class="shell" style="padding:20px;background:#eee">
+      <div class="board" style="width:300px;height:200px;overflow-x:auto;overflow-y:hidden;position:relative">
+        <div style="position:relative;width:900px;height:180px">
+          ${[20, 140, 260, 420, 600, 780]
+            .map(
+              (left, index) =>
+                `<button class="key" style="position:absolute;left:${left}px;top:60px;width:60px;height:40px;transform:rotate(${index % 2 ? 12 : -12}deg)">K${index + 1}</button>`,
+            )
+            .join('')}
+          ${extra}
+        </div>
+      </div>
+    </div>`;
+
+  it('does not call a key scrolled out of its board occluded', async () => {
+    const s = await snapshot(board());
+    expect(rules(s)).not.toContain('layout/occlusion');
+  });
+
+  it('does not call a rotated key in view occluded', async () => {
+    const s = await snapshot(board());
+    const visible = s.elements.filter((e) => e.selector.includes('key') && e.box.x + e.box.width < 320);
+    expect(visible.length).toBeGreaterThan(0);
+    for (const key of visible) expect(key.hitSelector).toBe(key.selector);
+  });
+
+  it('still reports a key in view that something covers', async () => {
+    const s = await snapshot(
+      board(
+        `<div class="cover" style="position:absolute;left:120px;top:40px;width:120px;height:90px;background:#000"></div>`,
+      ),
+    );
+    const found = evaluateAll(s).filter((v) => v.ruleId === 'layout/occlusion');
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain('div.cover');
+  });
+});
+
 describe('probe: the rendered pixels overrule the DOM', () => {
   async function snapshotWithPixels(html: string): Promise<ScreenSnapshot> {
     const s = await snapshot(html);
