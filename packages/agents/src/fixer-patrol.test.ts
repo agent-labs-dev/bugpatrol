@@ -1005,7 +1005,7 @@ describe('patrol', () => {
     },
   );
 
-  it('the judge also reads a finding that waits from an earlier session', async () => {
+  it('the judge leaves out an earlier finding when neither revision is known, and says so', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
     try {
       const workspace = new Workspace(root);
@@ -1023,10 +1023,12 @@ describe('patrol', () => {
       });
       await workspace.endSession(earlier.id, { summary: 'Sweep' });
       const prompts: string[] = [];
+      const logs: string[] = [];
       await runPatrol({
         root,
         config,
         once: true,
+        onLog: (line) => logs.push(line),
         createDriver: () => new FakeDriver({ home: { elements: [] } }),
         createRuntime: () => ({
           label: 'scripted',
@@ -1036,7 +1038,9 @@ describe('patrol', () => {
           },
         }),
       });
-      expect(prompts).toEqual([expect.stringContaining('Earlier sweep failure')]);
+      // No git here: two unknown revisions are not the same revision.
+      expect(prompts.join('\n')).not.toContain('Earlier sweep failure');
+      expect(logs).toContainEqual(expect.stringMatching(new RegExp(`Did not judge 1 candidate.*${earlier.id}`)));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

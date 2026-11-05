@@ -351,7 +351,8 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
               if (id === explorerId) continue;
               const waiting = (await pendingCandidates(session, [id])).length;
               if (!waiting) continue;
-              if (revision === commit) earlier.push(id);
+              // Two unknown revisions are not one revision: a dirty or untracked source has none.
+              if (commit && revision === commit) earlier.push(id);
               else stale.push({ id, candidates: waiting });
             }
             if (stale.length)

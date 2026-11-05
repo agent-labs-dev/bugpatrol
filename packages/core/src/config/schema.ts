@@ -718,6 +718,14 @@ export const bugpatrolConfigSchema = z
         message: `Bugpatrol cannot see the requests of a ${platform} app. Name its backend in app.readOnly.proxy, and point the app at the proxy's {{NAME}}.`,
       });
     }
+    if (readOnly && platform === 'electron' && config.app.connect.launch && !Object.keys(readOnly.proxy).length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['app', 'readOnly', 'proxy'],
+        message:
+          'A launched Electron app can send requests while it starts, before Bugpatrol attaches over CDP and holds writes back. Name its backend in app.readOnly.proxy, and point the app at the proxy with {{NAME}} in app.connect.launch.args.',
+      });
+    }
     if (readOnly?.dropFrames.length && readOnly.websockets !== 'pass') {
       ctx.addIssue({
         code: 'custom',
