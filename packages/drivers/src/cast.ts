@@ -282,6 +282,42 @@ export class Terminal {
     return out.join('\n');
   }
 
+  /**
+   * Output that draws the visible screen on a blank terminal of the same
+   * size: the alternate screen when it is active, each cell with its colors
+   * and attributes, the cursor, its visibility, and application cursor mode.
+   * Flush first.
+   */
+  serialize(): string {
+    const buffer = this.emulator.buffer.active;
+    let out = buffer.type === 'alternate' ? '\u001b[?1049h' : '';
+    out += '\u001b[0m\u001b[H\u001b[2J';
+    for (let row = 0; row < this.rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row);
+      if (!line) continue;
+      const cells: { sgr: string; chars: string }[] = [];
+      for (let col = 0; col < this.cols; col++) {
+        const cell = line.getCell(col);
+        if (!cell || cell.getWidth() === 0) continue;
+        cells.push({ sgr: cellSgr(cell), chars: cell.getChars() || ' ' });
+      }
+      while (cells.length && cells.at(-1)!.sgr === '0' && cells.at(-1)!.chars === ' ') cells.pop();
+      if (!cells.length) continue;
+      out += `\u001b[${row + 1};1H`;
+      let sgr = '0';
+      for (const cell of cells) {
+        if (cell.sgr !== sgr) out += `\u001b[${cell.sgr}m`;
+        sgr = cell.sgr;
+        out += cell.chars;
+      }
+      out += '\u001b[0m';
+    }
+    out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
+    if (!this.cursorVisible) out += '\u001b[?25l';
+    if (this.applicationCursor) out += '\u001b[?1h';
+    return out;
+  }
+
   /** Returns the visible grid with xterm colors resolved to RGB tuples. */
   cells(): TerminalCell[][] {
     const buffer = this.emulator.buffer.active;
@@ -361,6 +397,29 @@ function readCell(raw: {
     inverse: raw.isInverse() !== 0,
     dim: raw.isDim() !== 0,
   };
+}
+
+/** The SGR parameters that give a cell its colors and attributes, from a reset. */
+function cellSgr(cell: xtermModule.IBufferCell): string {
+  const params = ['0'];
+  const color = (rgb: boolean, palette: boolean, value: number, base: number, bright: number, extended: number) => {
+    if (rgb) params.push(`${extended};2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}`);
+    else if (palette && value < 8) params.push(String(base + value));
+    else if (palette && value < 16) params.push(String(bright + value - 8));
+    else if (palette) params.push(`${extended};5;${value}`);
+  };
+  color(cell.isFgRGB(), cell.isFgPalette(), cell.getFgColor(), 30, 90, 38);
+  color(cell.isBgRGB(), cell.isBgPalette(), cell.getBgColor(), 40, 100, 48);
+  if (cell.isBold()) params.push('1');
+  if (cell.isDim()) params.push('2');
+  if (cell.isItalic()) params.push('3');
+  if (cell.isUnderline()) params.push('4');
+  if (cell.isBlink()) params.push('5');
+  if (cell.isInverse()) params.push('7');
+  if (cell.isInvisible()) params.push('8');
+  if (cell.isStrikethrough()) params.push('9');
+  if (cell.isOverline()) params.push('53');
+  return params.join(';');
 }
 
 function cellColor(

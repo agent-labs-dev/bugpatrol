@@ -413,6 +413,14 @@ export async function runAgentCommand(
       const record = await workspace.startSession('explorer');
       const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
       activeSession = session;
+      // A web observation drains the errors it reports, so the bug check reads every one seen during the replay.
+      const errors: string[] = [];
+      const observe = driver.observe.bind(driver);
+      driver.observe = async () => {
+        const observation = await observe();
+        errors.push(...observation.consoleErrors, ...(observation.networkErrors ?? []));
+        return observation;
+      };
       const replay = await replayRoutine(session, String(flags.id));
       await workspace.endSession(record.id, {
         status: replay.ok ? 'finished' : 'failed',
@@ -425,7 +433,7 @@ export async function runAgentCommand(
       if (!check) return;
       await driver.settle();
       const screen = await driver.observe();
-      const misses = bugMisses(check, screen, [...screen.consoleErrors, ...(screen.networkErrors ?? [])]);
+      const misses = bugMisses(check, screen, errors);
       if (misses.length) {
         log(`The bug no longer shows: ${misses.join(', and ')}`);
         return;

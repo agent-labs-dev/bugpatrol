@@ -556,8 +556,19 @@ export class CliDriver implements Driver {
     return nativeSnapshot(observation, screenId);
   }
 
+  /**
+   * Starts with what the terminal shows now, so an app that redraws only what
+   * changed, such as the TUI started on connect, plays back whole. Raw like
+   * the rest: the recording is redacted as one stream when it stops.
+   */
   async startRecording(): Promise<void> {
+    const screen = (this.view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    await screen.flush();
     this.cast.start();
+    if (screen.cols !== this.cols || screen.rows !== this.rows) this.cast.resize(screen.cols, screen.rows);
+    const shown = screen.serialize();
+    // A blank terminal needs nothing drawn.
+    if (shown !== new Terminal(screen.cols, screen.rows).serialize()) this.cast.push(shown);
   }
 
   async stopRecording(name: string): Promise<string> {
