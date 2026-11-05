@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { handsBack, type Tool, type ToolResult } from './types.js';
+import { type Tool, type ToolResult, useStep } from './types.js';
 
 type Options = {
   /** `step` is false for a call that used no step: a hand-back tool, or one refused for the budget. */
@@ -19,7 +19,7 @@ type McpContent = { type: 'text'; text: string } | { type: 'image'; data: string
  * here, so it holds across every client session the CLI opens.
  */
 export async function serveTools(tools: Tool[], opts: Options = {}): Promise<{ url: string; close(): Promise<void> }> {
-  const budget = { calls: 0 };
+  const budget = { steps: 0, max: opts.maxCalls ?? Infinity };
 
   const http = createServer((request, response) => {
     if (request.url !== '/mcp') {
@@ -60,7 +60,7 @@ async function handle(
   response: ServerResponse,
   tools: Tool[],
   opts: Options,
-  budget: { calls: number },
+  budget: { steps: number; max: number },
 ): Promise<void> {
   const server = buildServer(tools, opts, budget);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -72,7 +72,7 @@ async function handle(
   await transport.handleRequest(request, response);
 }
 
-function buildServer(tools: Tool[], opts: Options, budget: { calls: number }): Server {
+function buildServer(tools: Tool[], opts: Options, budget: { steps: number; max: number }): Server {
   const server = new Server({ name: 'bugpatrol', version: '0.0.0' }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -87,9 +87,9 @@ function buildServer(tools: Tool[], opts: Options, budget: { calls: number }): S
     const name = request.params.name;
     const input = request.params.arguments ?? {};
     const started = Date.now();
-    const before = budget.calls;
-    const result = await callTool(tools, name, input, opts, budget);
-    opts.onCall?.(name, input, result, Date.now() - started, budget.calls > before);
+    const before = budget.steps;
+    const result = await callTool(tools, name, input, budget);
+    opts.onCall?.(name, input, result, Date.now() - started, budget.steps > before);
     return { content: result.content.map(toMcp), isError: result.isError ?? false };
   });
 
@@ -100,19 +100,11 @@ async function callTool(
   tools: Tool[],
   name: string,
   input: Record<string, unknown>,
-  opts: Options,
-  budget: { calls: number },
+  budget: { steps: number; max: number },
 ): Promise<ToolResult> {
   // An agent out of steps can still report what it found, and hand back.
-  if (!handsBack(name) && budget.calls >= (opts.maxCalls ?? Infinity)) {
-    const text = tools.some((tool) => tool.name === 'report_bug')
-      ? 'The step budget is used. Report each bug that you found and did not report yet with report_bug, then call finish.'
-      : 'The step budget is used. Call finish now.';
-    return { content: [{ type: 'text', text }], isError: true };
-  }
-  if (!handsBack(name)) {
-    budget.calls++;
-  }
+  const refused = useStep(name, tools, budget);
+  if (refused) return refused;
 
   const tool = tools.find((item) => item.name === name);
   if (!tool) {

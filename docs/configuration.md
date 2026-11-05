@@ -54,7 +54,7 @@ app:
 
 agents:
   explorer:
-    maxSteps: 150               # one step is one tool call; full coverage needs many
+    maxSteps: 150               # one step is one tool call, a hard cap; full coverage needs many
     budgetUsd: 5                # optional: a cost limit for one session in USD; no limit by default
     use: claude                 # a local agent CLI: claude | codex | kimi | opencode | pi
   judge:

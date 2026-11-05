@@ -30,6 +30,23 @@ export function handsBack(name: string): boolean {
   return name.startsWith('finish') || name === 'report_bug';
 }
 
+/**
+ * The step budget, enforced where tools are called so that no runtime can go
+ * over it. A call to any tool but a hand-back one uses a step; once all are
+ * used, it is refused and runs nothing.
+ */
+export function useStep(name: string, tools: Tool[], budget: { steps: number; max: number }): ToolResult | undefined {
+  if (handsBack(name)) return undefined;
+  if (budget.steps < budget.max) {
+    budget.steps++;
+    return undefined;
+  }
+  const text = tools.some((tool) => tool.name === 'report_bug')
+    ? 'The step budget is used. Report each bug that you found and did not report yet with report_bug, then call finish.'
+    : 'The step budget is used. Call finish now.';
+  return { content: [{ type: 'text', text }], isError: true };
+}
+
 export type Tool = {
   name: string;
   description: string;
