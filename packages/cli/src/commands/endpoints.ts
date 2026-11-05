@@ -43,7 +43,10 @@ export async function runEndpointsCommand(
     throw new ConfigError(
       `No endpoints: set app.connect.spec, commit ${relative(root, paths.endpointInventory(root, config?.profile))}, or pass --spec`,
     );
-  const policy = connect && url ? requestPolicy(contract, { ...connect, url: resolveConfig(url) }) : undefined;
+  const policy =
+    connect && url
+      ? requestPolicy(contract, { ...connect, url: resolveConfig(url), readOnly: Boolean(config?.app.readOnly) })
+      : undefined;
   const access = (endpoint: Endpoint): string | undefined => {
     const verdict = policy?.check(endpoint.method, endpoint.template);
     if (!verdict) return undefined;

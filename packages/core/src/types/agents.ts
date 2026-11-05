@@ -710,6 +710,8 @@ export type AgentEventKind =
   | 'fix'
   | 'lesson'
   | 'usage'
+  /** Read-only mode kept a write of the app from its backend. */
+  | 'write-blocked'
   | 'error';
 
 /** One line of `sessions/<id>/events.jsonl`. Every value is already redacted. */
@@ -785,6 +787,8 @@ export type SessionSummary = {
   screensFound: string[];
   candidates: number;
   issues: string[];
+  /** Read-only mode: the writes of the app that Bugpatrol kept from its backend in this session. */
+  writesBlocked?: number;
 };
 
 /** `deploy.json`. The last answer of `app.connect.version`: the live commit, or why it is not known. */

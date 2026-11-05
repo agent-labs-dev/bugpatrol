@@ -168,6 +168,7 @@ export async function retestFix(
       (value) => vars.redact(value) as string,
       options.build === 'main' ? resolve(root, config.app.source) : fix.worktree,
       app.contract,
+      app.writes,
     );
     await driver.connect();
     const record = await workspace.startSession('explorer');

@@ -8,6 +8,7 @@ import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { CastRecorder, Terminal, terminalPng } from './cast.js';
 import { sessionKeyBytes } from './keys.js';
 import { nativeSnapshot } from './maestro.js';
+import type { WriteLog } from './readonly.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
 /** The output of a command is read as text, not drawn, so its lines are as wide as the command prints them. */
@@ -226,6 +227,8 @@ export type CliDriverOptions = {
   env?: Record<string, string>;
   /** A program that stays open, started on connect, so the first look is at it. */
   command?: string;
+  /** Read-only mode: the log of the proxies that the app's backend traffic goes through. */
+  writes?: WriteLog;
 };
 
 /** A program that stays open across steps, such as a full screen terminal UI. */
@@ -280,6 +283,10 @@ export class CliDriver implements Driver {
   private appEnv: Record<string, string> = {};
   private readonly cast: CastRecorder;
   private readonly redact: (value: string) => string;
+
+  get writes() {
+    return this.options.writes;
+  }
 
   constructor(private readonly options: CliDriverOptions) {
     this.redact = options.redact ?? ((value) => value);
@@ -613,6 +620,7 @@ export class CliDriver implements Driver {
       elements: [],
       volatileRegions: [],
       consoleErrors: [],
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
   }

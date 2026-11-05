@@ -51,6 +51,7 @@ app:
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
+  # readOnly: true              # only GET, HEAD and OPTIONS reach the backend; see Read-only mode
 
 agents:
   explorer:
@@ -136,6 +137,40 @@ Repository-owned setup and teardown commands and their `cwd` may also expand
 but do not become available to the agent. Review configuration before running an
 untrusted repository: setup commands are executable code. Text redaction does
 not mask screenshots.
+
+## Read-only mode
+
+Set `app.readOnly` when the app talks to a backend whose data must not change, such as a shared or production one. Bugpatrol then lets only GET, HEAD and OPTIONS reach the backend, whatever the explorer does, and the app guide's never-do list is no longer the only thing between a key press and a write. `readOnly: true` is short for `readOnly: {}`.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `proxy` | `{}` | `NAME: upstream URL` pairs. Each one starts a loopback proxy to that backend, as the variable `{{NAME}}` |
+| `websockets` | `block` | `block` refuses every WebSocket. `pass` lets them through, less the frames in `dropFrames` |
+| `dropFrames` | `[]` | Regular expressions. A frame that the app sends on a WebSocket and that matches one is dropped. Needs `websockets: pass` |
+
+How Bugpatrol holds back the writes depends on the platform:
+
+- **Web and Electron**: the driver aborts every request of the browser that is not a read, including form posts and beacons, and applies the WebSocket rules. A web context blocks service workers, whose own requests would bypass the rules. When Bugpatrol attaches to an Electron app, it reloads each app page, so that a WebSocket the app opened before is opened again under the rules.
+- **API**: the request policy sends only reads, also to a loopback or `disposable` target.
+- **CLI, desktop, iOS and Android**: the app talks to its backend itself, so Bugpatrol cannot see the requests. Name the backend in `proxy` and point the app at `{{NAME}}`; the config is rejected without a `proxy`. The proxy forwards reads, answers each other method with a 405, and applies the WebSocket rules. It refuses WebSocket compression, so `dropFrames` sees the text of each frame. Traffic that does not go through the proxy is not covered.
+
+Bugpatrol starts the proxies before setup, so setup commands, `connect` and the explorer can all use `{{NAME}}`. An upstream URL can use `${NAME}` for a secret or a variable of Bugpatrol's environment.
+
+```yaml
+app:
+  platform: cli
+  readOnly:
+    proxy:
+      API_URL: https://api.example.com
+    websockets: pass
+    dropFrames: ['"push"']       # the client's sync writes
+  connect:
+    cli:
+      env:
+        MY_APP_API_URL: '{{API_URL}}'
+```
+
+Each blocked write is logged with its method, its URL with the query values hidden, and the time. The explorer sees the writes blocked since its last step, each one is a `write-blocked` event in the session, and the session summary ends with `Read-only mode blocked N write(s).`
 
 ## Connect
 

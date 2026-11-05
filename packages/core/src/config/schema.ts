@@ -3,6 +3,15 @@ import type { AgentRole } from '../types/agents.js';
 import { HTTP_METHODS } from '../types/endpoint.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
 
+function validRegex(value: string): boolean {
+  try {
+    new RegExp(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const viewportSchema = z.object({
   name: z.string(),
   width: z.number().int().positive(),
@@ -299,6 +308,30 @@ export const appSchema = z
         device: z.string().optional(),
       })
       .default({}),
+    /**
+     * Only GET, HEAD and OPTIONS reach the app's backend. `true` is short for
+     * `{}`. Web and Electron: Bugpatrol aborts every other request of the
+     * browser. API: the request policy sends reads only. Any platform: each
+     * entry of `proxy` is a loopback proxy to that backend, as `{{NAME}}`, for
+     * an app that talks to its backend itself; a CLI, desktop or mobile app
+     * needs one. Every blocked write is logged and counted.
+     */
+    readOnly: z.preprocess(
+      (value) => (value === true ? {} : value === false ? undefined : value),
+      z
+        .object({
+          /** NAME: the backend's base URL. `${NAME}` takes a secret or a variable of Bugpatrol's environment. */
+          proxy: z
+            .record(z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'Use an UPPER_CASE name'), z.string().min(1))
+            .default({}),
+          /** `block` refuses every WebSocket. `pass` lets them through, less the client frames in `dropFrames`. */
+          websockets: z.enum(['block', 'pass']).default('block'),
+          /** Regular expressions: a text or binary frame from the app that matches one is dropped. */
+          dropFrames: z.array(z.string().refine(validRegex, 'Use a valid regular expression')).default([]),
+        })
+        .strict()
+        .optional(),
+    ),
     /** Plain-English guide for the explorer: login, onboarding, never-do list. */
     instructions: z.string().optional(),
     /** Names of env vars the explorer may use as {{NAME}} placeholders. */
@@ -538,14 +571,7 @@ export const agentsSchema = z
               /** What the number means, with its unit: 'p99 latency in ms'. */
               metric: z.string().min(1),
               /** A regular expression whose first group is the number in the output of the command. */
-              parse: z.string().refine((value) => {
-                try {
-                  new RegExp(value);
-                  return true;
-                } catch {
-                  return false;
-                }
-              }, 'Use a valid regular expression'),
+              parse: z.string().refine(validRegex, 'Use a valid regular expression'),
               better: z.enum(['lower', 'higher']).default('lower'),
               /** Runs on each build, alternating between the builds. */
               runs: z.number().int().positive().default(5),
@@ -661,6 +687,21 @@ export const bugpatrolConfigSchema = z
         code: 'custom',
         path: ['run'],
         message: 'A web or API app needs `run` (command and url) or `app.connect.url`.',
+      });
+    }
+    const { readOnly, platform } = config.app;
+    if (readOnly && !['web', 'electron', 'api'].includes(platform) && !Object.keys(readOnly.proxy).length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['app', 'readOnly', 'proxy'],
+        message: `Bugpatrol cannot see the requests of a ${platform} app. Name its backend in app.readOnly.proxy, and point the app at the proxy's {{NAME}}.`,
+      });
+    }
+    if (readOnly?.dropFrames.length && readOnly.websockets !== 'pass') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['app', 'readOnly', 'dropFrames'],
+        message: 'dropFrames applies to WebSockets that pass: set app.readOnly.websockets to pass.',
       });
     }
   });

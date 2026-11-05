@@ -63,7 +63,11 @@ export async function runSweepCommand(
     const url = connect.url ?? config.run?.url;
     if (!url) throw new ConfigError('bugpatrol sweep needs app.connect.url');
     const contract = await loadContract(root, { ...connect, url }, resolveConfig, config.profile);
-    const policy = requestPolicy(contract, { ...connect, url: resolveConfig(url) });
+    const policy = requestPolicy(contract, {
+      ...connect,
+      url: resolveConfig(url),
+      readOnly: Boolean(config.app.readOnly),
+    });
     // Setup did not run, so the headers keep their placeholders.
     const credentials = apiCredentials(connect, (value) => value);
     const plan = planSweep(sweepCases(contract, { credentials }), policy, await workspace.readCoverage());

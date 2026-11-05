@@ -10,6 +10,7 @@ import { CuaDriver } from './cua/driver.js';
 import { ElectronDriver } from './electron.js';
 import { launchElectron } from './electron-launch.js';
 import { MaestroDriver } from './maestro.js';
+import { type ReadOnlyOptions, WriteLog } from './readonly.js';
 import type { Driver } from './types.js';
 import { WebDriver } from './web.js';
 
@@ -32,11 +33,24 @@ function shellCommand(command: string, vars: (value: string) => string): string 
     .join('');
 }
 
+/** What `app.readOnly` asks of a driver, logging to `log`. Undefined when read-only mode is off. */
+export function readOnlyOptions(config: BugpatrolConfig, log: WriteLog = new WriteLog()): ReadOnlyOptions | undefined {
+  const readOnly = config.app.readOnly;
+  if (!readOnly) return undefined;
+  return {
+    log,
+    websockets: readOnly.websockets,
+    dropFrames: readOnly.dropFrames.map((pattern) => new RegExp(pattern)),
+  };
+}
+
 /**
  * Pick the transport configured for the app while resolving captured
  * endpoints. `source` is the checkout of the build under test, where a CLI
  * app runs its commands; it defaults to `app.source`. An api app needs the
- * `contract` that `startApp` loaded, for its request policy.
+ * `contract` that `startApp` loaded, for its request policy. `writes` is the
+ * log of the read-only proxies that `startApp` started, which the driver
+ * reports with its own blocked writes.
  */
 export function createDriver(
   config: BugpatrolConfig,
@@ -44,8 +58,10 @@ export function createDriver(
   redact: (value: string) => string = (value) => value,
   source: string = resolve(config.app.source),
   contract?: Contract,
+  writes?: WriteLog,
 ): Driver {
   const { platform, connect } = config.app;
+  const readOnly = readOnlyOptions(config, writes);
   if (platform === 'cli') {
     const { env, command, ...cli } = connect.cli;
     return new CliDriver({
@@ -53,6 +69,7 @@ export function createDriver(
       ...(command ? { command: shellCommand(command, vars) } : {}),
       cwd: source,
       redact,
+      ...(readOnly ? { writes: readOnly.log } : {}),
       env: Object.fromEntries(
         Object.entries(env).map(([name, value]) => [name, value.split(PRIVATE_DIR).map(vars).join(PRIVATE_DIR)]),
       ),
@@ -79,7 +96,7 @@ export function createDriver(
     return new ApiDriver({
       url: origin,
       credentials: apiCredentials(connect, vars),
-      policy: requestPolicy(contract, { ...connect, url: origin }),
+      policy: requestPolicy(contract, { ...connect, url: origin, readOnly: Boolean(readOnly) }),
       pacer: new Pacer({ perMinute: connect.perMinute }),
       timeoutMs: connect.timeoutMs,
       redact,
@@ -95,12 +112,13 @@ export function createDriver(
       url: vars(url),
       viewport: { width: viewport.width, height: viewport.height },
       allowedOrigins: connect.allowedOrigins.map(vars),
+      readOnly,
     });
   }
   if (platform === 'electron') {
     const { cdp, launch } = connect;
     const origins = connect.allowedOrigins.map(vars);
-    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins);
+    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly);
     if (!launch || cdp) {
       throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');
     }
@@ -117,6 +135,8 @@ export function createDriver(
     return new ElectronDriver(
       async () => launchElectron({ ...options, directory: await mkdtemp(join(tmpdir(), 'bugpatrol-electron-')) }),
       origins,
+      undefined,
+      readOnly,
     );
   }
   if (!connect.appId) {

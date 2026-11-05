@@ -75,6 +75,7 @@ All requests go through one request policy:
 
 - Writes go out only to a loopback URL (`127.0.0.0/8`, `[::1]`, `localhost`),
   or when `disposable: true`. Any other target gets only GET, HEAD, and OPTIONS.
+  With `app.readOnly` on, every target gets only these.
 - `methods` makes the allowed methods fewer. It never adds a method.
 - Bugpatrol never requests an endpoint in `deny`, or an operation that the spec
   marks with `x-bugpatrol-skip`. A deny glob matches a path template, with an

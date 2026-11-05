@@ -126,6 +126,10 @@ export function errorLines(observation: Observation): string[] {
     ...lines('Failed requests', unique(observation.networkErrors)),
     ...lines('Dialogs (Bugpatrol accepts each one)', unique(observation.dialogs)),
     ...lines('Left the app (Bugpatrol went back)', unique(observation.leftApp)),
+    ...lines(
+      'Writes blocked by read-only mode (the backend never got them, so an error that the app shows for one is not a bug)',
+      observation.blockedWrites ?? [],
+    ),
   ];
 }
 

@@ -1,7 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { type Contract, loadContract } from '@bugpatrol/contract';
-import { type AppCommand, type AppConfig, InfrastructureError } from '@bugpatrol/core';
+import { type AppCommand, type AppConfig, ConfigError, InfrastructureError } from '@bugpatrol/core';
+import { type ReadOnlyProxy, startReadOnlyProxy, WriteLog } from '@bugpatrol/drivers';
 import type { Vars } from './vars.js';
 
 type Options = {
@@ -22,6 +23,8 @@ type RunningApp = {
    * endpoint inventory it has no endpoints, so only reads can go out.
    */
   contract?: Contract;
+  /** Read-only mode: the writes that it blocked, to give to the driver. */
+  writes?: WriteLog;
   stop(): Promise<void>;
 };
 
@@ -124,7 +127,25 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
   }
 
   let contract: Contract | undefined;
+  const writes = app.readOnly ? new WriteLog() : undefined;
+  const proxies: ReadOnlyProxy[] = [];
+  const closeProxies = () => Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
   try {
+    // First, so that setup, connect and the explorer can all use {{NAME}}.
+    for (const [name, value] of Object.entries(app.readOnly?.proxy ?? {})) {
+      const upstream = opts.vars.resolveConfig(value);
+      if (!URL.canParse(upstream) || !/^https?:$/.test(new URL(upstream).protocol))
+        throw new ConfigError(`app.readOnly.proxy.${name} is not an http(s) URL: ${opts.vars.redact(upstream)}`);
+      const proxy = await startReadOnlyProxy(upstream, {
+        log: writes!,
+        websockets: app.readOnly!.websockets,
+        dropFrames: app.readOnly!.dropFrames.map((pattern) => new RegExp(pattern)),
+      });
+      proxies.push(proxy);
+      // Before the URL is a variable, which redaction would hide.
+      report(`Read-only: {{${name}}} is ${proxy.url}, which passes only GET, HEAD and OPTIONS to the backend`);
+      opts.vars.set(name, proxy.url);
+    }
     for (const command of app.setup) {
       await run(command, 'Setup');
     }
@@ -143,11 +164,13 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
     for (const child of children) {
       killGroup(child);
     }
+    await closeProxies();
     throw error;
   }
   return {
     vars: opts.vars,
     ...(contract ? { contract } : {}),
+    ...(writes ? { writes } : {}),
     async stop() {
       for (const command of app.teardown) {
         try {
@@ -167,6 +190,8 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
           clearTimeout(timer);
         }),
       );
+      await closeProxies();
+      if (writes) report(`Read-only mode blocked ${writes.count} write(s) in this run`);
     },
   };
 }

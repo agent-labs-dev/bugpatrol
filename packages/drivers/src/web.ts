@@ -2,6 +2,7 @@ import { ConfigError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
+import { guardBrowser, type ReadOnlyOptions } from './readonly.js';
 import { sampleFile } from './samples.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
@@ -12,6 +13,8 @@ export type WebOptions = {
   headless?: boolean;
   /** Origins besides the app's own that the explorer may be on, e.g. a sign-in provider. */
   allowedOrigins?: string[];
+  /** Only reads reach the backend: other requests are aborted and logged. */
+  readOnly?: ReadOnlyOptions;
 };
 
 /**
@@ -56,15 +59,23 @@ export class WebDriver implements Driver {
 
   constructor(protected readonly options: WebOptions) {}
 
+  get writes() {
+    return this.options.readOnly?.log;
+  }
+
   async connect(): Promise<void> {
     const headless = this.options.headless ?? true;
     // A headless browser draws nothing a patrol needs a GPU for, and on some
     // hosts the GPU process fails to start and every new page then hangs.
     this.browser = await chromium.launch({ headless, args: headless ? ['--disable-gpu'] : [] });
+    const { readOnly } = this.options;
     this.context = await this.browser.newContext({
       viewport: this.options.viewport,
       reducedMotion: 'reduce',
+      // A service worker's own requests bypass the routes that hold back writes.
+      ...(readOnly ? { serviceWorkers: 'block' as const } : {}),
     });
+    if (readOnly) await guardBrowser(this.context, readOnly);
     this.context.on('page', (page) => this.watch(page));
     this.page = await this.context.newPage();
     this.watch(this.page);
@@ -195,6 +206,7 @@ export class WebDriver implements Driver {
       networkErrors: (this.failures.get(page) ?? []).splice(0),
       dialogs: (this.dialogs.get(page) ?? []).splice(0),
       leftApp: this.leftApp.splice(0),
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;
