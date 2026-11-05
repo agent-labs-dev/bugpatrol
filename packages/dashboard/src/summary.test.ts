@@ -100,6 +100,17 @@ describe('projectSummary', () => {
     expect(summaryOf().waiting).toEqual({ total: 3, repeat: 3 });
   });
 
+  it('shows a candidate that a review could not compare as unverified, not as dismissed', () => {
+    writeProjectFixture(root, 'api');
+    appendFileSync(
+      paths.sessionDecisions(root, 'ses_sweep'),
+      `${JSON.stringify({ candidateId: 'can_sweep_3', decision: 'unverified', reason: 'not compared', at: '' })}\n`,
+    );
+    const detail = new AgentReader(root).session('ses_sweep')!;
+    expect(detail.candidates.find((item) => item.id === 'can_sweep_3')?.state).toBe('unverified');
+    expect(detail.report.findings.unverified).toBe(1);
+  });
+
   it('stops counting a candidate whose fingerprint the judge decided in a later run', () => {
     writeProjectFixture(root, 'api');
     const [first] = new AgentReader(root).waiting();
@@ -120,7 +131,15 @@ describe('session report', () => {
     const detail = new AgentReader(root).session('ses_sweep')!;
     // The same endpoints as the coverage totals: the blocked cases test nothing.
     expect(detail.report.sweep).toEqual({ endpoints: 9, pass: 17, fail: 5, blocked: 2 });
-    expect(detail.report.findings).toEqual({ total: 5, repeat: 4, waiting: 4, filed: 1, dismissed: 0, ignored: 0 });
+    expect(detail.report.findings).toEqual({
+      total: 5,
+      repeat: 4,
+      waiting: 4,
+      filed: 1,
+      dismissed: 0,
+      unverified: 0,
+      ignored: 0,
+    });
     expect(detail.report.groups.map((group) => [group.label, group.count, group.assertions])).toEqual([
       ['the status is 500', 2, ['contract:status', 'contract:no-5xx', 'status']],
       ['the body does not match the schema', 1, ['contract:schema']],

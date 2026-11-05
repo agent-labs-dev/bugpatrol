@@ -202,6 +202,7 @@ const STATE_WORDS: Record<SessionCandidate['state'], string> = {
   waiting: 'Wait for the judge',
   filed: 'Filed as issues',
   dismissed: 'Dismissed by the judge',
+  unverified: 'Not compared by a review',
   ignored: 'Not sent to the judge',
 };
 
@@ -221,7 +222,15 @@ export function sessionReport(
     sweep[cell.state]++;
     if (cell.state !== 'blocked') sweep.endpoints.add(key.slice(0, key.lastIndexOf(' ')));
   }
-  const findings = { total: candidates.length, repeat: 0, waiting: 0, filed: 0, dismissed: 0, ignored: 0 };
+  const findings = {
+    total: candidates.length,
+    repeat: 0,
+    waiting: 0,
+    filed: 0,
+    dismissed: 0,
+    unverified: 0,
+    ignored: 0,
+  };
   const groups = new Map<string, FindingGroup>();
   const byCase = new Map<string, number>();
   const byCheck = new Map<string, number>();

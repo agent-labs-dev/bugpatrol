@@ -459,6 +459,34 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('holds an unclear finding back from the normal judge as unverified, not as dismissed', async () => {
+    const f = await fixture();
+    try {
+      const { gh, sticky } = fakeGh();
+      const review = await reviewPullRequest(f.root, f.config, 7, {
+        gh,
+        createRuntime: scripted('unclear').createRuntime,
+        createDriver: screens,
+      });
+      const decisions = (
+        await readFile(join(paths.session(f.root, review.sessions.explorer!), 'decisions.jsonl'), 'utf8')
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(decisions).toMatchObject([
+        {
+          candidateId: review.findings[0]!.candidateId,
+          decision: 'unverified',
+          reason: 'Review of PR #7: not compared with the base build',
+        },
+      ]);
+      expect(sticky()).toContain('**Comparison incomplete**');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('with a name, replaces only the older reviews of the same name', async () => {
     const f = await fixture({ enabled: true, repo: 'o/r' }, { name: 'dashboard' });
     try {

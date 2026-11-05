@@ -1772,6 +1772,7 @@ const CANDIDATE_STATES = {
   waiting: ['', 'Waits for the judge'],
   filed: ['fail', 'Filed as an issue'],
   dismissed: ['info', 'Dismissed'],
+  unverified: ['warn', 'Not compared by a review'],
   ignored: ['info', 'Not sent to the judge'],
 };
 
