@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { access, mkdtemp, readdir, readFile, readlink, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigError, InfrastructureError } from '@bugpatrol/core';
@@ -221,5 +222,31 @@ describe('launchElectron', () => {
         height: 600,
       }),
     ).rejects.toBeInstanceOf(ConfigError);
+    expect(await exists(directory)).toBe(false);
+  });
+
+  it('refuses a fixed CDP port another server already answers on', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bugpatrol-electron-launch-port-'));
+    directories.add(directory);
+    const squatter = createServer((_request, response) => response.end('{}'));
+    await new Promise<void>((resolve) => squatter.listen(0, '127.0.0.1', resolve));
+    const address = squatter.address();
+    if (address === null || typeof address === 'string') throw new Error('squatter has no TCP port');
+    try {
+      await expect(
+        launchElectron({
+          command: 'false',
+          args: [],
+          directory,
+          cwd: directory,
+          cdp: address.port,
+          width: 800,
+          height: 600,
+        }),
+      ).rejects.toThrow(`port ${address.port}`);
+      expect(await exists(directory)).toBe(false);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
   });
 });

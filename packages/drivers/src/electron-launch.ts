@@ -119,13 +119,13 @@ async function waitForReady(
   const awaited = cdp === 'auto' ? 'DevToolsActivePort' : `CDP on port ${cdp}`;
   while (true) {
     if (signal?.aborted) throw new LaunchFailure('launch aborted');
-    const pid = await readPositiveInt(pidFile);
-    const port = cdp === 'auto' ? await readPositiveInt(portFile) : pid && (await cdpAnswers(cdp)) ? cdp : undefined;
-    if (port && pid) return { port, pid };
     const exited = child.get();
     if (exited) {
       throw new LaunchFailure(`child exited before ${awaited} was ready`, exited.error);
     }
+    const pid = await readPositiveInt(pidFile);
+    const port = cdp === 'auto' ? await readPositiveInt(portFile) : pid && (await cdpAnswers(cdp)) ? cdp : undefined;
+    if (port && pid) return { port, pid };
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new LaunchFailure(`timed out waiting for ${awaited}`);
     await wait(Math.min(POLL_MS, remaining));
@@ -206,7 +206,6 @@ export async function launchElectron(options: {
   signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<{ cdpUrl: string; pid: number; close(): Promise<void> }> {
-  validateArguments(options.args);
   const profile = join(options.directory, 'profile');
   const pidFile = join(options.directory, 'electron.pid');
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -216,6 +215,11 @@ export async function launchElectron(options: {
   let stderr = '';
 
   try {
+    validateArguments(options.args);
+    // A fixed-port readiness probe accepts whatever answers there, so a server already on the port would pass as the app.
+    if (cdp !== 'auto' && (await cdpAnswers(cdp))) {
+      throw new LaunchFailure(`port ${cdp} already answers before launch`);
+    }
     await mkdir(options.directory, { recursive: true, mode: 0o700 });
     if (options.userDataDir) {
       await cp(options.userDataDir, profile, { recursive: true });
