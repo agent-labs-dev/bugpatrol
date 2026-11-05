@@ -426,6 +426,8 @@ export async function recheckMerged(
     if (!fix.pr && !fix.branch) continue;
     let issue = await workspace.readIssue(fix.issueId);
     if (!issue || !['new', 'filed', 'fixing', 'fix-proposed', 'waits-for-deploy'].includes(issue.status)) continue;
+    // Fixes share one folder across profiles; only the profile that reproduced the issue can recheck it.
+    if ((issue.evidence?.reproProfile ?? undefined) !== config.profile) continue;
     // The first verdict on the main build is final. A waiting issue has no verdict that counts.
     if (
       issue.status !== 'waits-for-deploy' &&
