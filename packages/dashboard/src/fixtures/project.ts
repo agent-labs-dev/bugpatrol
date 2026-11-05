@@ -10,7 +10,9 @@ export type ProjectShape = 'client' | 'api' | 'monorepo';
 const CLIENT_CONFIG = `version: 1
 app:
   platform: electron
-  start: npm start
+  setup:
+    - run: npm start
+      background: true
 logs:
   - name: api
     kind: file

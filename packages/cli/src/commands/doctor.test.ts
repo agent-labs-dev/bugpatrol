@@ -108,12 +108,14 @@ describe('runChecks', () => {
     }
   });
 
-  it('names where a profile keeps its app map, routines and run state', () => {
+  it('names where a profile keeps its app map, routines and run state', async () => {
+    const root = project();
     const config = {
-      ...parseConfig({ version: 1, app: { connect: { url: 'http://localhost:3000' } } }),
+      ...parseConfig({ version: 1, app: { platform: 'cli' } }),
       profile: 'cli',
     };
-    const check = runChecks(project(), config).find((each) => each.name === 'profile');
+    const loaded = { path: join(root, '.bugpatrol', 'cli.yml'), config };
+    const check = (await runChecks(root, loaded, installed)).find((each) => each.name === 'profile');
     expect(check?.detail).toBe(
       'cli: app map and routines in .bugpatrol/cli/, run state in .bugpatrol/runs/profiles/cli/',
     );
