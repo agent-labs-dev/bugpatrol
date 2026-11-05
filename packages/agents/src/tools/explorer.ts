@@ -546,7 +546,7 @@ export function showsOnly(step: RoutineStep): boolean {
   const command = step.command.replace(/\d?>\s*\/dev\/null|\d>&\d/g, '');
   // `<(cmd)` and `>(cmd)` run a command, and a redirect or substitution writes something.
   if (/>|\$\(|`|<\(/.test(command)) return false;
-  return command.split(/&&|\|\||[;|\n]/).every((part) => {
+  return command.split(/&&|\|\||[;|&\n]/).every((part) => {
     const [program = '', ...args] = part.trim().split(/\s+/);
     if (program === '') return true;
     // Only a sed script that prints lines is a read, such as `-n 300,420p` or `-n '/re/p'`. Anything
