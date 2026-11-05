@@ -83,6 +83,66 @@ describe('Maestro data conversion', () => {
     expect(elements.some((element) => element.name === 'Your classes')).toBe(true);
   });
 
+  it('lists Android icon buttons by their content description and gives clickable nodes a control role', () => {
+    // The shape Maestro's inspect_screen sends for a Compose screen on Android:
+    // `a11y` abbreviates content-desc there, not accessibilityText as on iOS.
+    const android = {
+      ui_schema: {
+        platform: 'android',
+        abbreviations: {
+          b: 'bounds',
+          txt: 'text',
+          rid: 'resource-id',
+          a11y: 'content-desc',
+          hint: 'hintText',
+          cls: 'class',
+          scroll: 'scrollable',
+          c: 'children',
+        },
+        defaults: {
+          enabled: true,
+          clickable: false,
+          focused: false,
+          selected: false,
+          checked: false,
+          scrollable: false,
+          txt: '',
+          hint: '',
+        },
+      },
+      elements: [
+        {
+          b: '[0,0][1080,2400]',
+          c: [
+            { b: '[900,140][1040,280]', a11y: 'Search sessions', clickable: true, cls: 'android.view.View' },
+            { b: '[40,140][180,280]', a11y: 'Back to sessions', clickable: true, cls: 'android.view.View' },
+            {
+              b: '[0,300][540,420]',
+              clickable: true,
+              selected: true,
+              cls: 'android.view.View',
+              c: [{ b: '[200,330][340,390]', txt: 'live', cls: 'android.widget.TextView' }],
+            },
+            { b: '[40,500][1040,560]', txt: 'No sessions yet', cls: 'android.widget.TextView' },
+          ],
+        },
+      ],
+    };
+    const { elements } = flattenHierarchy(android);
+    expect(elements.find((element) => element.name === 'Search sessions')).toMatchObject({
+      role: 'button',
+      interactive: true,
+    });
+    expect(elements.find((element) => element.name === 'Back to sessions')).toMatchObject({ role: 'button' });
+    expect(elements.filter((element) => element.name === 'live')).toEqual([
+      expect.objectContaining({ role: 'button', interactive: true }),
+    ]);
+    expect(elements.find((element) => element.name === 'No sessions yet')).toMatchObject({
+      role: 'text',
+      interactive: false,
+    });
+  });
+
   it('builds stable tap YAML and safely quotes input text', () => {
     expect(tapCommand({ testId: 'save:button' })).toContain('id: "save:button"');
     expect(tapCommand({ name: 'Save (2)?' })).toContain(`text: ${yamlString(regexText('Save (2)?'))}`);
