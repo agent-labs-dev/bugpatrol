@@ -64,13 +64,56 @@ export async function pullSource(
       return false;
     }
     await git(source, 'fetch', '-q', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
+    const from = await checkoutOf(source);
     await git(source, 'checkout', '-q', '--detach', `${remote}/${branch}`);
-    onLog?.(`Pulled ${target} at ${await git(source, 'rev-parse', '--short', 'HEAD')}.`);
+    const at = await git(source, 'rev-parse', '--short', 'HEAD');
+    onLog?.(
+      from?.branch
+        ? `Pulled ${target} at ${at}, a detached HEAD: the checkout was on branch ${from.branch}.`
+        : `Pulled ${target} at ${at}.`,
+    );
     return true;
   } catch (error) {
     const reason = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
     onLog?.(`Did not pull ${target}: ${reason}. The cycle uses the current checkout.`);
     return false;
+  }
+}
+
+/** Where a checkout is: its commit, and its branch unless HEAD is detached. */
+type Checkout = { commit: string; branch?: string };
+
+async function checkoutOf(source: string): Promise<Checkout | undefined> {
+  try {
+    const commit = await git(source, 'rev-parse', 'HEAD');
+    const branch = await git(source, 'symbolic-ref', '--short', '-q', 'HEAD').catch(() => '');
+    return { commit, ...(branch && { branch }) };
+  } catch {
+    return undefined;
+  }
+}
+
+const describeCheckout = (at: Checkout) => (at.branch ? `branch ${at.branch}` : `commit ${at.commit.slice(0, 7)}`);
+
+/**
+ * Puts the source checkout back where it was when the patrol started, after
+ * pullSource moved it, so a one-off cycle in the checkout where someone works
+ * does not leave their branch behind a detached HEAD. A checkout that git
+ * refuses, for example over a local change, stays as it is, and the log says
+ * how to go back.
+ */
+async function restoreSource(source: string, from: Checkout, onLog?: (message: string) => void): Promise<void> {
+  const now = await checkoutOf(source);
+  if (!now || (now.commit === from.commit && now.branch === from.branch)) return;
+  const tested = now.commit.slice(0, 7);
+  try {
+    await git(source, 'checkout', '-q', ...(from.branch ? [from.branch] : ['--detach', from.commit]));
+    onLog?.(`Put the checkout back on ${describeCheckout(from)}. The cycle tested ${tested}.`);
+  } catch (error) {
+    const reason = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
+    onLog?.(
+      `Left HEAD detached at ${tested}; it was on ${describeCheckout(from)}. Run \`git checkout ${from.branch ?? from.commit}\` in ${source} to go back. Git said: ${reason}`,
+    );
   }
 }
 
@@ -172,6 +215,8 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   // with --once tests only new commits. --force tests the first cycle anyway.
   let tested = options.force ? undefined : previous?.commit;
   const shared = config.agents.patrol.state === 'branch';
+  const source = resolve(root, config.app.source);
+  const startedAt = config.agents.patrol.pull ? await checkoutOf(source) : undefined;
   const branch = stateBranch(config.profile);
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
@@ -379,6 +424,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
     }
   } finally {
+    if (startedAt) await restoreSource(source, startedAt, options.onLog);
     // No cycle follows, so the dashboard must not show a next patrol.
     await workspace.setPatrol({ state: 'stopped', nextAt: undefined });
     process.off('SIGINT', onSignal);

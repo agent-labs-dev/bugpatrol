@@ -159,6 +159,9 @@ export const COMMAND_HELP: Record<string, string> = {
   The fixer and GitHub steps run only when you turn them on.
   Explore and judge run only when the commit changed since the last full cycle. The fixes, retests,
   publish, and CI checks run in each cycle.
+  Each cycle checks out the latest agents.patrol.pull commit (default origin/main) as a detached HEAD.
+  When the patrol stops, it puts the checkout back on the branch it started from.
+  Set agents.patrol.pull: false to test the checkout as it is.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
   --state <s>     local | branch: share the state on the bugpatrol-state branch (default: agents.patrol.state)
