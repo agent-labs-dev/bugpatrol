@@ -92,6 +92,7 @@ describe('a command that only shows something', () => {
       'git log --oneline -5',
       'git branch --list',
       'git branch -a',
+      'git --no-pager diff --stat --oneline HEAD~1',
       'uniq in.txt',
       'tree src',
     ])
@@ -107,6 +108,10 @@ describe('a command that only shows something', () => {
       'cat $(make path)',
       'git checkout main',
       'git branch foo',
+      'git --no-pager diff --no-index --output=output.diff old.txt new.txt',
+      'git log --outp=log.txt',
+      'git diff --ext-diff',
+      'git grep -O foo',
       'uniq in.txt out.txt',
       'tree -o out.txt src',
       "sed -n '1w out.txt' file",

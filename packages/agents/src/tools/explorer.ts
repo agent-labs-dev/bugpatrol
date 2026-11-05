@@ -512,6 +512,17 @@ const READERS = new Set([
 ]);
 /** git subcommands that only read the repository. `branch` reads only with a list flag. */
 const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', 'ls-files', 'rev-parse']);
+/**
+ * Options that make a reading git subcommand write a file or run a program:
+ * `--output=<file>`, `--ext-diff`, and `-O`/`--open-files-in-pager` of grep.
+ * git accepts any unambiguous prefix of a long option, so a prefix counts too.
+ */
+const GIT_WRITING_OPTIONS = ['--output', '--ext-diff', '--open-files-in-pager'];
+const gitWrites = (arg: string) => {
+  const name = arg.split('=')[0]!;
+  if (/^-[^-]*O/.test(name)) return true;
+  return name.length > 2 && GIT_WRITING_OPTIONS.some((option) => option.startsWith(name));
+};
 /** `git branch` lists only with these flags: any other word makes or moves a branch. */
 const BRANCH_LIST_FLAGS =
   /^--(list|show-current|contains|merged|no-merged|points-at|sort|format|verbose|all|remotes)$|^-[alrv]+$/;
@@ -556,7 +567,7 @@ export function showsOnly(step: RoutineStep): boolean {
     if (program === 'git') {
       const sub = args.find((arg) => !arg.startsWith('-')) ?? '';
       if (sub === 'branch') return args.slice(1).every((arg) => BRANCH_LIST_FLAGS.test(arg));
-      return GIT_READERS.has(sub);
+      return GIT_READERS.has(sub) && !args.some(gitWrites);
     }
     return READERS.has(program);
   });
