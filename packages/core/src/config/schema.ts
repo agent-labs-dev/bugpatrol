@@ -3,7 +3,7 @@ import type { AgentRole } from '../types/agents.js';
 import { HTTP_METHODS } from '../types/endpoint.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
 
-export const viewportSchema = z.object({
+export const viewportSchema = z.strictObject({
   name: z.string(),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
@@ -12,11 +12,11 @@ export const viewportSchema = z.object({
 
 export const actionSchema: z.ZodType<Record<string, unknown>> = z.record(z.unknown());
 
-export const runSchema = z.object({
+export const runSchema = z.strictObject({
   command: z.string(),
   url: z.string().url(),
   ready: z
-    .object({
+    .strictObject({
       selectors: z.array(z.string()).default([]),
       forbidConsoleErrors: z.boolean().default(true),
       timeoutMs: z.number().int().positive().default(60_000),
@@ -25,7 +25,7 @@ export const runSchema = z.object({
   seeds: z.array(z.string()).default([]),
 });
 
-export const maskSchema = z.object({
+export const maskSchema = z.strictObject({
   selector: z.string(),
   screen: z.string().optional(),
   reason: z.string().optional(),
@@ -37,11 +37,11 @@ export const maskSchema = z.object({
  * the build went green and it stopped catching anything (spec 7.6).
  */
 export const toleranceSchema = z
-  .object({
+  .strictObject({
     default: z.literal('exact').default('exact'),
     regions: z
       .array(
-        z.object({
+        z.strictObject({
           screen: z.string(),
           selector: z.string(),
           mode: z.enum(['exact', 'perceptual']).default('perceptual'),
@@ -54,18 +54,18 @@ export const toleranceSchema = z
   .default({});
 
 export const decisionsSchema = z
-  .object({
+  .strictObject({
     model: z
-      .object({
+      .strictObject({
         via: z.enum(['auto', 'openrouter', 'vercel', 'openai', 'anthropic', 'custom']).default('auto'),
         name: z.string().default(''),
       })
       .default({}),
     confidence: z
-      .object({ high: z.number().min(0).max(1).default(0.85), low: z.number().min(0).max(1).default(0.55) })
+      .strictObject({ high: z.number().min(0).max(1).default(0.85), low: z.number().min(0).max(1).default(0.55) })
       .default({}),
     budget: z
-      .object({
+      .strictObject({
         perRunUsd: z.number().nonnegative().default(0.5),
         visionSampleRate: z.number().min(0).max(1).default(0.05),
         allowFrontier: z.boolean().default(true),
@@ -75,7 +75,7 @@ export const decisionsSchema = z
   .default({});
 
 export const crawlSchema = z
-  .object({
+  .strictObject({
     maxScreens: z.number().int().positive().default(500),
     maxDepth: z.number().int().positive().default(6),
     maxActionsPerScreen: z.number().int().positive().default(15),
@@ -93,7 +93,7 @@ export const crawlSchema = z
   .default({});
 
 export const surfacesSchema = z
-  .object({
+  .strictObject({
     checks: z.boolean().default(true),
     prComment: z.boolean().default(true),
     issues: z.boolean().default(true),
@@ -104,7 +104,7 @@ export const surfacesSchema = z
   .default({});
 
 export const productionSchema = z
-  .object({
+  .strictObject({
     detect: z.boolean().default(true),
     /** There is no flag that silently overrides this (spec 1.2). */
     allowMutations: z.boolean().default(false),
@@ -112,7 +112,7 @@ export const productionSchema = z
   .default({});
 
 export const determinismSchema = z
-  .object({
+  .strictObject({
     /** Pinned by digest. A digest change invalidates baselines (spec 7.1). */
     image: z.string().default(''),
     freezeClockAt: z.string().default('2026-01-01T00:00:00.000Z'),
@@ -121,7 +121,7 @@ export const determinismSchema = z
     randomSeed: z.number().int().default(1),
     /** Capture only once two consecutive frames are byte-identical (spec 7.3). */
     stabilityGate: z
-      .object({
+      .strictObject({
         consecutiveIdenticalFrames: z.number().int().min(2).default(2),
         intervalMs: z.number().int().positive().default(120),
         timeoutMs: z.number().int().positive().default(10_000),
@@ -139,7 +139,7 @@ export const determinismSchema = z
  * explorer's `{{NAME}}` placeholders can use them. Captured values are treated
  * as secrets: they are redacted from every log and never sent to a model.
  */
-export const appCommandSchema = z.object({
+export const appCommandSchema = z.strictObject({
   run: z.string(),
   cwd: z.string().optional(),
   capture: z.record(z.string()).default({}),
@@ -155,14 +155,14 @@ export const appCommandSchema = z.object({
 });
 
 export const appSchema = z
-  .object({
+  .strictObject({
     platform: z.enum(['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli']).default('web'),
     /** The source repository the fixer edits. Relative to the config file. */
     source: z.string().default('.'),
     setup: z.array(appCommandSchema).default([]),
     teardown: z.array(appCommandSchema).default([]),
     connect: z
-      .object({
+      .strictObject({
         /**
          * Web, API: defaults to run.url. `${NAME}` or `{{NAME}}` takes a setup
          * capture or a name in `secrets` (read from the environment). Any
@@ -181,9 +181,9 @@ export const appSchema = z
          * header together. Without `other`, the cross-user cases are blocked.
          */
         credentials: z
-          .object({
-            self: z.object({ headers: z.record(z.string()) }),
-            other: z.object({ headers: z.record(z.string()) }).optional(),
+          .strictObject({
+            self: z.strictObject({ headers: z.record(z.string()) }),
+            other: z.strictObject({ headers: z.record(z.string()) }).optional(),
           })
           .optional(),
         /**
@@ -213,7 +213,7 @@ export const appSchema = z
         spec: z.string().optional(),
         /** API: the error statuses every endpoint may return, and the JSON Schema of their body. */
         errors: z
-          .object({
+          .strictObject({
             statuses: z.array(z.number().int().min(400).max(599)).default([]),
             schema: z.record(z.unknown()).optional(),
           })
@@ -226,7 +226,7 @@ export const appSchema = z
          * report the same commit.
          */
         version: z
-          .object({
+          .strictObject({
             path: z.string().startsWith('/'),
             pointer: z.string().startsWith('/'),
           })
@@ -235,7 +235,7 @@ export const appSchema = z
         preview: z.string().optional(),
         /** Linux desktop: a private Xvfb/DBus session; never the host display. */
         cua: z
-          .object({
+          .strictObject({
             command: z.string().default('cua-driver'),
             windowManager: z.string().default('openbox'),
             launch: z.string().min(1),
@@ -243,7 +243,7 @@ export const appSchema = z
             args: z.array(z.string()).default([]),
             windowTitle: z.string().optional(),
             viewer: z
-              .object({
+              .strictObject({
                 enabled: z.boolean().default(true),
                 port: z.number().int().min(0).max(65535).default(0),
                 allowTakeover: z.boolean().default(false),
@@ -261,7 +261,7 @@ export const appSchema = z
         cdp: z.string().optional(),
         /** Electron: launch the app in a private Xvfb display instead of connecting to an existing CDP endpoint. */
         launch: z
-          .object({
+          .strictObject({
             /** The Electron executable or wrapper command. */
             command: z.string().min(1),
             /** Arguments passed to the app after Bugpatrol's private-profile and CDP arguments. */
@@ -274,7 +274,6 @@ export const appSchema = z
             width: z.number().int().positive().default(1280),
             height: z.number().int().positive().default(800),
           })
-          .strict()
           .optional(),
         /**
          * CLI: each command runs in a terminal of `cols` by `rows` from the
@@ -285,7 +284,7 @@ export const appSchema = z
          * the driver starts on connect, so the explorer begins in it.
          */
         cli: z
-          .object({
+          .strictObject({
             command: z.string().min(1).optional(),
             timeoutMs: z.number().int().positive().max(600_000).default(60_000),
             cols: z.number().int().min(20).max(500).default(80),
@@ -312,7 +311,7 @@ export const appSchema = z
  * with no assumption about the language or the log library.
  */
 export const logSourceSchema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     name: z.string(),
     kind: z.literal('file'),
     /** The log file, relative to the project root. */
@@ -326,7 +325,7 @@ export const logSourceSchema = z.discriminatedUnion('kind', [
       .positive()
       .default(1024 * 1024),
   }),
-  z.object({
+  z.strictObject({
     name: z.string(),
     kind: z.literal('stream'),
     /** A shell command whose stdout is the log stream. */
@@ -334,7 +333,7 @@ export const logSourceSchema = z.discriminatedUnion('kind', [
     /** Keep only lines matching this pattern. */
     match: z.string().optional(),
   }),
-  z.object({
+  z.strictObject({
     name: z.string(),
     kind: z.literal('webhook'),
     /** The loopback port to listen on. 0 picks a free one. Default: 0. */
@@ -346,7 +345,7 @@ export const logSourceSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-const modelRuntimeSchema = z.object({
+const modelRuntimeSchema = z.strictObject({
   runtime: z.literal('model'),
   via: z.enum(['openrouter', 'vercel', 'openai', 'anthropic', 'custom']).default('openrouter'),
   model: z.string().default('z-ai/glm-5.3-flash'),
@@ -354,7 +353,7 @@ const modelRuntimeSchema = z.object({
   endpoint: z.string().optional(),
 });
 
-const cliRuntimeSchema = z.object({
+const cliRuntimeSchema = z.strictObject({
   runtime: z.literal('cli'),
   /** A local agent CLI. Bugpatrol fills in the command for the role. */
   agent: z.enum(CLI_AGENTS).optional(),
@@ -428,11 +427,11 @@ export const AGENT_CHECKS = [
 export type AgentCheck = (typeof AGENT_CHECKS)[number];
 
 export const agentsSchema = z
-  .object({
+  .strictObject({
     /** Automatic checks on each recorded screen, for example [usability/contrast, usability/tap-target]. */
     checks: z.array(z.enum(AGENT_CHECKS)).default([]),
     memory: z
-      .object({
+      .strictObject({
         enabled: z.boolean().default(true),
         maxPerSession: z.number().int().positive().default(5),
         reflectMaxSteps: z.number().int().positive().default(10),
@@ -440,7 +439,7 @@ export const agentsSchema = z
       })
       .default({}),
     explorer: z
-      .object({
+      .strictObject({
         ...roleBase,
         use: runtimeFor('explorer', { runtime: 'model' }),
         /** Full coverage needs many actions: one step is one tool call. */
@@ -448,13 +447,13 @@ export const agentsSchema = z
       })
       .default({}),
     judge: z
-      .object({
+      .strictObject({
         ...roleBase,
         use: runtimeFor('judge', { runtime: 'model' }),
       })
       .default({}),
     fixer: z
-      .object({
+      .strictObject({
         ...roleBase,
         use: runtimeFor('fixer', { runtime: 'cli', agent: 'claude' }),
         /** Off until a team opts in: a fixer writes code. */
@@ -469,7 +468,7 @@ export const agentsSchema = z
         attempts: z.number().int().positive().default(3),
         /** After a fix, start the app from the fix worktree and repeat the issue's flow. */
         retest: z
-          .object({
+          .strictObject({
             enabled: z.boolean().default(true),
             /** Shell command run in the worktree before the app starts, e.g. `bun install`. */
             prepare: z.string().optional(),
@@ -490,7 +489,7 @@ export const agentsSchema = z
       })
       .default({}),
     github: z
-      .object({
+      .strictObject({
         enabled: z.boolean().default(false),
         repo: z.string().optional(),
         pullRequests: z.enum(['draft', 'ready']).default('ready'),
@@ -501,7 +500,7 @@ export const agentsSchema = z
         prScope: z.string().optional(),
         /** After a PR opens, wait for its CI checks, and let the fixer fix a failed check. */
         ci: z
-          .object({
+          .strictObject({
             enabled: z.boolean().default(true),
             /** Fixer attempts for each PR before Bugpatrol gives up and tells the team. */
             attempts: z.number().int().nonnegative().default(2),
@@ -513,7 +512,7 @@ export const agentsSchema = z
       .default({}),
     /** `bugpatrol review <pr>`. */
     review: z
-      .object({
+      .strictObject({
         /**
          * Tells this review apart from another Bugpatrol review of the same pull
          * request, for example one per app of a monorepo. Each name keeps its own
@@ -532,7 +531,7 @@ export const agentsSchema = z
          */
         benches: z
           .array(
-            z.object({
+            z.strictObject({
               name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lowercase letters, digits and dashes'),
               command: z.string().min(1),
               /** What the number means, with its unit: 'p99 latency in ms'. */
@@ -582,7 +581,7 @@ export const agentsSchema = z
      * explorer. A run stops at either limit, and the next run resumes there.
      */
     sweep: z
-      .object({
+      .strictObject({
         /** The most requests in one run. A second replay of a failure can go over by one case. */
         maxRequests: z.number().int().positive().default(600),
         timeoutMs: z
@@ -593,7 +592,7 @@ export const agentsSchema = z
       })
       .default({}),
     patrol: z
-      .object({
+      .strictObject({
         intervalMinutes: z.number().positive().default(30),
         /** Stop after this many cycles; 0 means run until stopped. */
         cycles: z.number().int().nonnegative().default(0),
@@ -617,7 +616,7 @@ export const agentsSchema = z
   .default({});
 
 export const bugpatrolConfigSchema = z
-  .object({
+  .strictObject({
     version: z.literal(1),
     /** Web only: how to start and reach the app. Other platforms use `app`. */
     run: runSchema.optional(),
@@ -641,7 +640,7 @@ export const bugpatrolConfigSchema = z
         { name: 'mobile', width: 390, height: 844, deviceScaleFactor: 1 },
       ]),
     scope: z
-      .object({
+      .strictObject({
         include: z.array(z.string()).default(['src/**', 'app/**']),
         ignore: z.array(z.string()).default(['**/*.stories.tsx', '**/*.test.ts', '**/generated/**']),
       })

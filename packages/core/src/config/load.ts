@@ -41,10 +41,40 @@ export function loadConfig(
 export function parseConfig(raw: unknown, source = '<inline>'): BugpatrolConfig {
   const result = bugpatrolConfigSchema.safeParse(raw);
   if (!result.success) {
-    const issues = result.error.issues.map((i) => `  ${i.path.join('.') || '<root>'}: ${i.message}`).join('\n');
+    const issues = result.error.issues
+      .flatMap((issue) => {
+        const where = issue.path.join('.') || '<root>';
+        if (issue.code !== 'unrecognized_keys') return [`  ${where}: ${issue.message}`];
+        return issue.keys.map((key) => `  ${where}: Unknown key \`${key}\`.${unknownKeyHint(issue.path, key)}`);
+      })
+      .join('\n');
     throw new ConfigError(`Invalid config in ${source}:\n${issues}`);
   }
   return result.data;
+}
+
+/** The supported field for a key that people write in a setup or teardown command. */
+const COMMAND_KEY_HINTS: Record<string, string> = {
+  readyUrl: '`readyWhen`: a regex that the command output matches once the app is ready',
+  ready: '`readyWhen`: a regex that the command output matches once the app is ready',
+  waitFor: '`readyWhen`: a regex that the command output matches once the app is ready',
+  command: '`run`',
+  cmd: '`run`',
+  timeout: '`timeoutMs`',
+};
+
+/**
+ * Bugpatrol rejects a key that it does not read, so a typo never drops a
+ * setting in silence. The hint names the supported field when there is one.
+ */
+function unknownKeyHint(path: (string | number)[], key: string): string {
+  if (path.length === 0 && key === 'profile')
+    return ' The profile comes from the file name of `--config`, so remove the key or rename the file.';
+  const inCommand = path.length === 3 && path[0] === 'app' && (path[1] === 'setup' || path[1] === 'teardown');
+  const hint = inCommand ? COMMAND_KEY_HINTS[key] : undefined;
+  return hint
+    ? ` Use ${hint}.`
+    : ' Bugpatrol does not read it: remove it, or check its spelling in docs/configuration.md.';
 }
 
 function mergeShallow(raw: unknown, overrides: Partial<BugpatrolConfig>): unknown {
