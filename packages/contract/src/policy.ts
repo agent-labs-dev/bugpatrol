@@ -72,7 +72,7 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
 }
 
 /** A URL that does not parse, for example with a placeholder still in it, is not loopback. */
-function isLoopback(url: string): boolean {
+export function isLoopback(url: string): boolean {
   let hostname: string;
   try {
     ({ hostname } = new URL(url));

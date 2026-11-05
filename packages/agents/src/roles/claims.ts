@@ -520,7 +520,11 @@ async function replayClaims(
         },
       });
       // The bug shows only at the end of a full replay.
-      const bug = routine.bug && result.ok ? { bug: !bugMisses(routine.bug, last!, errors).length } : {};
+      // A check holds the session's redaction, so it is compared against a redacted replay.
+      const bug =
+        routine.bug && result.ok
+          ? { bug: !bugMisses(routine.bug, vars.redact(last) as Observation, vars.redact(errors) as string[]).length }
+          : {};
       // Like the bug check, the assertions hold only after a full replay.
       const assertions = checked.length && result.ok ? { assertions: checked } : {};
       const recorded = recording ? await saveRecording(ctx, current, join(dir, build), what) : undefined;

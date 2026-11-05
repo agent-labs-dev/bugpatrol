@@ -27,6 +27,7 @@ export class FakeDriver implements Driver {
   connected = false;
   closed = false;
   current: string;
+  private viewportSize = { width: 100, height: 100 };
   failAt?: number;
   startRecording?: () => Promise<void>;
   stopRecording?: (name: string) => Promise<string>;
@@ -80,7 +81,7 @@ export class FakeDriver implements Driver {
       location: `fake://${this.current}`,
       title: this.current,
       capture: { kind: 'image', png: PNG.sync.write(png) },
-      viewport: { width: 100, height: 100, scale: 1 },
+      viewport: { ...this.viewportSize, scale: 1 },
       elements: screen.elements,
       volatileRegions: [],
       consoleErrors: screen.consoleErrors ?? [],
@@ -108,7 +109,10 @@ export class FakeDriver implements Driver {
       const element = this.find(action.ref, action.locator);
       if (!element) return { ok: false, error: 'element not found' };
       this.current = this.screens[this.current]?.next?.[element.ref] ?? this.current;
-      return { ok: true, step: { kind: 'tap', target: locator(element) } };
+      return {
+        ok: true,
+        step: { kind: 'tap', target: locator(element), ...(action.dialog ? { dialog: action.dialog } : {}) },
+      };
     }
     if (action.kind === 'type') {
       const element = this.find(action.ref, action.locator);
@@ -137,6 +141,10 @@ export class FakeDriver implements Driver {
       if (this.screens[target]) this.current = target;
       return { ok: true, step: { kind: 'open', url: action.url } };
     }
+    if (action.kind === 'viewport') {
+      this.viewportSize = { width: action.width, height: action.height };
+      return { ok: true, step: action };
+    }
     if (action.kind === 'window') return { ok: true, step: { kind: 'window', match: action.match } };
     if (action.kind === 'upload') return { ok: false, error: 'Uploads are supported on web and Electron only' };
     if (action.kind === 'wait') return { ok: true, step: { kind: 'wait', ms: action.ms } };
@@ -153,7 +161,7 @@ export class FakeDriver implements Driver {
       screenId,
       url: observation.location,
       title: observation.title,
-      viewport: { name: this.platform, width: 100, height: 100 },
+      viewport: { name: this.platform, ...this.viewportSize },
       elements: observation.elements.map((element) => ({
         selector: element.testId ?? element.ref,
         box: element.box,

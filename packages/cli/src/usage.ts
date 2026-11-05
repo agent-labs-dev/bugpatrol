@@ -4,6 +4,7 @@ Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
   bugpatrol doctor                        verify env: pinned image, fonts, browser, network, disk
+  bugpatrol adopt --config <file>         move the shared app map and routines into that config's folder
 
 Recon
   bugpatrol recon [--review] [--max-screens N] [--budget-usd X]
@@ -125,6 +126,11 @@ export const COMMAND_HELP: Record<string, string> = {
   --claims        test what the pull request says it does, also when agents.review.claims is off
   --steps N       the step limit of the explorer (default: agents.explorer.maxSteps)
 `,
+  adopt: `bugpatrol adopt --config .bugpatrol/<name>.yml
+  Move .bugpatrol/appmap.json, endpoints.yml and the routines in .bugpatrol/routines/ into .bugpatrol/<name>/.
+  Use it once, for a config that kept those files in .bugpatrol/ before profiles existed.
+  Selecting a config never moves them, since no file says which config they belong to.
+  A file that .bugpatrol/<name>/ already holds stays, and its shared copy too.`,
   promote: `bugpatrol promote <pr> <claim>...
   Keep the routine of each proven claim of a merged pull request in .bugpatrol/routines/, as pr-<pr>-<claim>.
   With --config .bugpatrol/<name>.yml, the routines go to .bugpatrol/<name>/routines/.

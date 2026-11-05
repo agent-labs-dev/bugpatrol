@@ -37,6 +37,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 
 | Command | What it does |
 | --- | --- |
+| `bugpatrol adopt --config .bugpatrol/<name>.yml` | Move the app map, endpoint inventory and routines of `.bugpatrol/` into the folder of that config, for a config that kept them there before profiles existed. Refer to [Configuration](configuration.md#migrating-an-existing-non-default-config) |
 | `bugpatrol dashboard [--port N]` | The local dashboard, on 127.0.0.1 |
 | `bugpatrol doctor` | Check that this machine can run the deterministic gate |
 | `bugpatrol init [--yes] [--agent a]` | Detect the app and the LLMs, ask for each agent's provider, and write `.bugpatrol/bugpatrol.yml` and `.bugpatrol/instructions.md` |

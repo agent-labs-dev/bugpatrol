@@ -330,6 +330,7 @@ export class Workspace {
       version: 1,
       id,
       role,
+      ...(this.profile && { profile: this.profile }),
       pid: process.pid,
       startedAt: now.toISOString(),
       status: 'running',

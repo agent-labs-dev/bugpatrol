@@ -164,10 +164,13 @@ spec skips, with the reason, and the cases that no run tested yet.
 The evidence of an API is text, not a screenshot
 ([ADR 0008](adr/0008-api-evidence-is-text.md)). Each request gives an HTTP
 exchange: the request line, the headers that the step set, the status, the
-allowed response headers, the body, and the latency. The api driver starts no
-browser. The models, the issues, and the dashboard show the same text. A body
-over 1 MiB is not kept: the evidence records its size. Requests stay on the
-configured origin, and Bugpatrol does not follow redirects.
+allowed response headers, the body, and the latency. For a
+`text/event-stream` response, the driver keeps a bounded text prefix and
+parses its events into the exchange. It stops after the byte, time, or event
+limit and cancels the connection. The api driver starts no browser. The
+models, the issues, and the dashboard show the same text. A body over 1 MiB is
+not kept: the evidence records its size. Requests stay on the configured
+origin, and Bugpatrol does not follow redirects.
 
 The explorer's `request` tool takes a method, a relative URL, optional headers,
 a string body, and `as` (`self`, `other`, or `none`). To use an id that a

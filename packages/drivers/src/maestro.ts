@@ -572,6 +572,8 @@ export class MaestroDriver implements Driver {
         case 'window':
           await this.switchWindow();
           break;
+        case 'viewport':
+          throw new Error('Viewport changes are supported on web and Electron only');
       }
       return { ok: true, step: stepFor(action, target.element, target.locator) };
     } catch (error) {

@@ -10,6 +10,18 @@ npx bugpatrol              # explore, judge, fix, retest, and publish, again and
 npx bugpatrol dashboard    # look at the results on http://127.0.0.1:4311
 ```
 
+## Other ways to run it
+
+If npx does not work in your repository, use another launcher:
+
+```sh
+pnpm dlx bugpatrol         # pnpm, no install needed
+bunx bugpatrol             # Bun, no install needed
+npm install -g bugpatrol   # install once, then run `bugpatrol`
+```
+
+npx can fail in a repository whose package.json `overrides` has a `//` comment key, because npm parses that file before Bugpatrol starts, and the other launchers avoid it.
+
 ## Set up with your agent
 
 Install the skill for your coding agent, then ask the agent to "set up Bugpatrol for this repo":

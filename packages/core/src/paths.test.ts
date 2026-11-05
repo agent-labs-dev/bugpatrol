@@ -1,14 +1,15 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config/load.js';
 import {
+  adoptHint,
+  adoptSharedFiles,
   agentFiles,
   findProjectRoot,
   instructionsPath,
   legacyLayout,
-  moveProfileFiles,
   moveRoutines,
   paths,
   profileOf,
@@ -77,20 +78,29 @@ describe('profiles', () => {
     expect(() => profileOf(root, '.bugpatrol/Routines.yml')).toThrow(/cannot use as a folder/);
   });
 
-  it('copies the shared app map, routines and endpoints into a profile once, when it has none', () => {
+  it('moves the shared app map, routines and endpoints into a profile only when adopted', () => {
     const root = project();
+    // A repo that used only `--config .bugpatrol/api.yml` before profiles: no default config.
+    rmSync(paths.config(root));
     mkdirSync(paths.routines(root), { recursive: true });
     writeFileSync(paths.appMap(root), '{}');
     writeFileSync(paths.endpointInventory(root), 'endpoints: []');
     writeFileSync(paths.routine(root, 'enter-app'), '{}');
-    const message = moveProfileFiles(root, 'api');
-    expect(message).toMatch(/Copied the app map/);
+    expect(adoptHint(root, 'api', '.bugpatrol/api.yml')).toMatch(/bugpatrol adopt --config \.bugpatrol\/api\.yml/);
+    expect(existsSync(paths.appMap(root))).toBe(true);
+    expect(adoptSharedFiles(root, 'api')).toMatch(/Moved the app map/);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'appmap.json'))).toBe(true);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'routines', 'enter-app.json'))).toBe(true);
     expect(existsSync(join(root, '.bugpatrol', 'api', 'endpoints.yml'))).toBe(true);
-    // The second run leaves the profile alone, since it already has its files.
-    expect(moveProfileFiles(root, 'api')).toBeUndefined();
-    expect(moveProfileFiles(root)).toBeUndefined();
+    expect(adoptHint(root, 'api', '.bugpatrol/api.yml')).toBeUndefined();
+    expect(adoptSharedFiles(root, 'api')).toMatch(/Nothing to adopt/);
+  });
+
+  it('gives no adopt hint while a default config owns the shared files', () => {
+    const root = project();
+    writeFileSync(paths.appMap(root), '{}');
+    expect(adoptHint(root, 'cli', '.bugpatrol/cli.yml')).toBeUndefined();
+    expect(adoptHint(root, undefined, '.bugpatrol/bugpatrol.yml')).toBeUndefined();
   });
 
   it('lists the app maps and routine folders of every profile, and nothing in runs/', () => {

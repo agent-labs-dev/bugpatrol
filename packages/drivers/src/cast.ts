@@ -1,10 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import * as unicode11Module from '@xterm/addon-unicode11';
 import * as xtermModule from '@xterm/headless';
 import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
 import * as gifenc from 'gifenc';
 import { PNG } from 'pngjs';
-import { secretSpans, withoutEscapes } from './secret-spans.js';
+import { type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
 import { GIF_MAX_BYTES } from './video.js';
 
 /**
@@ -69,6 +70,9 @@ const GIFEncoder = gifenc.GIFEncoder ?? gifenc.default.GIFEncoder;
 type XtermPackage = typeof xtermModule & { default?: typeof xtermModule };
 const xtermPackage = xtermModule as XtermPackage;
 const XtermTerminal = (xtermPackage.default ?? xtermPackage).Terminal;
+type Unicode11Package = typeof unicode11Module & { default?: typeof unicode11Module };
+const unicode11Package = unicode11Module as Unicode11Package;
+const Unicode11Addon = (unicode11Package.default ?? unicode11Package).Unicode11Addon;
 
 type UnifontGlyphs = Map<number, Uint8Array>;
 let unifontGlyphs: UnifontGlyphs | undefined;
@@ -167,6 +171,9 @@ export class Terminal {
       logLevel: 'off',
       theme: XTERM_THEME,
     });
+    // xterm measures with Unicode 6 by default, where an emoji such as 🚀 is one column; terminals draw it in two.
+    this.emulator.loadAddon(new Unicode11Addon());
+    this.emulator.unicode.activeVersion = '11';
     this.emulator.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
       if (params.some((param) => param === 25)) this.cursorVisible = true;
       return false;
@@ -189,11 +196,6 @@ export class Terminal {
     return this.emulator.rows;
   }
 
-  /** Whether the app turned on application cursor mode. Await flush first. */
-  get applicationCursor(): boolean {
-    return this.emulator.modes.applicationCursorKeysMode;
-  }
-
   /** Queues output in order. Await flush before reading the terminal. */
   write(text: string): void {
     const font = needsUnifont(text) ? loadUnifont() : undefined;
@@ -207,6 +209,16 @@ export class Terminal {
             this.emulator.write(text, resolve);
           }),
       );
+  }
+
+  /** The program turned on application cursor mode, so the arrows send `ESC O`. Flush first. */
+  get applicationCursor(): boolean {
+    return this.emulator.modes.applicationCursorKeysMode;
+  }
+
+  /** What the terminal sends back to the program, such as its answer to a cursor-position query. */
+  onData(listener: (data: string) => void): void {
+    this.emulator.onData(listener);
   }
 
   /** Waits until all output queued through write has been parsed by xterm. */
@@ -225,6 +237,30 @@ export class Terminal {
     return trimLines(
       Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? ''),
     );
+  }
+
+  /**
+   * Parses `text` now, one character at a time, and says whether `leaks` held
+   * after any of them for the visible rows and the rows just above them,
+   * joined with no separator. A program can draw a secret and erase it again
+   * within one write, and playback shows every step. Flush first.
+   */
+  writeWatching(text: string, leaks: (shown: string) => boolean): boolean {
+    // xterm parses synchronously only through its core, which keeps writeSync off the public API.
+    const core = (this.emulator as unknown as { _core: { writeSync(data: string): void } })._core;
+    const buffer = this.emulator.buffer;
+    let leaked = false;
+    for (const char of text) {
+      core.writeSync(char);
+      if (leaked) continue;
+      const active = buffer.active;
+      const rows: string[] = [];
+      for (let row = Math.max(0, active.baseY - this.rows); row < active.baseY + this.rows; row++) {
+        rows.push(active.getLine(row)?.translateToString(true) ?? '');
+      }
+      leaked = leaks(rows.join(''));
+    }
+    return leaked;
   }
 
   /** The visible rows of the screen, with trailing spaces removed. */
@@ -277,9 +313,90 @@ export class Terminal {
     return out.join('\n');
   }
 
-  /** Returns the visible grid with xterm colors resolved to RGB tuples. */
-  cells(): TerminalCell[][] {
+  /** Clears the screen and draws the rows of `buffer` on it. */
+  private drawRows(buffer: xtermModule.IBuffer, hidden?: Set<number>): string {
+    let out = '\u001b[0m\u001b[H\u001b[2J';
+    for (let row = 0; row < this.rows; row++) {
+      const line = buffer.getLine(buffer.viewportY + row);
+      if (!line) continue;
+      const cells: { sgr: string; chars: string }[] = [];
+      for (let col = 0; col < this.cols; col++) {
+        const cell = line.getCell(col);
+        if (!cell || cell.getWidth() === 0) continue;
+        cells.push({
+          sgr: cellSgr(cell),
+          chars: hidden?.has(row * this.cols + col) ? HIDDEN : cell.getChars() || ' ',
+        });
+      }
+      while (cells.length && cells.at(-1)!.sgr === '0' && cells.at(-1)!.chars === ' ') cells.pop();
+      if (!cells.length) continue;
+      out += `\u001b[${row + 1};1H`;
+      let sgr = '0';
+      for (const cell of cells) {
+        if (cell.sgr !== sgr) out += `\u001b[${cell.sgr}m`;
+        sgr = cell.sgr;
+        out += cell.chars;
+      }
+      out += '\u001b[0m';
+    }
+    return out;
+  }
+
+  /**
+   * Output that draws the visible screen on a blank terminal of the same
+   * size: each cell with its colors and attributes, the scroll region, the
+   * cursor, its visibility, and application cursor mode. When the alternate
+   * screen is active, the normal screen is drawn first and the alternate one
+   * over it, so leaving it shows what the app left there. Flush first. `hide`
+   * names the cells of a screen's grid, as `row * cols + col`, drawn as a
+   * block in place of their character.
+   */
+  serialize(hide?: (cells: TerminalCell[][]) => Set<number>): string {
     const buffer = this.emulator.buffer.active;
+    const hidden = hide?.(this.cells(buffer));
+    let out = '';
+    if (buffer.type === 'alternate') {
+      const normal = this.emulator.buffer.normal;
+      out += this.drawRows(normal, hide?.(this.cells(normal)));
+      // Entering the alternate screen saves this cursor, and leaving it restores it.
+      out += `\u001b[${normal.cursorY + 1};${Math.min(normal.cursorX, this.cols - 1) + 1}H\u001b[?1049h`;
+    }
+    out += this.drawRows(buffer, hidden);
+    // xterm keeps the scroll region off its public API. Setting it homes the cursor, so it goes first.
+    const margins = (this.emulator as unknown as { _core?: { buffer?: { scrollTop: number; scrollBottom: number } } })
+      ._core?.buffer;
+    if (margins && (margins.scrollTop !== 0 || margins.scrollBottom !== this.rows - 1)) {
+      out += `\u001b[${margins.scrollTop + 1};${margins.scrollBottom + 1}r`;
+    }
+    if (buffer.cursorX < this.cols) out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
+    else out += this.pendingWrap(buffer, hidden);
+    // The attributes that output after the recording starts is drawn with. xterm keeps them off its public API.
+    const pen = (this.emulator as unknown as { _core?: { _inputHandler?: { _curAttrData?: SgrSource } } })._core
+      ?._inputHandler?._curAttrData;
+    if (pen) out += `\u001b[${cellSgr(pen)}m`;
+    if (!this.cursorVisible) out += '\u001b[?25l';
+    if (this.applicationCursor) out += '\u001b[?1h';
+    return out;
+  }
+
+  /**
+   * A cursor past the last column waits to wrap on the next character. No
+   * cursor move reaches that state, so redraw the row's last cell from just
+   * before it, which leaves the cursor there as it was.
+   */
+  private pendingWrap(buffer: xtermModule.IBuffer, hidden?: Set<number>): string {
+    const line = buffer.getLine(buffer.viewportY + buffer.cursorY);
+    const last = line?.getCell(this.cols - 1);
+    const wide = last?.getWidth() === 0 ? line?.getCell(this.cols - 2) : undefined;
+    const cell = wide ?? last;
+    const col = wide ? this.cols - 1 : this.cols;
+    if (!cell) return `\u001b[${buffer.cursorY + 1};${this.cols}H`;
+    const chars = hidden?.has(buffer.cursorY * this.cols + col - 1) ? HIDDEN : cell.getChars() || ' ';
+    return `\u001b[${buffer.cursorY + 1};${col}H\u001b[${cellSgr(cell)}m${chars}\u001b[0m`;
+  }
+
+  /** Returns the visible grid with xterm colors resolved to RGB tuples. */
+  cells(buffer: xtermModule.IBuffer = this.emulator.buffer.active): TerminalCell[][] {
     const cells: TerminalCell[][] = [];
     for (let row = 0; row < this.rows; row++) {
       const line = buffer.getLine(buffer.viewportY + row);
@@ -356,6 +473,49 @@ function readCell(raw: {
     inverse: raw.isInverse() !== 0,
     dim: raw.isDim() !== 0,
   };
+}
+
+/** The SGR parameters that give a cell its colors and attributes, from a reset. */
+/** What cellSgr reads: a buffer cell, or xterm's current text attributes. */
+type SgrSource = Pick<
+  xtermModule.IBufferCell,
+  | 'isFgRGB'
+  | 'isFgPalette'
+  | 'getFgColor'
+  | 'isBgRGB'
+  | 'isBgPalette'
+  | 'getBgColor'
+  | 'isBold'
+  | 'isDim'
+  | 'isItalic'
+  | 'isUnderline'
+  | 'isBlink'
+  | 'isInverse'
+  | 'isInvisible'
+  | 'isStrikethrough'
+  | 'isOverline'
+>;
+
+function cellSgr(cell: SgrSource): string {
+  const params = ['0'];
+  const color = (rgb: boolean, palette: boolean, value: number, base: number, bright: number, extended: number) => {
+    if (rgb) params.push(`${extended};2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}`);
+    else if (palette && value < 8) params.push(String(base + value));
+    else if (palette && value < 16) params.push(String(bright + value - 8));
+    else if (palette) params.push(`${extended};5;${value}`);
+  };
+  color(cell.isFgRGB(), cell.isFgPalette(), cell.getFgColor(), 30, 90, 38);
+  color(cell.isBgRGB(), cell.isBgPalette(), cell.getBgColor(), 40, 100, 48);
+  if (cell.isBold()) params.push('1');
+  if (cell.isDim()) params.push('2');
+  if (cell.isItalic()) params.push('3');
+  if (cell.isUnderline()) params.push('4');
+  if (cell.isBlink()) params.push('5');
+  if (cell.isInverse()) params.push('7');
+  if (cell.isInvisible()) params.push('8');
+  if (cell.isStrikethrough()) params.push('9');
+  if (cell.isOverline()) params.push('53');
+  return params.join(';');
 }
 
 function cellColor(
@@ -503,7 +663,7 @@ function blockMask(code: number): Mask {
   if (code === 0x2580) rectangle(bits, 0, 0, 7, 7);
   else if (code >= 0x2581 && code <= 0x2587) rectangle(bits, 0, 16 - (code - 0x2580) * 2, 7, 15);
   else if (code === 0x2588) rectangle(bits, 0, 0, 7, 15);
-  else if (code >= 0x2589 && code <= 0x258f) rectangle(bits, 0, 0, 16 - (code - 0x2588) * 2 - 1, 15);
+  else if (code >= 0x2589 && code <= 0x258f) rectangle(bits, 0, 0, GLYPH.width - (code - 0x2588) - 1, 15);
   else if (code === 0x2590) rectangle(bits, 4, 0, 7, 15);
   else if (code === 0x2591 || code === 0x2592 || code === 0x2593) {
     const spacing = code === 0x2591 ? 3 : code === 0x2592 ? 2 : 1;
@@ -783,7 +943,7 @@ export class CastRecorder {
     const file = `${name}.cast`;
     await writeCast(file, {
       ...this.size,
-      events: this.redact ? redactEvents(cast.events, this.redact) : cast.events,
+      events: this.redact ? await redactEvents(cast.events, this.size, this.redact) : cast.events,
     });
     return file;
   }
@@ -793,20 +953,96 @@ export class CastRecorder {
  * The output events with each secret replaced, across the events it spans:
  * its placeholder goes in the event where it starts. A program may break a
  * secret up with escape codes, so the match is made on the stream without
- * them and mapped back to the raw output. When the redacted stream cannot be
- * lined up with the output, the output is one event, redacted whole.
+ * them and mapped back to the raw output. A secret inside an escape sequence
+ * (a hyperlink target, a window title) is then found in the raw output. When
+ * the redacted stream cannot be lined up with the output, the output is one
+ * event, redacted whole.
  */
-function redactEvents(events: CastEvent[], redact: (value: string) => string): CastEvent[] {
+async function redactEvents(
+  events: CastEvent[],
+  size: { width: number; height: number },
+  redact: (value: string) => string,
+): Promise<CastEvent[]> {
+  const visible = redactSpans(events, redact, (text) => {
+    const { plain, at } = withoutEscapes(text);
+    // A span in `plain` becomes the raw range that holds it, escape codes and all.
+    return secretSpans(plain, redact)?.map((span) => ({
+      start: at[span.start]!,
+      end: at[span.end - 1]! + 1,
+      placeholder: span.placeholder,
+    }));
+  });
+  return hideScreenSecrets(
+    redactSpans(visible, redact, (text) => secretSpans(text, redact)),
+    size,
+    redact,
+  );
+}
+
+/**
+ * A program can put a secret on the screen with output that holds none, such
+ * as by overwriting part of a field. The events are played on a terminal, and
+ * on one fed what the recording keeps. An event that shows a secret on the
+ * second at any character, on the screen or scrolled off it, even one it
+ * erases again, is replaced by a reset and the screen it leads to, with the
+ * cells of the secret hidden: the whole screen when they cannot be found.
+ * The output that assembled the secret is not kept.
+ */
+async function hideScreenSecrets(
+  events: CastEvent[],
+  size: { width: number; height: number },
+  redact: (value: string) => string,
+): Promise<CastEvent[]> {
+  const terminal = new Terminal(size.width, size.height);
+  let playback = new Terminal(size.width, size.height);
+  const result: CastEvent[] = [];
+  for (const event of events) {
+    const [at, text, kind] = event;
+    if (kind === 'r') {
+      await terminal.flush();
+      await playback.flush();
+      const [cols, rows] = text.split('x').map(Number);
+      terminal.resize(cols!, rows!);
+      playback.resize(cols!, rows!);
+      result.push(event);
+      continue;
+    }
+    terminal.write(text);
+    await terminal.flush();
+    await playback.flush();
+    const leaks = (shown: string) => redact(shown) !== shown;
+    const leaked = playback.writeWatching(text, leaks);
+    // The rows are joined with no separator, so a secret that wraps is found.
+    if (!leaked && !leaks(playback.text().replaceAll('\n', ''))) {
+      result.push(event);
+      continue;
+    }
+    let redrawn = `\u001bc${terminal.serialize((cells) => secretCells(terminal, cells, redact))}`;
+    playback = new Terminal(terminal.cols, terminal.rows);
+    playback.write(redrawn);
+    await playback.flush();
+    const left = playback.text().replaceAll('\n', '');
+    if (redact(left) !== left) {
+      // The cells of the secret did not hide it, so the whole screen is hidden.
+      const every = new Set(Array.from({ length: terminal.cols * terminal.rows }, (_, cell) => cell));
+      redrawn = `\u001bc${terminal.serialize(() => every)}`;
+      playback = new Terminal(terminal.cols, terminal.rows);
+      playback.write(redrawn);
+    }
+    result.push([at, redrawn]);
+  }
+  return result;
+}
+
+/** The output events with the spans that `find` locates in the joined output replaced. */
+function redactSpans(
+  events: CastEvent[],
+  redact: (value: string) => string,
+  find: (text: string) => SecretSpan[] | undefined,
+): CastEvent[] {
   const output = events.filter(([, , kind]) => kind !== 'r');
   const text = output.map(([, chunk]) => chunk).join('');
-  const { plain, at } = withoutEscapes(text);
-  const visible = secretSpans(plain, redact);
-  // A span in `plain` becomes the raw range that holds it, escape codes and all.
-  const spans = visible?.map((span) => ({
-    start: at[span.start]!,
-    end: at[span.end - 1]! + 1,
-    placeholder: span.placeholder,
-  }));
+  const spans = find(text);
   if (!spans) return [...events.filter(([, , kind]) => kind === 'r'), [output[0]?.[0] ?? 0, redact(text)]];
   const result: CastEvent[] = [];
   let offset = 0;

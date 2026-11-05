@@ -88,7 +88,7 @@ export type Observation = {
  * and `url` are resolved by the driver's caller, never by the model.
  */
 export type DriverAction =
-  | { kind: 'tap'; ref?: string; locator?: Locator }
+  | { kind: 'tap'; ref?: string; locator?: Locator; dialog?: 'accept' | 'dismiss' }
   | { kind: 'type'; ref?: string; locator?: Locator; value: string; submit?: boolean; append?: boolean }
   | { kind: 'press'; key: string }
   | { kind: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; ref?: string; locator?: Locator }
@@ -96,6 +96,7 @@ export type DriverAction =
   | { kind: 'open'; url: string }
   | { kind: 'wait'; ms: number }
   | { kind: 'window'; match: string }
+  | { kind: 'viewport'; width: number; height: number }
   | { kind: 'upload'; ref?: string; locator?: Locator; file: SampleFile }
   | {
       kind: 'request';

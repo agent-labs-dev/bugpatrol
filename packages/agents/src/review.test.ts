@@ -273,6 +273,22 @@ function scripted(
 
 // Each test runs real git and one or more whole reviews.
 describe('pull request review', { timeout: 30_000 }, () => {
+  it('exposes set_viewport to the web pull request explorer', async () => {
+    const f = await fixture();
+    try {
+      const agents = scripted('introduced', 0);
+      await reviewPullRequest(f.root, f.config, 7, {
+        gh: fakeGh().gh,
+        createRuntime: agents.createRuntime,
+        createDriver: () => screens(),
+      });
+      const explorer = agents.tasks.find((task) => task.role === 'explorer')!;
+      expect(explorer.tools.map((item) => item.name)).toContain('set_viewport');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('tests the pull request build, repeats the flow on the base, and comments on the line that causes the problem', async () => {
     const f = await fixture();
     try {

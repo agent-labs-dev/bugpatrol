@@ -320,6 +320,8 @@ function describe(session: AgentSession, action: DriverAction): string {
       return `Switched to the "${action.match}" window`;
     case 'upload':
       return `Uploaded a sample ${action.file} file to ${named(action.ref)}`;
+    case 'viewport':
+      return `Set the viewport to ${action.width}x${action.height}`;
     case 'request':
       return `${action.method} ${session.vars.redact(action.url)}`;
     case 'run':
@@ -512,6 +514,17 @@ const READERS = new Set([
 ]);
 /** git subcommands that only read the repository. `branch` reads only with a list flag. */
 const GIT_READERS = new Set(['log', 'show', 'diff', 'status', 'grep', 'blame', 'ls-files', 'rev-parse']);
+/**
+ * Options that make a reading git subcommand write a file or run a program:
+ * `--output=<file>`, `--ext-diff`, and `-O`/`--open-files-in-pager` of grep.
+ * git accepts any unambiguous prefix of a long option, so a prefix counts too.
+ */
+const GIT_WRITING_OPTIONS = ['--output', '--ext-diff', '--open-files-in-pager'];
+const gitWrites = (arg: string) => {
+  const name = arg.split('=')[0]!;
+  if (/^-[^-]*O/.test(name)) return true;
+  return name.length > 2 && GIT_WRITING_OPTIONS.some((option) => option.startsWith(name));
+};
 /** `git branch` lists only with these flags: any other word makes or moves a branch. */
 const BRANCH_LIST_FLAGS =
   /^--(list|show-current|contains|merged|no-merged|points-at|sort|format|verbose|all|remotes)$|^-[alrv]+$/;
@@ -535,16 +548,20 @@ export function showsOnly(step: RoutineStep): boolean {
   const command = step.command.replace(/\d?>\s*\/dev\/null|\d>&\d/g, '');
   // `<(cmd)` and `>(cmd)` run a command, and a redirect or substitution writes something.
   if (/>|\$\(|`|<\(/.test(command)) return false;
-  return command.split(/&&|\|\||[;|\n]/).every((part) => {
+  return command.split(/&&|\|\||[;|&\n]/).every((part) => {
     const [program = '', ...args] = part.trim().split(/\s+/);
     if (program === '') return true;
-    // A sed script that writes a file or runs a command is not a read: `1w out`, `w out`, `1e cmd`.
+    // Only a sed script that prints lines is a read, such as `-n 300,420p` or `-n '/re/p'`. Anything
+    // else may write a file or run a command: `1w out`, `s/a/b/w out`, `1e cmd`, `-i`.
     if (program === 'sed') {
-      if (!args.includes('-n') || args.some((arg) => /^-\w*i/.test(arg))) return false;
-      return !/(^|[\s;'"])[0-9,$/]*[wWe](\s|$|['"])/.test(part);
+      const flags = args.filter((arg) => arg.startsWith('-'));
+      if (!flags.some((flag) => /^-[Ern]*n/.test(flag)) || flags.some((flag) => !/^-[Ern]+$/.test(flag))) return false;
+      const script = args.find((arg) => !arg.startsWith('-'))?.replace(/^(['"])(.*)\1$/, '$2') ?? '';
+      return /^((\d+|\$|\/[^/]*\/)(,(\d+|\$|\/[^/]*\/))?)?p$/.test(script);
     }
-    if (program === 'find' || program === 'fd')
-      return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint)|^--exec/.test(arg));
+    if (program === 'find') return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint|fls)/.test(arg));
+    // fd runs a program with `-x`/`--exec` and `-X`/`--exec-batch`, also in a bundle such as `-Hx`.
+    if (program === 'fd') return !args.some((arg) => /^--exec|^-[^-]*[xX]/.test(arg));
     if (program === 'sort') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
     // `uniq in out` writes out; a lone `uniq` or `uniq in` only prints.
     if (program === 'uniq') return args.filter((arg) => !arg.startsWith('-')).length < 2;
@@ -553,7 +570,7 @@ export function showsOnly(step: RoutineStep): boolean {
     if (program === 'git') {
       const sub = args.find((arg) => !arg.startsWith('-')) ?? '';
       if (sub === 'branch') return args.slice(1).every((arg) => BRANCH_LIST_FLAGS.test(arg));
-      return GIT_READERS.has(sub);
+      return GIT_READERS.has(sub) && !args.some(gitWrites);
     }
     return READERS.has(program);
   });
@@ -573,7 +590,7 @@ function locatorSignature(locator?: Locator): string {
 }
 
 function stepSignature(step: RoutineStep): string {
-  if (step.kind === 'tap') return `tap:${locatorSignature(step.target)}`;
+  if (step.kind === 'tap') return `tap:${locatorSignature(step.target)}:${step.dialog ?? 'accept'}`;
   if (step.kind === 'type') {
     return `type:${locatorSignature(step.target)}:${step.value}:${Boolean(step.submit)}:${Boolean(step.append)}`;
   }
@@ -583,6 +600,7 @@ function stepSignature(step: RoutineStep): string {
   if (step.kind === 'press') return `press:${step.key}`;
   if (step.kind === 'open') return `open:${step.url}`;
   if (step.kind === 'window') return `window:${step.match}`;
+  if (step.kind === 'viewport') return `viewport:${step.width}x${step.height}`;
   if (step.kind === 'upload') return `upload:${locatorSignature(step.target)}:${step.file}`;
   if (step.kind === 'request' || step.kind === 'run' || step.kind === 'session') return JSON.stringify(step);
   return step.kind;
@@ -662,6 +680,7 @@ export function explorerTools(
   opts: { replay?: Parameters<typeof replayRoutine>[2] } = {},
 ): Tool[] {
   const api = session.driver instanceof ApiDriver ? session.driver : undefined;
+  const browser = session.driver?.platform === 'web' || session.driver?.platform === 'electron';
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -858,13 +877,42 @@ export function explorerTools(
     {
       name: 'tap',
       description: 'Tap one element by its latest ref.',
-      inputSchema: schema({ ref: string }, ['ref']),
+      inputSchema: schema(
+        { ref: string, ...(browser ? { dialog: { type: 'string', enum: ['accept', 'dismiss'] } } : {}) },
+        ['ref'],
+      ),
       async run(input) {
         const ref = arg(input, 'ref');
         await session.activity(`Tapping ${ref}`);
-        return act(session, { kind: 'tap', ref });
+        const dialog = browser ? z.enum(['accept', 'dismiss']).optional().parse(input.dialog) : undefined;
+        return act(session, { kind: 'tap', ref, ...(dialog ? { dialog } : {}) });
       },
     },
+    ...(browser
+      ? [
+          {
+            name: 'set_viewport',
+            description:
+              'Set the web viewport size in CSS pixels. The change is recorded and replayed with the routine.',
+            inputSchema: schema(
+              {
+                width: { type: 'integer', minimum: 1, maximum: 10000 },
+                height: { type: 'integer', minimum: 1, maximum: 10000 },
+              },
+              ['width', 'height'],
+            ),
+            run(input: Record<string, unknown>) {
+              const { width, height } = z
+                .object({
+                  width: z.number().int().positive().max(10_000),
+                  height: z.number().int().positive().max(10_000),
+                })
+                .parse(input);
+              return act(session, { kind: 'viewport', width, height });
+            },
+          },
+        ]
+      : []),
     {
       name: 'type',
       description: 'Type in a field, preserving {{NAME}} placeholders for secrets.',
@@ -1155,9 +1203,10 @@ export function explorerTools(
           if (value) bug[key] = value;
         }
         const observation = session.lastObservation!;
-        const misses = bugMisses(bug, observation, [
-          ...observation.consoleErrors,
-          ...(observation.networkErrors ?? []),
+        const redactedObservation = session.vars.redact(observation) as Observation;
+        const misses = bugMisses(bug, redactedObservation, [
+          ...redactedObservation.consoleErrors,
+          ...(redactedObservation.networkErrors ?? []),
         ]);
         if (misses.length)
           return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };

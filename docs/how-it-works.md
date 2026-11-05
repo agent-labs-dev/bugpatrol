@@ -37,7 +37,7 @@ When you turn on GitHub, the patrol opens GitHub issues and PRs automatically, i
 
 ## The explore loop
 
-The explorer uses the app one step at a time. In each step, it looks at the screen and calls one tool. Each result also lists the console errors and the failed requests since the last step, so the explorer can report an error that the screenshot does not show. On web and Electron it also lists the native dialogs (`alert`, `confirm`, `prompt`) that opened. Bugpatrol accepts each one, the same way on every run, so the action behind a confirm goes ahead in exploration and in replay. An `upload` attaches a sample image, PDF or text file that Bugpatrol makes, with the same bytes on every run. Each bug report becomes a candidate for the judge.
+The explorer uses the app one step at a time. In each step, it looks at the screen and calls one tool. Each result also lists the console errors and the failed requests since the last step, so the explorer can report an error that the screenshot does not show. On web and Electron it also lists the native dialogs (`alert`, `confirm`, `prompt`) that opened. Bugpatrol accepts each one by default, the same way on every run, and `tap` can use `dialog: "dismiss"` to test a cancel path. The `set_viewport` tool changes the web viewport to a recorded width and height, so responsive layout checks replay at the same size. An `upload` attaches a sample image, PDF or text file that Bugpatrol makes, with the same bytes on every run. Each bug report becomes a candidate for the judge.
 
 ```mermaid
 flowchart TD

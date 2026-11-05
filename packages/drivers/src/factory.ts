@@ -14,6 +14,25 @@ import type { Driver } from './types.js';
 import { WebDriver } from './web.js';
 
 /**
+ * A command runs in a shell, so a `${name}` that `vars` does not know is the
+ * shell's own variable, such as one the command sets, and stays as written.
+ */
+function shellCommand(command: string, vars: (value: string) => string): string {
+  return command
+    .split(/(\$\{[A-Za-z_][A-Za-z_0-9]*\})/)
+    .map((part, index) => {
+      if (index % 2 === 0) return vars(part);
+      try {
+        return vars(part);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('Unknown variable')) return part;
+        throw error;
+      }
+    })
+    .join('');
+}
+
+/**
  * Pick the transport configured for the app while resolving captured
  * endpoints. `source` is the checkout of the build under test, where a CLI
  * app runs its commands; it defaults to `app.source`. An api app needs the
@@ -31,7 +50,7 @@ export function createDriver(
     const { env, command, ...cli } = connect.cli;
     return new CliDriver({
       ...cli,
-      ...(command ? { command: vars(command) } : {}),
+      ...(command ? { command: shellCommand(command, vars) } : {}),
       cwd: source,
       redact,
       env: Object.fromEntries(

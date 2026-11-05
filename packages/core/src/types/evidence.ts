@@ -1,5 +1,13 @@
 import type { HttpMethod } from './agents.js';
 
+/** One parsed server-sent event from a bounded API response. */
+export type SseEvent = {
+  event: string;
+  data: string;
+  id?: string;
+  retry?: number;
+};
+
 /**
  * One API request and what came back, as the models, issues, and the
  * dashboard see it. The api driver builds it, and every header and body in it
@@ -18,8 +26,10 @@ export type HttpExchange = {
     bytes: number;
     /** The body was over the read limit, so Bugpatrol kept none of it. */
     tooLarge?: true;
-    /** An event stream: Bugpatrol cut it after the headers, so `body` is empty. */
+    /** An event stream: Bugpatrol keeps a bounded prefix of its text. */
     stream?: true;
+    /** Parsed events from the bounded event-stream prefix. */
+    events?: SseEvent[];
   };
   /** Why no response came: a timeout, a refused connection, a rejected request. */
   error?: string;

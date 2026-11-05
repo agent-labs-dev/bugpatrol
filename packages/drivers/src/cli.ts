@@ -6,7 +6,7 @@ import type { Duplex } from 'node:stream';
 import type { SessionOp } from '@bugpatrol/core';
 import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { CastRecorder, Terminal, terminalPng } from './cast.js';
-import { applicationKeyBytes, keyBytes } from './keys.js';
+import { sessionKeyBytes } from './keys.js';
 import { nativeSnapshot } from './maestro.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
@@ -73,11 +73,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * of its environment, so neither shows in the process list and the app's
  * variables never reach Python. The helper then writes the pid of the
  * command there, reads `resize <cols> <rows>` lines from it, and kills the
- * command's process group when it closes. The command leads its own session,
- * so a stop, or the end of Bugpatrol, kills every process it started.
+ * command's process group when it closes or the command exits. The command
+ * leads its own session, so a stop, its exit, or the end of Bugpatrol, kills
+ * every process it started. Its exit is seen through SIGCHLD, not the end of
+ * the terminal, which a process it left behind can hold open.
  */
 const PTY = `
-import fcntl, json, os, pty, select, signal, struct, sys, termios
+import fcntl, json, os, pty, select, signal, struct, sys, termios, time
 cols, rows = int(sys.argv[1]), int(sys.argv[2])
 lines = b''
 while b'\\n' not in lines:
@@ -87,8 +89,15 @@ while b'\\n' not in lines:
     lines += data
 first, lines = lines.split(b'\\n', 1)
 spec = json.loads(first)
+# The command must not keep the control channel: a daemon that holds it
+# open keeps the helper from closing after the command exited.
+os.set_inheritable(3, False)
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+wake, woken = os.pipe()
+os.set_blocking(woken, False)
+signal.set_wakeup_fd(woken)
+signal.signal(signal.SIGCHLD, lambda *_: None)
 pid, fd = pty.fork()
 if pid == 0:
     size(0, cols, rows)
@@ -100,7 +109,8 @@ def stop(*_):
         pass
 signal.signal(signal.SIGTERM, stop)
 os.write(3, b'%d\\n' % pid)
-inputs = [fd, 0, 3]
+inputs = [fd, 0, 3, wake]
+status = None
 def control(data):
     global lines
     lines += data
@@ -110,11 +120,22 @@ def control(data):
         if len(words) == 3 and words[0] == b'resize':
             size(fd, int(words[1]), int(words[2]))
 control(b'')
-while True:
+def output(timeout=None):
     try:
-        ready = select.select(inputs, [], [])[0]
-    except InterruptedError:
-        continue
+        data = os.read(fd, 65536) if select.select([fd], [], [], timeout)[0] else b''
+    except OSError:
+        data = b''
+    if data:
+        os.write(1, data)
+    return data
+while status is None:
+    ready = select.select(inputs, [], [])[0]
+    if wake in ready:
+        os.read(wake, 4096)
+        done, code = os.waitpid(pid, os.WNOHANG)
+        if done:
+            status = code
+            break
     if 0 in ready:
         data = os.read(0, 4096)
         if data:
@@ -128,15 +149,17 @@ while True:
         else:
             inputs.remove(3)
             stop()
-    if fd in ready:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b''
-        if not data:
-            break
-        os.write(1, data)
-status = os.waitpid(pid, 0)[1]
+    if fd in ready and not output(0):
+        break
+if status is None:
+    status = os.waitpid(pid, 0)[1]
+stop()
+# What the command printed before it exited is still in the terminal. A
+# process that left the group can keep writing there, so the drain is bounded.
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline and output(0.05):
+    pass
+os.close(fd)
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
 `;
 
@@ -178,6 +201,8 @@ type Session = {
   /** The visible screen of the program. */
   screen: Terminal;
   running: boolean;
+  /** Set once the session gave the recording back its own terminal size. */
+  left?: boolean;
   exitCode?: number;
   /** Resolves once the program and its helper exited. */
   closed: Promise<void>;
@@ -335,7 +360,7 @@ export class CliDriver implements Driver {
     if (action.kind !== 'run')
       return { ok: false, retryable: false, error: 'A CLI app takes only run, session and wait' };
     if (ESCAPE.test(action.command)) return { ok: false, retryable: false, error: OUTSIDE };
-    this.view = 'shell';
+    await this.showView('shell');
     const command = this.redact(action.command);
     this.show(prompt(command), false);
     this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows) };
@@ -397,7 +422,7 @@ export class CliDriver implements Driver {
     }
     const session = this.session;
     if (!session) return fail('No session is running. Start one first');
-    this.view = 'session';
+    await this.showView('session');
     const exited = () => `The program exited with code ${session.exitCode ?? 'none'}`;
     if (op.op === 'stop') {
       await this.stopSession();
@@ -429,17 +454,19 @@ export class CliDriver implements Driver {
       session.sent = Date.now();
       return { ok: true, step };
     }
-    let keys: string[];
-    await session.screen.flush();
-    const applicationCursor = session.screen.applicationCursor;
     try {
-      keys = op.keys.map(applicationCursor ? applicationKeyBytes : keyBytes);
+      await session.screen.flush();
+      for (const key of op.keys) sessionKeyBytes(key, session.screen.applicationCursor);
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
-    for (const [index, bytes] of keys.entries()) {
-      if (index) await sleep(keys[index - 1] === '\u001b' ? ESCAPE_GAP_MS : KEY_GAP_MS);
-      session.helper.child.stdin?.write(bytes);
+    let previous: string | undefined;
+    for (const key of op.keys) {
+      if (previous !== undefined) await sleep(previous === '\u001b' ? ESCAPE_GAP_MS : KEY_GAP_MS);
+      // An earlier key can have changed the cursor mode, so each key is encoded as it goes.
+      await session.screen.flush();
+      previous = sessionKeyBytes(key, session.screen.applicationCursor);
+      session.helper.child.stdin?.write(previous);
       session.sent = Date.now();
     }
     return { ok: true, step };
@@ -465,28 +492,54 @@ export class CliDriver implements Driver {
         if (code !== null) session.exitCode = code;
       }),
     };
+    // The terminal answers the program's queries, as a real one does.
+    session.screen.onData((data) => {
+      if (session.running) helper.child.stdin?.write(data);
+    });
     helper.child.stdout?.setEncoding('utf8');
     helper.child.stdout?.on('data', (chunk: string) => {
       session.screen.write(chunk);
-      // Raw here: the recording is redacted as one stream when it stops.
-      this.cast.push(chunk);
+      // Raw here: the recording is redacted as one stream when it stops. The shell's screen keeps it off while shown.
+      if (this.view === 'session') this.cast.push(chunk);
       session.printed = Date.now();
       if (session.answered < session.sent) session.answered = session.printed;
     });
     helper.child.stderr?.resume();
     this.session = session;
     this.view = 'session';
+    // The program starts on a blank terminal, so the recording leaves the shell's screen too.
+    this.cast.push('\u001bc');
   }
 
-  /** Kills the program of the session and every process it started. */
+  /**
+   * Kills the program of the session and every process it started, and gives
+   * the recording back the terminal's own size, whether or not it still ran.
+   */
   private async stopSession(): Promise<void> {
     const session = this.session;
-    if (!session?.running) return;
-    await this.kill(session.helper);
-    await session.closed;
-    // A program that was killed never left its alternate screen.
-    this.cast.push('\u001b[?1049l\u001b[?25h');
+    if (!session || session.left) return;
+    session.left = true;
+    if (session.running) {
+      await this.kill(session.helper);
+      await session.closed;
+      // A program that was killed never left its alternate screen.
+      this.cast.push('\u001b[?1049l\u001b[?25h');
+    }
     if (session.screen.cols !== this.cols || session.screen.rows !== this.rows) this.cast.resize(this.cols, this.rows);
+  }
+
+  /**
+   * Shows the shell or the session. The recording gets the size and the whole
+   * screen of the one shown, on a reset terminal, since the other drew over it.
+   */
+  private async showView(view: 'shell' | 'session'): Promise<void> {
+    if (this.view === view) return;
+    const before = (this.view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    this.view = view;
+    const screen = (view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    await screen.flush();
+    if (screen.cols !== before.cols || screen.rows !== before.rows) this.cast.resize(screen.cols, screen.rows);
+    this.cast.push(`\u001bc${screen.serialize()}`);
   }
 
   /** Waits until the program printed nothing for `ms`. False when the deadline came first. */
@@ -553,8 +606,19 @@ export class CliDriver implements Driver {
     return nativeSnapshot(observation, screenId);
   }
 
+  /**
+   * Starts with what the terminal shows now, so an app that redraws only what
+   * changed, such as the TUI started on connect, plays back whole. Raw like
+   * the rest: the recording is redacted as one stream when it stops.
+   */
   async startRecording(): Promise<void> {
+    const screen = (this.view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    await screen.flush();
     this.cast.start();
+    if (screen.cols !== this.cols || screen.rows !== this.rows) this.cast.resize(screen.cols, screen.rows);
+    const shown = screen.serialize();
+    // A blank terminal needs nothing drawn.
+    if (shown !== new Terminal(screen.cols, screen.rows).serialize()) this.cast.push(shown);
   }
 
   async stopRecording(name: string): Promise<string> {

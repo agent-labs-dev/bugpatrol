@@ -1,5 +1,50 @@
+import { isLoopback } from '@bugpatrol/contract';
+import { InfrastructureError } from '@bugpatrol/core';
 import { chromium, type Page } from 'playwright';
 import { WebDriver } from './web.js';
+
+type AppPageCandidate = { url: string; visible: boolean; focused: boolean };
+
+const browserOwnedProtocols = new Set([
+  'data:',
+  'about:',
+  'blob:',
+  'javascript:',
+  'view-source:',
+  'chrome:',
+  'chrome-error:',
+  'chrome-extension:',
+  'chrome-untrusted:',
+  'devtools:',
+]);
+
+/** An app scheme or a loopback dev server, rather than a remote page a window happens to show (an OAuth window). */
+function local(url: URL): boolean {
+  return (url.protocol !== 'http:' && url.protocol !== 'https:') || isLoopback(url.href);
+}
+
+/**
+ * The page bugpatrol treats as the app: a visible page first, then an app page over a remote one, then the focused one.
+ * Visibility leads so a hidden background window never beats the window a person sees.
+ */
+export function appPage(candidates: AppPageCandidate[]): number | undefined {
+  let best: { index: number; rank: number } | undefined;
+  candidates.forEach((candidate, index) => {
+    if (!URL.canParse(candidate.url)) return;
+    const url = new URL(candidate.url);
+    if (browserOwnedProtocols.has(url.protocol)) return;
+    const rank = (candidate.visible ? 0 : 4) + (local(url) ? 0 : 2) + (candidate.focused ? 0 : 1);
+    if (best === undefined || rank < best.rank) best = { index, rank };
+  });
+  return best?.index;
+}
+
+/** Scheme and host only: a data: or blob: URL carries the page itself, which can hold anything the app rendered. */
+function pageLabel(url: string): string {
+  if (!URL.canParse(url)) return '(unparsable)';
+  const parsed = new URL(url);
+  return parsed.host ? `${parsed.protocol}//${parsed.host}` : parsed.protocol;
+}
 
 // An app may open its first window after CDP is ready; this matches the launcher's own readiness timeout.
 const PAGE_TIMEOUT_MS = 30_000;
@@ -18,6 +63,7 @@ export class ElectronDriver extends WebDriver {
   constructor(
     private readonly target: ElectronTarget,
     allowedOrigins: string[] = [],
+    private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
   ) {
     super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins });
   }
@@ -43,32 +89,29 @@ export class ElectronDriver extends WebDriver {
     this.context.on('page', (page) => this.watch(page));
   }
 
-  /** The app's pages, polled because a window can open, or leave about:blank, after connect. */
-  private async appPages(): Promise<Page[]> {
-    const deadline = Date.now() + PAGE_TIMEOUT_MS;
+  /** The page to drive, polled because the app can open its first window, or leave about:blank, after connect. */
+  private async choosePage(): Promise<Page> {
+    const deadline = Date.now() + this.pageTimeoutMs;
     while (true) {
-      const pages = this.context!.pages().filter(
-        (page) => !page.url().startsWith('devtools://') && page.url() !== 'about:blank',
+      const pages = this.context!.pages();
+      const candidates = await Promise.all(
+        pages.map(async (page) => {
+          const url = page.url();
+          const state = await page
+            .evaluate(() => ({ visible: document.visibilityState === 'visible', focused: document.hasFocus() }))
+            .catch(() => ({ visible: false, focused: false }));
+          return { url, ...state };
+        }),
       );
-      if (pages.length > 0) return pages;
+      const index = appPage(candidates);
+      if (index !== undefined) return pages[index]!;
       if (Date.now() >= deadline) {
-        throw new Error(`Electron CDP connection has no app page after ${PAGE_TIMEOUT_MS / 1000}s`);
+        throw new InfrastructureError(
+          `Electron CDP connection has no app page after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+        );
       }
       await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));
     }
-  }
-
-  private async choosePage(): Promise<Page> {
-    const pages = await this.appPages();
-    for (const page of pages) {
-      const focused = await page
-        .evaluate(() => document.hasFocus() && document.visibilityState === 'visible')
-        .catch(() => false);
-      if (focused) {
-        return page;
-      }
-    }
-    return pages[0]!;
   }
 
   override async close(): Promise<void> {

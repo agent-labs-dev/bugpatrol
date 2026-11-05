@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { ConfigError } from './errors.js';
 
@@ -255,40 +255,61 @@ export function moveRoutines(root: string): string | undefined {
   ].join('\n');
 }
 
-/**
- * A repo that already used `--config .bugpatrol/api.yml` before profiles kept
- * its app map, routines and endpoint inventory in the Bugpatrol folder itself.
- * Copies them into the profile's folder once, when that folder is still absent,
- * and returns what it did. The shared files stay, since they may belong to the
- * default config: a newly added config must not take them away from it.
- */
-export function moveProfileFiles(root: string, profile?: string): string | undefined {
-  if (!profile) return undefined;
+/** The default layout's app map and endpoint inventory, each with where profile `profile` keeps it. */
+function sharedFiles(root: string, profile: string): [string, string][] {
   const target = join(dir(root), recordId(profile));
-  if (existsSync(target)) return undefined;
-  const files = (
+  return (
     [
       [paths.appMap(root), join(target, 'appmap.json')],
       [paths.endpointInventory(root), join(target, 'endpoints.yml')],
     ] as [string, string][]
   ).filter(([from]) => existsSync(from));
-  const sharedRoutines = paths.routines(root);
-  const hasRoutines = existsSync(sharedRoutines);
-  if (!files.length && !hasRoutines) return undefined;
-  mkdirSync(join(target, 'routines'), { recursive: true });
-  for (const [from, to] of files) copyFileSync(from, to);
-  let copied = 0;
-  if (hasRoutines) {
-    for (const name of readdirSync(sharedRoutines).filter((file) => file.endsWith('.json'))) {
-      copyFileSync(join(sharedRoutines, name), join(target, 'routines', name));
-      copied += 1;
-    }
-  }
+}
+
+const hasSharedFiles = (root: string, profile: string) =>
+  sharedFiles(root, profile).length > 0 || existsSync(paths.routines(root));
+
+/**
+ * Before profiles, a config such as `--config .bugpatrol/api.yml` kept its app
+ * map, routines and endpoint inventory in the Bugpatrol folder itself. No file
+ * says which config they belong to, so selecting a config never moves them:
+ * `bugpatrol adopt --config <file>` is the user saying they are that profile's.
+ * Moves them into the profile's folder and returns what it did. A file the
+ * profile folder already holds wins.
+ */
+export function adoptSharedFiles(root: string, profile: string): string {
   const where = relative(root, dir(root));
+  if (!hasSharedFiles(root, profile)) return `Nothing to adopt: ${where}/ holds no app map, endpoints or routines.`;
+  const target = join(dir(root), recordId(profile));
+  mkdirSync(join(target, 'routines'), { recursive: true });
+  for (const [from, to] of sharedFiles(root, profile)) if (!existsSync(to)) renameSync(from, to);
+  let moved = 0;
+  const sharedRoutines = paths.routines(root);
+  if (existsSync(sharedRoutines)) {
+    for (const name of readdirSync(sharedRoutines).filter((file) => file.endsWith('.json'))) {
+      const to = join(target, 'routines', name);
+      if (existsSync(to)) continue;
+      renameSync(join(sharedRoutines, name), to);
+      moved += 1;
+    }
+    if (!readdirSync(sharedRoutines).length) rmSync(sharedRoutines, { recursive: true });
+  }
   return [
-    `Copied the app map, endpoint inventory and ${copied} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
+    `Moved the app map, endpoint inventory and ${moved} routine(s) of the default layout into ${where}/${profile}/, this config's folder.`,
     `Commit ${where}/${profile}/ so a fresh clone can replay them.`,
   ].join('\n');
+}
+
+/**
+ * A note for a profile that has no folder yet while the default layout holds
+ * files and no default config claims them: they may be this profile's from
+ * before profiles. Moving them is the user's call (`adoptSharedFiles`).
+ */
+export function adoptHint(root: string, profile: string | undefined, configFile: string): string | undefined {
+  if (!profile || existsSync(join(dir(root), recordId(profile))) || existsSync(paths.config(root))) return undefined;
+  if (!hasSharedFiles(root, profile)) return undefined;
+  const where = relative(root, dir(root));
+  return `${where}/ holds an app map or routines, and ${where}/${profile}/ does not exist yet. If they belong to this config, run: bugpatrol adopt --config ${configFile}`;
 }
 
 export type BaselineManifest = {
