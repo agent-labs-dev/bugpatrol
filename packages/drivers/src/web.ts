@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ConfigError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
@@ -16,7 +16,9 @@ import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
 export function chromiumProblem(): string | undefined {
   const executable = chromium.executablePath();
   if (existsSync(executable)) return undefined;
-  const { version } = createRequire(import.meta.url)('playwright/package.json') as { version: string };
+  // Not createRequire: the npm bundle declares that name in its banner.
+  const manifest = fileURLToPath(import.meta.resolve('playwright/package.json'));
+  const { version } = JSON.parse(readFileSync(manifest, 'utf8')) as { version: string };
   return `Chromium for Playwright ${version} is not installed (no ${executable}). Run: PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@${version} install chromium`;
 }
 
