@@ -147,8 +147,8 @@ export async function runChecks(
 }
 
 /**
- * A web or API app that no setup command starts must already answer at its
- * URL. Any HTTP response counts: the check is that something listens.
+ * A web or API app that no setup command or gate run.command starts must
+ * already answer at its URL. Any HTTP response counts: the check is that something listens.
  */
 async function urlCheck(config: BugpatrolConfig): Promise<DoctorCheck | undefined> {
   const { platform, setup, connect } = config.app;
@@ -156,6 +156,8 @@ async function urlCheck(config: BugpatrolConfig): Promise<DoctorCheck | undefine
   if (setup.some((command) => command.background)) return undefined;
   const url = connect.url ?? config.run?.url;
   if (!url) return undefined;
+  // The gate starts run.command itself before it captures run.url.
+  if (config.run && url === config.run.url) return undefined;
   if (/\$\{|\{\{/.test(url))
     return {
       name: 'url',

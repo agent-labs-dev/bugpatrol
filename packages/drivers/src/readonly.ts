@@ -103,14 +103,16 @@ function forwardHeaders(request: IncomingMessage, host: string): OutgoingHttpHea
 }
 
 /**
- * Splits the client side of a WebSocket into frames, and keeps back each
- * message whose first frame matches. A client frame is always masked. Control
- * frames always pass. The proxy refuses compression, so the payload is the
+ * Splits the client side of a WebSocket into frames, holds each data message
+ * until its final frame, and keeps back each whole message that matches. A
+ * client frame is always masked. Control frames always pass. The proxy refuses compression, so the payload is the
  * message as the app wrote it.
  */
 export function frameFilter(patterns: RegExp[], onDrop: () => void): (chunk: Buffer) => Buffer {
   let pending = Buffer.alloc(0);
-  let dropping = false;
+  // The frames of a message whose final frame has not arrived yet.
+  let held: Buffer[] = [];
+  let payloads: Buffer[] = [];
   return (chunk) => {
     pending = Buffer.concat([pending, chunk]);
     const kept: Buffer[] = [];
@@ -132,14 +134,19 @@ export function frameFilter(patterns: RegExp[], onDrop: () => void): (chunk: Buf
       if (pending.length < start + length) break;
       const frame = pending.subarray(0, start + length);
       pending = pending.subarray(start + length);
-      if (opcode === 1 || opcode === 2) {
-        const payload = Buffer.from(frame.subarray(start));
-        if (masked)
-          for (let index = 0; index < payload.length; index++) payload[index]! ^= frame[offset + (index % 4)]!;
-        dropping = matches(patterns, payload);
-        if (dropping) onDrop();
+      if (opcode > 2) {
+        kept.push(frame);
+        continue;
       }
-      if (!(dropping && opcode <= 2)) kept.push(frame);
+      const payload = Buffer.from(frame.subarray(start));
+      if (masked) for (let index = 0; index < payload.length; index++) payload[index]! ^= frame[offset + (index % 4)]!;
+      held.push(frame);
+      payloads.push(payload);
+      if ((frame[0]! & 0x80) === 0) continue;
+      if (matches(patterns, Buffer.concat(payloads))) onDrop();
+      else kept.push(...held);
+      held = [];
+      payloads = [];
     }
     return Buffer.concat(kept);
   };

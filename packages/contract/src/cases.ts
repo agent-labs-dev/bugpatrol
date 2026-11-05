@@ -482,6 +482,8 @@ function minimalBody(
   if (!value) return { blocked: `no value for the ${media.type} body` };
   // A copy: the value can be an example object of the spec.
   const body = structuredClone(value.value);
+  // Placeholders of numeric fields, which the JSON text gives unquoted, so they resolve to numbers.
+  const numeric: string[] = [];
   if (isObject(body)) {
     const fields = Object.assign(
       {},
@@ -491,10 +493,17 @@ function minimalBody(
       if (!(name in fields)) continue;
       const text = decodeURIComponent(encoded);
       const types = [deref(doc, fields[name])].flatMap((schema) => (isObject(schema) ? [schema.type].flat() : []));
-      body[name] = /^\d+$/.test(text) && (types.includes('integer') || types.includes('number')) ? Number(text) : text;
+      const isNumber = types.includes('integer') || types.includes('number');
+      if (isNumber && /^\{\{[A-Za-z_][A-Za-z_0-9]*(\|missing)?\}\}$/.test(text)) numeric.push(text);
+      body[name] = /^\d+$/.test(text) && isNumber ? Number(text) : text;
     }
   }
-  return encode(media.type, body);
+  const encoded = encode(media.type, body);
+  if (encoded.type !== 'application/json') return encoded;
+  return {
+    ...encoded,
+    text: numeric.reduce((text, item) => text.replaceAll(JSON.stringify(item), item), encoded.text),
+  };
 }
 
 /** A body that its schema rejects: an object without its required properties, or a value of the wrong type. */
