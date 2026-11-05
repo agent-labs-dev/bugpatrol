@@ -2571,6 +2571,7 @@ function renderReviewDetail() {
       review.costUsd ? el('span', { text: `$${review.costUsd.toFixed(3)}` }) : null,
     ]),
     review.error ? el('p', { class: 'review-error', text: review.error }) : null,
+    review.baseError ? el('p', { class: 'review-error', text: review.baseError }) : null,
     review.claims
       ? el('section', {}, [
           title('Claims', `${review.claims.length}`),
@@ -2589,7 +2590,12 @@ function renderReviewDetail() {
       title('Introduced problems', `${introduced.length}`),
       introduced.length
         ? null
-        : el('p', { class: 'muted', text: 'Bugpatrol found no problem that this pull request introduced.' }),
+        : el('p', {
+            class: 'muted',
+            text: review.findings.some((finding) => finding.verdict === 'unclear')
+              ? 'The comparison is incomplete: some findings could not be compared with the base build.'
+              : 'Bugpatrol found no problem that this pull request introduced.',
+          }),
       ...introduced.map(findingBlock),
     ]),
     ...others.map(([verdict, findings]) =>
