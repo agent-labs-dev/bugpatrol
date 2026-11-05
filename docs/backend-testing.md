@@ -72,7 +72,9 @@ says `Goal not met` and names them, so a run that spent its steps elsewhere
 does not read as a clean result. The judge
 reads the candidates of both, and it files one issue for each failure.
 The issue key is the endpoint, the case, and the failed check, so the same
-failure in a later run adds to its issue.
+failure in a later run adds to its issue. A report that no contract check
+confirms is also keyed on the query parameter names and JSON body keys of its
+request, so two different problems on one endpoint stay apart.
 
 ### The request policy
 

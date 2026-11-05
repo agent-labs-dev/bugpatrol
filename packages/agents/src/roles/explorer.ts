@@ -48,7 +48,7 @@ const stem = (word: string) => word.toLowerCase().replace(/(?:ies|es|s)$/, '');
  * paths names the endpoints whose path has a word of the goal, such as "runs"
  * for "the run APIs".
  */
-export function goalEndpoints(goal: string, endpoints: Endpoint[]): Endpoint[] {
+function goalEndpoints(goal: string, endpoints: Endpoint[]): Endpoint[] {
   const shape = (path: string) => path.replace(/\{[^}]*\}/g, '{}').replace(/\/+$/, '');
   const prefixes = [...goal.matchAll(/(?:\/[\w.{}~-]+)+/g)].map((match) => shape(match[0]));
   if (prefixes.length)
