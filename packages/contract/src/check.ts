@@ -14,7 +14,7 @@ export type ContractResponse = {
 
 /**
  * Checks a response against the operation of its endpoint: `contract:status`,
- * `contract:no-5xx`, and, when the spec or `connect.errors` declares the
+ * `contract:no-5xx` (a declared 503 passes it), and, when the spec or `connect.errors` declares the
  * status, `contract:content-type` and `contract:schema`. Declared means the
  * responses of the operation and the statuses of `connect.errors`. A status
  * that only `connect.errors` declares has its body checked against
@@ -31,9 +31,12 @@ export function checkContract(endpoint: Endpoint, raw: ContractResponse, contrac
   const responses = isObject(operation) && isObject(operation.responses) ? operation.responses : {};
   const key = declaredKey(Object.keys(responses), raw.status);
   const status = String(raw.status);
+  const inErrors = contract.errors.statuses.includes(raw.status);
+  // A 503 that the spec names (not only through `default`) reports a dependency that the API lacks, not a crash.
+  const unavailable = raw.status === 503 && ((key !== undefined && key !== 'default') || inErrors);
   const results = [
-    result('status', key !== undefined || contract.errors.statuses.includes(raw.status), status),
-    result('no-5xx', raw.status < 500, status),
+    result('status', key !== undefined || inErrors, status),
+    result('no-5xx', raw.status < 500 || unavailable, status),
   ];
   if (key !== undefined) {
     const ref = refOf(responses[key]);

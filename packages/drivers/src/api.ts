@@ -40,12 +40,18 @@ const CREDENTIAL =
 /** A JSON Web Token, whatever the key that holds it is named. */
 const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
-function responseCaptures(body: string, pointers: Record<string, string>): Record<string, string> {
-  const parsed: unknown = JSON.parse(body);
+function responseCaptures(status: number, body: string, pointers: Record<string, string>): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`Response capture: the ${status} response is not JSON`);
+  }
   return Object.fromEntries(
     Object.entries(pointers).map(([name, pointer]) => {
       const found = resolvePointer(parsed, pointer);
-      if (!found) throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
+      if (!found)
+        throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve in the ${status} response`);
       const { value } = found;
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
@@ -256,7 +262,7 @@ export class ApiDriver implements Driver {
       if (Object.keys(pointers).length && received.tooLarge)
         throw new Error('Response captures need the body, and the response was over 1 MiB');
       const captures = Object.keys(pointers).length
-        ? responseCaptures(redactCredentials(received.text), pointers)
+        ? responseCaptures(received.status, redactCredentials(received.text), pointers)
         : undefined;
       this.exchange = exchange;
       this.location = url.href;
