@@ -89,6 +89,9 @@ while b'\\n' not in lines:
     lines += data
 first, lines = lines.split(b'\\n', 1)
 spec = json.loads(first)
+# The command must not keep the control channel: a daemon that holds it
+# open keeps the helper from closing after the command exited.
+os.set_inheritable(3, False)
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
 wake, woken = os.pipe()
