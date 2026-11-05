@@ -57,7 +57,7 @@ The fixer and GitHub are off until you turn them on. The sections below show eac
 
 - For iOS: Xcode and a booted simulator. For Android: the Android SDK and a running emulator. For both: [Maestro](https://maestro.mobile.dev).
 - For Electron: an app build that opens a CDP port (`--remote-debugging-port`).
-- For GitHub: a logged-in [`gh`](https://cli.github.com) CLI.
+- For GitHub: a [`gh`](https://cli.github.com) CLI that can read and push to the repo.
 
 You do not need to install Bugpatrol. Run each command with `npx bugpatrol`. You can also add it to your project:
 
