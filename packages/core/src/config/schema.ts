@@ -10,7 +10,7 @@ export const viewportSchema = z.object({
   deviceScaleFactor: z.number().positive().default(1),
 });
 
-export const actionSchema: z.ZodType<Record<string, unknown>> = z.record(z.unknown());
+export const actionSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown());
 
 export const runSchema = z.object({
   command: z.string(),
@@ -21,7 +21,7 @@ export const runSchema = z.object({
       forbidConsoleErrors: z.boolean().default(true),
       timeoutMs: z.number().int().positive().default(60_000),
     })
-    .default({}),
+    .prefault({}),
   seeds: z.array(z.string()).default([]),
 });
 
@@ -51,7 +51,7 @@ export const toleranceSchema = z
       )
       .default([]),
   })
-  .default({});
+  .prefault({});
 
 export const decisionsSchema = z
   .object({
@@ -60,19 +60,19 @@ export const decisionsSchema = z
         via: z.enum(['auto', 'openrouter', 'vercel', 'openai', 'anthropic', 'custom']).default('auto'),
         name: z.string().default(''),
       })
-      .default({}),
+      .prefault({}),
     confidence: z
       .object({ high: z.number().min(0).max(1).default(0.85), low: z.number().min(0).max(1).default(0.55) })
-      .default({}),
+      .prefault({}),
     budget: z
       .object({
         perRunUsd: z.number().nonnegative().default(0.5),
         visionSampleRate: z.number().min(0).max(1).default(0.05),
         allowFrontier: z.boolean().default(true),
       })
-      .default({}),
+      .prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const crawlSchema = z
   .object({
@@ -90,7 +90,7 @@ export const crawlSchema = z
     /** The crawler may not leave the configured origin (spec 11.1). */
     confineToOrigin: z.boolean().default(true),
   })
-  .default({});
+  .prefault({});
 
 export const surfacesSchema = z
   .object({
@@ -101,7 +101,7 @@ export const surfacesSchema = z
     /** Opt-in. Requires contents:write on the GitHub App (spec 10.1). */
     fixPRs: z.boolean().default(false),
   })
-  .default({});
+  .prefault({});
 
 export const productionSchema = z
   .object({
@@ -109,7 +109,7 @@ export const productionSchema = z
     /** There is no flag that silently overrides this (spec 1.2). */
     allowMutations: z.boolean().default(false),
   })
-  .default({});
+  .prefault({});
 
 export const determinismSchema = z
   .object({
@@ -126,12 +126,12 @@ export const determinismSchema = z
         intervalMs: z.number().int().positive().default(120),
         timeoutMs: z.number().int().positive().default(10_000),
       })
-      .default({}),
+      .prefault({}),
     /** A glyph falling back to an unbundled family fails the run loudly. */
     failOnFontFallback: z.boolean().default(true),
     blockThirdPartyRequests: z.boolean().default(true),
   })
-  .default({});
+  .prefault({});
 
 /**
  * One setup or teardown command (ADR 0005). `capture` pulls values out of the
@@ -142,7 +142,7 @@ export const determinismSchema = z
 export const appCommandSchema = z.object({
   run: z.string(),
   cwd: z.string().optional(),
-  capture: z.record(z.string()).default({}),
+  capture: z.record(z.string(), z.string()).prefault({}),
   /** Keep the process alive for the session instead of waiting for it to exit. */
   background: z.boolean().default(false),
   /** Background only: wait until this regex matches the output. */
@@ -175,15 +175,15 @@ export const appSchema = z
          * They go into each credential set. Without `credentials`, they are
          * the only set.
          */
-        headers: z.record(z.string()).default({}),
+        headers: z.record(z.string(), z.string()).prefault({}),
         /**
          * API: two users (3b). Each set keeps its token and its workspace
          * header together. Without `other`, the cross-user cases are blocked.
          */
         credentials: z
           .object({
-            self: z.object({ headers: z.record(z.string()) }),
-            other: z.object({ headers: z.record(z.string()) }).optional(),
+            self: z.object({ headers: z.record(z.string(), z.string()) }),
+            other: z.object({ headers: z.record(z.string(), z.string()) }).optional(),
           })
           .optional(),
         /**
@@ -215,7 +215,7 @@ export const appSchema = z
         errors: z
           .object({
             statuses: z.array(z.number().int().min(400).max(599)).default([]),
-            schema: z.record(z.unknown()).optional(),
+            schema: z.record(z.string(), z.unknown()).optional(),
           })
           .optional(),
         /**
@@ -248,7 +248,7 @@ export const appSchema = z
                 port: z.number().int().min(0).max(65535).default(0),
                 allowTakeover: z.boolean().default(false),
               })
-              .default({}),
+              .prefault({}),
           })
           .optional(),
         /**
@@ -290,21 +290,21 @@ export const appSchema = z
             timeoutMs: z.number().int().positive().max(600_000).default(60_000),
             cols: z.number().int().min(20).max(500).default(80),
             rows: z.number().int().min(5).max(200).default(24),
-            env: z.record(z.string()).default({}),
+            env: z.record(z.string(), z.string()).prefault({}),
           })
-          .default({}),
+          .prefault({}),
         /** Mobile: the bundle id or package name. */
         appId: z.string().optional(),
         /** Mobile: the simulator UDID or emulator serial. Default: the booted one. */
         device: z.string().optional(),
       })
-      .default({}),
+      .prefault({}),
     /** Plain-English guide for the explorer: login, onboarding, never-do list. */
     instructions: z.string().optional(),
     /** Names of env vars the explorer may use as {{NAME}} placeholders. */
     secrets: z.array(z.string()).default([]),
   })
-  .default({});
+  .prefault({});
 
 /**
  * One place Bugpatrol reads backend logs from. Kept generic on purpose: any
@@ -377,7 +377,7 @@ function runtimeFor(role: AgentRole, fallback: z.input<typeof modelRuntimeSchema
       (value) => (typeof value === 'string' ? { runtime: 'cli', agent: value } : value),
       z.discriminatedUnion('runtime', [modelRuntimeSchema, cliRuntimeSchema]),
     )
-    .default(fallback)
+    .prefault(fallback)
     .superRefine((use, ctx) => {
       if (use.runtime === 'cli' && !use.command && !use.agent) {
         ctx.addIssue({ code: 'custom', message: `Set \`agent\` (${CLI_AGENTS.join(', ')}) or \`command\`.` });
@@ -438,7 +438,7 @@ export const agentsSchema = z
         reflectMaxSteps: z.number().int().positive().default(10),
         reflectBudgetUsd: z.number().nonnegative().optional(),
       })
-      .default({}),
+      .prefault({}),
     explorer: z
       .object({
         ...roleBase,
@@ -446,13 +446,13 @@ export const agentsSchema = z
         /** Full coverage needs many actions: one step is one tool call. */
         maxSteps: z.number().int().positive().default(150),
       })
-      .default({}),
+      .prefault({}),
     judge: z
       .object({
         ...roleBase,
         use: runtimeFor('judge', { runtime: 'model' }),
       })
-      .default({}),
+      .prefault({}),
     fixer: z
       .object({
         ...roleBase,
@@ -478,7 +478,7 @@ export const agentsSchema = z
             maxSteps: z.number().int().positive().default(30),
             budgetUsd: z.number().nonnegative().optional(),
           })
-          .default({}),
+          .prefault({}),
         minSeverity: z.enum(['cosmetic', 'minor', 'major', 'critical']).default('minor'),
         /**
          * The local commit on the fix branch. {title} is the issue title. Set a
@@ -488,7 +488,7 @@ export const agentsSchema = z
         /** At most this many fixes per patrol cycle, worst issues first. */
         maxPerCycle: z.number().int().positive().default(2),
       })
-      .default({}),
+      .prefault({}),
     github: z
       .object({
         enabled: z.boolean().default(false),
@@ -508,9 +508,9 @@ export const agentsSchema = z
             /** How long one cycle waits for pending checks. */
             waitMinutes: z.number().nonnegative().default(20),
           })
-          .default({}),
+          .prefault({}),
       })
-      .default({}),
+      .prefault({}),
     /** `bugpatrol review <pr>`. */
     review: z
       .object({
@@ -576,7 +576,7 @@ export const agentsSchema = z
           .positive()
           .default(20 * 60 * 1000),
       })
-      .default({}),
+      .prefault({}),
     /**
      * `bugpatrol sweep`, and the sweep that an api patrol runs before the
      * explorer. A run stops at either limit, and the next run resumes there.
@@ -591,7 +591,7 @@ export const agentsSchema = z
           .positive()
           .default(30 * 60 * 1000),
       })
-      .default({}),
+      .prefault({}),
     patrol: z
       .object({
         intervalMinutes: z.number().positive().default(30),
@@ -612,9 +612,9 @@ export const agentsSchema = z
          */
         state: z.enum(['local', 'branch']).default('local'),
       })
-      .default({}),
+      .prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const bugpatrolConfigSchema = z
   .object({
@@ -627,7 +627,7 @@ export const bugpatrolConfigSchema = z
     auth: z
       .object({
         kind: z.literal('none', {
-          errorMap: () => ({
+          error: () => ({
             message: 'Bugpatrol does not read `auth`. Sign in through `app.setup` and `app.instructions`.',
           }),
         }),
@@ -645,7 +645,7 @@ export const bugpatrolConfigSchema = z
         include: z.array(z.string()).default(['src/**', 'app/**']),
         ignore: z.array(z.string()).default(['**/*.stories.tsx', '**/*.test.ts', '**/generated/**']),
       })
-      .default({}),
+      .prefault({}),
     crawl: crawlSchema,
     mask: z.array(maskSchema).default([]),
     tolerance: toleranceSchema,
