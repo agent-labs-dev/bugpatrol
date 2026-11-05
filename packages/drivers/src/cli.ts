@@ -360,7 +360,7 @@ export class CliDriver implements Driver {
     if (action.kind !== 'run')
       return { ok: false, retryable: false, error: 'A CLI app takes only run, session and wait' };
     if (ESCAPE.test(action.command)) return { ok: false, retryable: false, error: OUTSIDE };
-    this.view = 'shell';
+    await this.showView('shell');
     const command = this.redact(action.command);
     this.show(prompt(command), false);
     this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows) };
@@ -422,7 +422,7 @@ export class CliDriver implements Driver {
     }
     const session = this.session;
     if (!session) return fail('No session is running. Start one first');
-    this.view = 'session';
+    await this.showView('session');
     const exited = () => `The program exited with code ${session.exitCode ?? 'none'}`;
     if (op.op === 'stop') {
       await this.stopSession();
@@ -454,16 +454,19 @@ export class CliDriver implements Driver {
       session.sent = Date.now();
       return { ok: true, step };
     }
-    let keys: string[];
     try {
       await session.screen.flush();
-      keys = op.keys.map((key) => sessionKeyBytes(key, session.screen.applicationCursor));
+      for (const key of op.keys) sessionKeyBytes(key, session.screen.applicationCursor);
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
-    for (const [index, bytes] of keys.entries()) {
-      if (index) await sleep(keys[index - 1] === '\u001b' ? ESCAPE_GAP_MS : KEY_GAP_MS);
-      session.helper.child.stdin?.write(bytes);
+    let previous: string | undefined;
+    for (const key of op.keys) {
+      if (previous !== undefined) await sleep(previous === '\u001b' ? ESCAPE_GAP_MS : KEY_GAP_MS);
+      // An earlier key can have changed the cursor mode, so each key is encoded as it goes.
+      await session.screen.flush();
+      previous = sessionKeyBytes(key, session.screen.applicationCursor);
+      session.helper.child.stdin?.write(previous);
       session.sent = Date.now();
     }
     return { ok: true, step };
@@ -496,8 +499,8 @@ export class CliDriver implements Driver {
     helper.child.stdout?.setEncoding('utf8');
     helper.child.stdout?.on('data', (chunk: string) => {
       session.screen.write(chunk);
-      // Raw here: the recording is redacted as one stream when it stops.
-      this.cast.push(chunk);
+      // Raw here: the recording is redacted as one stream when it stops. The shell's screen keeps it off while shown.
+      if (this.view === 'session') this.cast.push(chunk);
       session.printed = Date.now();
       if (session.answered < session.sent) session.answered = session.printed;
     });
@@ -521,6 +524,20 @@ export class CliDriver implements Driver {
       this.cast.push('\u001b[?1049l\u001b[?25h');
     }
     if (session.screen.cols !== this.cols || session.screen.rows !== this.rows) this.cast.resize(this.cols, this.rows);
+  }
+
+  /**
+   * Shows the shell or the session. The recording gets the size and the whole
+   * screen of the one shown, on a reset terminal, since the other drew over it.
+   */
+  private async showView(view: 'shell' | 'session'): Promise<void> {
+    if (this.view === view) return;
+    const before = (this.view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    this.view = view;
+    const screen = (view === 'session' ? this.session?.screen : undefined) ?? this.screen;
+    await screen.flush();
+    if (screen.cols !== before.cols || screen.rows !== before.rows) this.cast.resize(screen.cols, screen.rows);
+    this.cast.push(`\u001bc${screen.serialize()}`);
   }
 
   /** Waits until the program printed nothing for `ms`. False when the deadline came first. */

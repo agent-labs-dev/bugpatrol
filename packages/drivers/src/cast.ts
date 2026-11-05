@@ -286,9 +286,10 @@ export class Terminal {
    * Output that draws the visible screen on a blank terminal of the same
    * size: the alternate screen when it is active, each cell with its colors
    * and attributes, the scroll region, the cursor, its visibility, and
-   * application cursor mode. Flush first.
+   * application cursor mode. Flush first. A cell in `hidden`, as
+   * `row * cols + col`, is drawn as a block in place of its character.
    */
-  serialize(): string {
+  serialize(hidden?: Set<number>): string {
     const buffer = this.emulator.buffer.active;
     let out = buffer.type === 'alternate' ? '\u001b[?1049h' : '';
     out += '\u001b[0m\u001b[H\u001b[2J';
@@ -299,7 +300,10 @@ export class Terminal {
       for (let col = 0; col < this.cols; col++) {
         const cell = line.getCell(col);
         if (!cell || cell.getWidth() === 0) continue;
-        cells.push({ sgr: cellSgr(cell), chars: cell.getChars() || ' ' });
+        cells.push({
+          sgr: cellSgr(cell),
+          chars: hidden?.has(row * this.cols + col) ? HIDDEN : cell.getChars() || ' ',
+        });
       }
       while (cells.length && cells.at(-1)!.sgr === '0' && cells.at(-1)!.chars === ' ') cells.pop();
       if (!cells.length) continue;
@@ -319,7 +323,7 @@ export class Terminal {
       out += `\u001b[${margins.scrollTop + 1};${margins.scrollBottom + 1}r`;
     }
     if (buffer.cursorX < this.cols) out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
-    else out += this.pendingWrap(buffer);
+    else out += this.pendingWrap(buffer, hidden);
     // The attributes that output after the recording starts is drawn with. xterm keeps them off its public API.
     const pen = (this.emulator as unknown as { _core?: { _inputHandler?: { _curAttrData?: SgrSource } } })._core
       ?._inputHandler?._curAttrData;
@@ -334,14 +338,15 @@ export class Terminal {
    * cursor move reaches that state, so redraw the row's last cell from just
    * before it, which leaves the cursor there as it was.
    */
-  private pendingWrap(buffer: xtermModule.IBuffer): string {
+  private pendingWrap(buffer: xtermModule.IBuffer, hidden?: Set<number>): string {
     const line = buffer.getLine(buffer.viewportY + buffer.cursorY);
     const last = line?.getCell(this.cols - 1);
     const wide = last?.getWidth() === 0 ? line?.getCell(this.cols - 2) : undefined;
     const cell = wide ?? last;
     const col = wide ? this.cols - 1 : this.cols;
     if (!cell) return `\u001b[${buffer.cursorY + 1};${this.cols}H`;
-    return `\u001b[${buffer.cursorY + 1};${col}H\u001b[${cellSgr(cell)}m${cell.getChars() || ' '}\u001b[0m`;
+    const chars = hidden?.has(buffer.cursorY * this.cols + col - 1) ? HIDDEN : cell.getChars() || ' ';
+    return `\u001b[${buffer.cursorY + 1};${col}H\u001b[${cellSgr(cell)}m${chars}\u001b[0m`;
   }
 
   /** Returns the visible grid with xterm colors resolved to RGB tuples. */
@@ -893,7 +898,7 @@ export class CastRecorder {
     const file = `${name}.cast`;
     await writeCast(file, {
       ...this.size,
-      events: this.redact ? redactEvents(cast.events, this.redact) : cast.events,
+      events: this.redact ? await redactEvents(cast.events, this.size, this.redact) : cast.events,
     });
     return file;
   }
@@ -908,7 +913,11 @@ export class CastRecorder {
  * the redacted stream cannot be lined up with the output, the output is one
  * event, redacted whole.
  */
-function redactEvents(events: CastEvent[], redact: (value: string) => string): CastEvent[] {
+async function redactEvents(
+  events: CastEvent[],
+  size: { width: number; height: number },
+  redact: (value: string) => string,
+): Promise<CastEvent[]> {
   const visible = redactSpans(events, redact, (text) => {
     const { plain, at } = withoutEscapes(text);
     // A span in `plain` becomes the raw range that holds it, escape codes and all.
@@ -918,7 +927,42 @@ function redactEvents(events: CastEvent[], redact: (value: string) => string): C
       placeholder: span.placeholder,
     }));
   });
-  return redactSpans(visible, redact, (text) => secretSpans(text, redact));
+  return hideScreenSecrets(
+    redactSpans(visible, redact, (text) => secretSpans(text, redact)),
+    size,
+    redact,
+  );
+}
+
+/**
+ * A program can put a secret on the screen with output that holds none, such
+ * as by overwriting part of a field. The events are played on a terminal, and
+ * one that leaves a secret on the screen is followed by the screen drawn again
+ * with the cells of the secret hidden: the whole screen when they cannot be
+ * found.
+ */
+async function hideScreenSecrets(
+  events: CastEvent[],
+  size: { width: number; height: number },
+  redact: (value: string) => string,
+): Promise<CastEvent[]> {
+  const terminal = new Terminal(size.width, size.height);
+  const result: CastEvent[] = [];
+  for (const event of events) {
+    const [at, text, kind] = event;
+    if (kind === 'r') {
+      await terminal.flush();
+      const [cols, rows] = text.split('x').map(Number);
+      terminal.resize(cols!, rows!);
+      result.push(event);
+      continue;
+    }
+    terminal.write(text);
+    await terminal.flush();
+    const hidden = secretCells(terminal, terminal.cells(), redact);
+    result.push(hidden.size ? [at, text + terminal.serialize(hidden)] : event);
+  }
+  return result;
 }
 
 /** The output events with the spans that `find` locates in the joined output replaced. */
