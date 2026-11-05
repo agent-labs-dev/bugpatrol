@@ -529,6 +529,7 @@ async function captureBase(
   } catch (error) {
     const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
     ctx.log(reason);
+    review.baseError = new Vars(ctx.config.app.secrets).redact(reason) as string;
     for (const target of targets)
       if (!target.capture.after) {
         target.capture.reached = false;

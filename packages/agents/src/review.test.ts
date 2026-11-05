@@ -2650,6 +2650,39 @@ describe('review rendering', () => {
     expect(body).toContain('1. Run the routine enter-app\n2. Tap Save');
   });
 
+  it('says the comparison is incomplete when a finding could not be compared, never that nothing was introduced', () => {
+    const unclear = review.findings.filter((finding) => finding.verdict === 'unclear');
+    const only = renderReview(
+      { ...review, findings: unclear },
+      (path) => path,
+      () => false,
+    ).body;
+    expect(only).not.toContain('No problem introduced');
+    expect(only).toContain('**Comparison incomplete** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(only).toContain('> 1 finding could not be compared with the base build.');
+    expect(only).toContain('| Unclear | minor | Could not compare | No base. |');
+
+    const down = renderReview(
+      {
+        ...review,
+        findings: unclear,
+        baseError:
+          'The base build did not run: InfrastructureError: Cannot fetch the spec http://127.0.0.1:18080/openapi.json',
+      },
+      (path) => path,
+      () => false,
+    ).body;
+    expect(down).toContain('**Base unavailable** · tested `aaaaaaa` against `main` `bbbbbbb`');
+    expect(down).toContain(
+      '> The base build did not run: InfrastructureError: Cannot fetch the spec http://127.0.0.1:18080/openapi.json',
+    );
+
+    // Introduced problems still lead, and the incomplete comparison is said under them.
+    const { body } = render();
+    expect(body).toContain('**3 problems introduced** · tested');
+    expect(body).toContain('> 1 finding could not be compared with the base build.');
+  });
+
   it('shows an API capture as an http block under the table', () => {
     const exchange = (status: number) => ({
       request: { method: 'GET' as const, path: '/items/0', headers: {} },
