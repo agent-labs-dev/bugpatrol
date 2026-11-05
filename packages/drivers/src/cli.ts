@@ -79,7 +79,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * the terminal, which a process it left behind can hold open.
  */
 const PTY = `
-import fcntl, json, os, pty, select, signal, struct, sys, termios
+import fcntl, json, os, pty, select, signal, struct, sys, termios, time
 cols, rows = int(sys.argv[1]), int(sys.argv[2])
 lines = b''
 while b'\\n' not in lines:
@@ -151,9 +151,12 @@ while status is None:
 if status is None:
     status = os.waitpid(pid, 0)[1]
 stop()
-# What the command printed before it exited is still in the terminal.
-while output(0.05):
+# What the command printed before it exited is still in the terminal. A
+# process that left the group can keep writing there, so the drain is bounded.
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline and output(0.05):
     pass
+os.close(fd)
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
 `;
 
