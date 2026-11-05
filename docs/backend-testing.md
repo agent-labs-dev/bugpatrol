@@ -117,7 +117,9 @@ header. For example, `X-Workspace-Id` fills `{workspace_id}`.
 Write each token as a `${NAME}` placeholder. The name must be in `app.secrets`,
 or a setup step must capture it. A setup step can get a short-lived token, for
 example with `capture`. Bugpatrol redacts each credential from the evidence,
-the logs, and the issues.
+the logs, and the issues. An exchange still names each credential header it
+sent, as `authorization: [redacted]`, so a reader sees that a request carried
+credentials.
 
 ### Deploys
 
