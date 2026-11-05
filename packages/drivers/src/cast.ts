@@ -318,10 +318,30 @@ export class Terminal {
     if (margins && (margins.scrollTop !== 0 || margins.scrollBottom !== this.rows - 1)) {
       out += `\u001b[${margins.scrollTop + 1};${margins.scrollBottom + 1}r`;
     }
-    out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
+    if (buffer.cursorX < this.cols) out += `\u001b[${buffer.cursorY + 1};${buffer.cursorX + 1}H`;
+    else out += this.pendingWrap(buffer);
+    // The attributes that output after the recording starts is drawn with. xterm keeps them off its public API.
+    const pen = (this.emulator as unknown as { _core?: { _inputHandler?: { _curAttrData?: SgrSource } } })._core
+      ?._inputHandler?._curAttrData;
+    if (pen) out += `\u001b[${cellSgr(pen)}m`;
     if (!this.cursorVisible) out += '\u001b[?25l';
     if (this.applicationCursor) out += '\u001b[?1h';
     return out;
+  }
+
+  /**
+   * A cursor past the last column waits to wrap on the next character. No
+   * cursor move reaches that state, so redraw the row's last cell from just
+   * before it, which leaves the cursor there as it was.
+   */
+  private pendingWrap(buffer: xtermModule.IBuffer): string {
+    const line = buffer.getLine(buffer.viewportY + buffer.cursorY);
+    const last = line?.getCell(this.cols - 1);
+    const wide = last?.getWidth() === 0 ? line?.getCell(this.cols - 2) : undefined;
+    const cell = wide ?? last;
+    const col = wide ? this.cols - 1 : this.cols;
+    if (!cell) return `\u001b[${buffer.cursorY + 1};${this.cols}H`;
+    return `\u001b[${buffer.cursorY + 1};${col}H\u001b[${cellSgr(cell)}m${cell.getChars() || ' '}\u001b[0m`;
   }
 
   /** Returns the visible grid with xterm colors resolved to RGB tuples. */
@@ -406,7 +426,27 @@ function readCell(raw: {
 }
 
 /** The SGR parameters that give a cell its colors and attributes, from a reset. */
-function cellSgr(cell: xtermModule.IBufferCell): string {
+/** What cellSgr reads: a buffer cell, or xterm's current text attributes. */
+type SgrSource = Pick<
+  xtermModule.IBufferCell,
+  | 'isFgRGB'
+  | 'isFgPalette'
+  | 'getFgColor'
+  | 'isBgRGB'
+  | 'isBgPalette'
+  | 'getBgColor'
+  | 'isBold'
+  | 'isDim'
+  | 'isItalic'
+  | 'isUnderline'
+  | 'isBlink'
+  | 'isInverse'
+  | 'isInvisible'
+  | 'isStrikethrough'
+  | 'isOverline'
+>;
+
+function cellSgr(cell: SgrSource): string {
   const params = ['0'];
   const color = (rgb: boolean, palette: boolean, value: number, base: number, bright: number, extended: number) => {
     if (rgb) params.push(`${extended};2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}`);
