@@ -389,6 +389,21 @@ export class Workspace {
     }
   }
 
+  /** The candidates of a session that the judge or a review dismissed, one line each. */
+  async readDecisions(sessionId: string): Promise<{ candidateId: string; decision: string; reason: string }[]> {
+    try {
+      const text = await readFile(paths.sessionDecisions(this.root, sessionId, this.profile), 'utf8');
+      return text
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
   async updateSession(id: string, patch: Partial<SessionSummary>): Promise<SessionSummary> {
     const file = join(paths.session(this.root, id, this.profile), 'session.json');
     const current = await readJson<SessionSummary>(file);

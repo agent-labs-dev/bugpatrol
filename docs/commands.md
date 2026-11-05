@@ -24,6 +24,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 
 | Command | What it does |
 | --- | --- |
+| `bugpatrol findings list [--session <id>]` | List the findings of the last explore or sweep session that has any, or of one session, with what became of each: filed as an issue, dismissed, ignored, or waiting for the judge |
 | `bugpatrol issue list` | List the issues, worst first |
 | `bugpatrol issue show <id>` | Print an issue: its body, the judge's reason, how it closed, and the paths of its evidence and repro routine |
 | `bugpatrol issue dismiss <id> --reason "..." [--by name]` | Close an issue as not a bug; it does not come back |
@@ -53,4 +54,4 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | --- | --- |
 | `bugpatrol run [--all \| --smoke \| --screens /a,/b] [--no-models]` | Capture, compare with the baselines, and run the checks |
 
-These commands are planned and not built yet: `recon`, `model`, `baseline`, `findings`, `intent`, `report`, `export`, and `watch`.
+These commands are planned and not built yet: `recon`, `model`, `baseline`, `intent`, `report`, `export`, and `watch`.

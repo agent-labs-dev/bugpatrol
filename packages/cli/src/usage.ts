@@ -46,9 +46,7 @@ Baselines
   bugpatrol baseline accept --clean       bulk-accept everything non-blocking
 
 Triage
-  bugpatrol findings list [--route issue|question]
-  bugpatrol findings explain <id>
-  bugpatrol findings accept <id> --reason "intentional"
+  bugpatrol findings list [--session <id>]   the findings of the last session, and what became of each
   bugpatrol intent list|export|prune
 
 Dashboard
@@ -187,6 +185,11 @@ export const COMMAND_HELP: Record<string, string> = {
 `,
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.
+`,
+  findings: `bugpatrol findings list [--session <id>]
+  List the findings (candidates) of the last explore or sweep session that has any, or of one session,
+  with what became of each: filed as an issue, dismissed, ignored, or waiting for the judge.
+  --session <id>  the findings of this session
 `,
   issue: `bugpatrol issue list | show <id> | dismiss <id> | fixed <id> | reopen <id>
   List the issues, worst first, show one, or change the state of one issue.

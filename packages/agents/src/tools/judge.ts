@@ -1,4 +1,4 @@
-import { appendFile, copyFile, readFile } from 'node:fs/promises';
+import { appendFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   awaitsJudge,
@@ -38,19 +38,7 @@ function issueTitle(value: string): string {
 }
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
-  try {
-    const lines = await readFile(paths.sessionDecisions(session.root, sessionId, session.workspace.profile), 'utf8');
-    return new Set(
-      lines
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => (JSON.parse(line) as { candidateId: string }).candidateId),
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw error;
-  }
+  return new Set((await session.workspace.readDecisions(sessionId)).map((line) => line.candidateId));
 }
 
 /**

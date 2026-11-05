@@ -16,6 +16,7 @@ import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
 import { doctorExitCode, runChecks } from './commands/doctor.js';
 import { runEndpointsCommand } from './commands/endpoints.js';
+import { runFindingsCommand } from './commands/findings.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
@@ -158,6 +159,11 @@ try {
       break;
     }
 
+    case 'findings': {
+      await runFindingsCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
+      break;
+    }
+
     case 'github': {
       if (args.length !== 1 || args[0] !== 'sync') throw new Error('Use bugpatrol github sync');
       const config = readConfig();
@@ -222,7 +228,6 @@ try {
     case 'recon':
     case 'model':
     case 'baseline':
-    case 'findings':
     case 'intent':
     case 'report':
     case 'export':
