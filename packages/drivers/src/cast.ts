@@ -410,6 +410,64 @@ export class Terminal {
     return cells;
   }
 
+  /**
+   * The visible screen as text that names each cell's colours: for each row
+   * that shows anything, the runs of cells with one style, as 1-based
+   * columns, the colours as drawn (inverse and dim applied), and the text.
+   * A blank cell joins the run before it when its background matches, and
+   * blank cells on the terminal's own background end a row. A reader can
+   * then tell two close shades apart, which a screenshot does not let it do
+   * reliably. With `redact`, a secret anywhere on the screen hides the text
+   * of every run; the colours stay. Flush first.
+   */
+  styleRuns(redact?: (value: string) => string): string {
+    const grid = this.cells();
+    const shown = grid.map((row) => row.map((cell) => cell.char).join('')).join('');
+    const hideText = redact !== undefined && redact(shown) !== shown;
+    const hex = (rgb: TerminalRgb) => `#${rgb.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
+    const lines: string[] = [];
+    grid.forEach((row, index) => {
+      let end = row.length;
+      while (end > 0) {
+        const cell = row[end - 1]!;
+        const blank = cell.width === 0 || cell.char === ' ';
+        if (!blank || hex(effectiveColors(cell).bg) !== hex(BACKGROUND)) break;
+        end--;
+      }
+      type Run = { from: number; to: number; bg: string; style?: string; text: string };
+      const runs: Run[] = [];
+      for (let col = 0; col < end; col++) {
+        const cell = row[col]!;
+        if (cell.width === 0) continue;
+        const { fg, bg } = effectiveColors(cell);
+        const blank = cell.char === ' ';
+        const style = blank
+          ? undefined
+          : [
+              `fg ${hex(fg)}`,
+              `bg ${hex(bg)}`,
+              ...(cell.bold ? ['bold'] : []),
+              ...(cell.italic ? ['italic'] : []),
+              ...(cell.underline ? ['underline'] : []),
+            ].join(' ');
+        const last = runs.at(-1);
+        const to = col + Math.max(1, cell.width) - 1;
+        if (last && last.bg === hex(bg) && (blank || last.style === style)) {
+          last.to = to;
+          last.text += cell.char;
+        } else runs.push({ from: col, to, bg: hex(bg), style, text: cell.char });
+      }
+      if (!runs.length) return;
+      const described = runs.map((run) => {
+        const columns = run.from === run.to ? `${run.from + 1}` : `${run.from + 1}-${run.to + 1}`;
+        const text = run.text.trimEnd();
+        return `${columns} ${run.style ?? `bg ${run.bg}`}${text && !hideText ? ` ${JSON.stringify(text)}` : ''}`;
+      });
+      lines.push(`row ${index + 1}: ${described.join(' | ')}`);
+    });
+    return lines.join('\n');
+  }
+
   /** The cursor position used by the PNG renderer. */
   cursor(): { x: number; y: number; visible: boolean } {
     const buffer = this.emulator.buffer.active;

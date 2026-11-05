@@ -504,6 +504,21 @@ ${input.placeholders.length ? input.placeholders.map((name) => `{{${name}}}`).jo
  * The judge rules of an api app: the rules of the calibration (map section
  * 3), word for word, then how the judge's tools carry them out.
  */
+const TERMINAL_JUDGE_RULES = `TERMINAL RULES
+A terminal candidate has a screenshot and the terminal's text. The screenshot of a command shows only its
+last screenful. The text has everything the command printed, and the colours of each cell of the screenshot.
+- Read the text before you decide. A failure that is in the text and not in the screenshot is still
+  evidence: never dismiss a candidate because the screenshot does not show it.
+- Before you accept a layout, colour, or alignment claim, compare the cells: the background of the cells in
+  question against the surface around them, and the row against the other rows of the same kind. Two shades
+  that look alike in the screenshot can be different surfaces, such as a dialog and its selected row.
+- A list can hold rows of different kinds, such as screens and rooms, each with its own marker or label. A
+  row that differs from rows of another kind is not inconsistent.
+- When neither the screenshot nor the text settles the claim, do not dismiss it and do not file it as a fact:
+  file it as minor, and start its reason with "Unverified:", saying what evidence would settle it.
+
+`;
+
 const API_JUDGE_RULES = `API RULES
 Judge each HTTP exchange by these rules:
 - A status that the spec does not declare is a bug. With \`connect.errors\`, the listed error statuses are declared.
@@ -533,8 +548,8 @@ things that might be wrong. Some came from automatic checks, some from the explo
 which ones are real problems for a user, and you write the issues that the team will read.
 
 FOR EACH CANDIDATE
-1. Call view_candidate and look at the evidence: the screenshot, or the HTTP exchange of an API. Do not decide
-   from the summary alone.
+1. Call view_candidate and look at the evidence: the screenshot (with a terminal's text), or the HTTP
+   exchange of an API. Do not decide from the summary alone.
 2. Decide:
    - A real problem that a user would notice: call file_issue. Put candidates with the same cause in one
      issue.
@@ -568,7 +583,7 @@ HOW TO WRITE AN ISSUE
 Be strict. A report that nobody can act on costs the team time. When you have decided every candidate,
 call finish with one sentence per decision.
 
-${platform === 'api' ? API_JUDGE_RULES : ''}${memoryPart('judge')}${lessonPart(lessons)}`;
+${platform === 'api' ? API_JUDGE_RULES : platform === 'cli' ? TERMINAL_JUDGE_RULES : ''}${memoryPart('judge')}${lessonPart(lessons)}`;
 }
 
 export function judgePrompt(sessionIds: string[], candidates: Candidate[], issues: Issue[]): string {

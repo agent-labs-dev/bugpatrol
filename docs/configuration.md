@@ -212,6 +212,8 @@ A program does not create these folders itself in most cases, so create them fir
 
 The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you.
 
+Each step saves a screenshot of the terminal, `NNN-<label>.png`, and its text beside it, `NNN-<label>.terminal.txt`: the command and everything it printed (or a session's screen), then the colours of each cell of the screenshot. A command's screenshot shows only its last screenful, so the judge reads the text to see output that scrolled off, and the cell colours to tell close shades apart. Characters that the bundled fonts lack, such as most emoji, draw as an outlined box of their width; the text names them.
+
 ### Connect for an API
 
 | Key | Default | What it does |

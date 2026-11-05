@@ -146,7 +146,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
     {
       name: 'view_candidate',
       description:
-        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, or for an API the HTTP exchange.',
+        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, with a terminal the complete output and the colours of each cell, or for an API the HTTP exchange.',
       inputSchema: schema({ id: string }, ['id']),
       async run(input) {
         const candidate = (await pendingCandidates(session, sessionIds)).find((item) => item.id === input.id);

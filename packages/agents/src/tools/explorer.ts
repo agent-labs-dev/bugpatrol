@@ -177,12 +177,18 @@ function terminalLines(terminal: NonNullable<Observation['terminal']>): string[]
   ];
 }
 
-/** The evidence of the last capture: its PNG, or the redacted exchange of an API. */
+/** The evidence of the last capture: its PNG and a terminal's text, or the redacted exchange of an API. */
 function captureEvidence(session: AgentSession): Evidence | undefined {
   const capture = session.lastObservation?.capture;
   if (capture?.kind === 'http')
     return capture.exchange && { kind: 'http', exchange: session.vars.redact(capture.exchange) as HttpExchange };
-  return session.lastCapture ? { kind: 'image', screenshot: session.lastCapture } : undefined;
+  return session.lastCapture
+    ? {
+        kind: 'image',
+        screenshot: session.lastCapture,
+        ...(session.lastTerminal ? { terminal: session.lastTerminal } : {}),
+      }
+    : undefined;
 }
 
 async function observe(session: AgentSession, label: string, summary?: string): Promise<ToolResult> {

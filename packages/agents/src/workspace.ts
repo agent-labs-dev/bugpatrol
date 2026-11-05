@@ -369,6 +369,16 @@ export class Workspace {
     return relative(this.root, file);
   }
 
+  /**
+   * Saves the text of a terminal beside its capture, as
+   * `NNN-<label>.terminal.txt`, and returns the workspace-relative file.
+   */
+  async saveTerminalText(capture: string, text: string): Promise<string> {
+    const file = capture.replace(/\.png$/, '.terminal.txt');
+    await writeFile(join(this.root, file), text);
+    return file;
+  }
+
   async appendCandidate(sessionId: string, candidate: Candidate): Promise<void> {
     const dir = paths.session(this.root, sessionId);
     await mkdir(dir, { recursive: true });

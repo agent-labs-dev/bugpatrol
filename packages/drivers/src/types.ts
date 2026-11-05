@@ -77,9 +77,10 @@ export type Observation = {
    * CLI only: the last command, redacted, and what it printed as a terminal
    * shows it. `exitCode` is absent while no command ran to its end. For a
    * session (`screen: true`), `output` is the visible screen of the program,
-   * not a log of what it printed.
+   * not a log of what it printed. `cells` names the colours of each cell of
+   * the screenshot as text (see `Terminal.styleRuns`).
    */
-  terminal?: { command: string; exitCode?: number; output: string; screen?: boolean };
+  terminal?: { command: string; exitCode?: number; output: string; screen?: boolean; cells?: string };
 };
 
 /**

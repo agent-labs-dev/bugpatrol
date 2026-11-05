@@ -39,9 +39,11 @@ export type HttpExchange = {
 
 /**
  * What an issue shows. An `image` is a capture of the screen, with
- * workspace-relative paths. An `http` is the exchange as text: an api
- * observation has no pixels (ADR 0008).
+ * workspace-relative paths. A terminal's capture also has `terminal`: its
+ * text, with the complete output of the command and the colours of each cell
+ * of the screenshot, which shows only the last screenful. An `http` is the
+ * exchange as text: an api observation has no pixels (ADR 0008).
  */
 export type Evidence =
-  | { kind: 'image'; screenshot: string; baseline?: string; diff?: string }
+  | { kind: 'image'; screenshot: string; baseline?: string; diff?: string; terminal?: string }
   | { kind: 'http'; exchange: HttpExchange };

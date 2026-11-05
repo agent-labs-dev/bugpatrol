@@ -42,6 +42,10 @@ describe('CliDriver', () => {
       expect(observation.terminal).toMatchObject({ exitCode: 3 });
       expect(observation.terminal!.output).toBe(`a terminal in ${dir.split('/').at(-1)}\n[redacted]\ndone`);
       expect(observation.capture.kind === 'image' && observation.capture.png.subarray(1, 4).toString()).toBe('PNG');
+      // The colours of each cell of the screenshot, as text: the green prompt, then the redacted output.
+      expect(observation.terminal!.cells).toMatch(/^row 1: 1-2 fg #0dbc79 bg #1e1e1e bold "\$" \| /);
+      expect(observation.terminal!.cells).toContain('"[redacted]"');
+      expect(observation.terminal!.cells).not.toContain(SECRET);
 
       const file = await driver.stopRecording(join(dir, 'head'));
       expect(file).toBe(join(dir, 'head.cast'));

@@ -273,6 +273,12 @@ describe('judge prompts', () => {
     expect(prompt).toContain('RECENTLY CLOSED ISSUES\n- iss_2 [fixed]: Recent\n- iss_1 [dismissed: By design]: Old');
     expect(judgeSystem()).toContain('reopens it as a regression');
   });
+
+  it('tells the judge of a terminal app to read its text and compare cells before deciding', () => {
+    expect(judgeSystem([], 'cli')).toContain('never dismiss a candidate because the screenshot does not show it');
+    expect(judgeSystem([], 'cli')).toContain('"Unverified:"');
+    expect(judgeSystem([], 'web')).not.toContain('TERMINAL RULES');
+  });
 });
 
 describe('groupViolations', () => {

@@ -557,23 +557,26 @@ export class CliDriver implements Driver {
     const screen = session?.screen ?? this.screen;
     await screen.flush();
     await this.last?.output.flush();
+    // The shell screen holds only redacted text; a session's screen holds what the program drew.
+    const cells = screen.styleRuns(session ? this.redact : undefined);
     const terminal: Observation['terminal'] = session
       ? {
           command: session.command,
           ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }),
           output: session.screen.screenTextRedacted(this.redact),
           screen: true,
+          cells,
         }
       : this.last && {
           command: this.last.command,
           ...(this.last.exitCode === undefined ? {} : { exitCode: this.last.exitCode }),
           output: this.last.output.text(),
+          cells,
         };
     return {
       platform: 'cli',
       location: 'terminal',
       ...(terminal ? { title: terminal.command, terminal } : {}),
-      // The shell screen holds only redacted text; a session's screen holds what the program drew.
       capture: { kind: 'image', png: terminalPng(screen, session ? this.redact : undefined) },
       viewport: { width: screen.cols * 8, height: screen.rows * 16, scale: 1 },
       elements: [],

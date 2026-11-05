@@ -33,6 +33,26 @@ describe('Terminal', () => {
     expect(terminal.text()).toBe('progress 99%\nred text\nkept\n0123456789abcdefghij\nXYZ');
   });
 
+  it('describes the cells of the screen as runs of one style, so a reader can compare surfaces', async () => {
+    const terminal = new Terminal(16, 4);
+    // A dialog surface, a bar, then the selected row's surface; then a plain row.
+    terminal.write(
+      '\u001b[48;2;41;46;66m \u001b[38;2;122;162;247m┃\u001b[48;2;59;66;97;1mHome  \u001b[0m\r\nplain\r\n',
+    );
+    await terminal.flush();
+    expect(terminal.styleRuns()).toBe(
+      [
+        'row 1: 1 bg #292e42 | 2 fg #7aa2f7 bg #292e42 "┃" | 3-8 fg #7aa2f7 bg #3b4261 bold "Home"',
+        'row 2: 1-5 fg #d4d4d4 bg #1e1e1e "plain"',
+      ].join('\n'),
+    );
+    // A secret on the screen hides the text of every run, never the colours.
+    expect(terminal.styleRuns((value) => value.replaceAll('Home', '{{A}}'))).toContain(
+      'row 1: 1 bg #292e42 | 2 fg #7aa2f7 bg #292e42 | 3-8',
+    );
+    expect(terminal.styleRuns((value) => value.replaceAll('Home', '{{A}}'))).not.toContain('plain');
+  });
+
   it('keeps the escape sequence that one chunk cuts in two', async () => {
     const terminal = new Terminal(20, 2);
     terminal.write('a\u001b[3');
