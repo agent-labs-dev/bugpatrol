@@ -17,8 +17,10 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   - Use request for each HTTP call. Each result is the HTTP exchange as text (the request, the status, the
     allowed headers, the body, the latency) and the expected contract of the endpoint from the spec.
   - Give each request its case.
-  - With a second user, send as: other on an id of the first user. The second user must get 404, not 403 and
-    not the data.
+  - With a second user, send as: other on an id of the first user. The second user must not get the data. A
+    denial (401, 403, 404) leaks only when it differs between an existing id and a missing one: send the same
+    request on a missing id and compare before you report it. Never claim a status that the spec, the app
+    guide, or the source does not establish.
   - When a flow works, call save_routine with assert checks that the contract or the app guide promises.
   - Call report_bug right after the request that shows the bug, so the issue gets that exchange. Use
     'unrecorded' for screen_id, and give the rule that the bug breaks.
@@ -170,7 +172,10 @@ more than one request, and the data of a second user.
 WHAT TO REPORT
 - A status that the spec, or connect.errors, does not declare for the endpoint.
 - A response field that the spec does not declare, also when it is harmless.
-- A response that tells the second user about data of the first user, for example 403 where 404 hides it.
+- A response that tells the second user about data of the first user: the data itself, or a denial that
+  differs between an existing id and a missing one, for example 403 for an id that exists and 404 for one that
+  does not. A denial that is the same for any id, such as a 403 for a workspace that the user is not in, tells
+  nothing.
 - A body that contradicts its own status.
 - A second DELETE of the same id that gives another status than the first, unless the spec declares 404.
 Do not report latency, or an HTTP rule that the spec does not require.
@@ -317,6 +322,10 @@ FOR EACH FINDING
    - not-a-bug: the app works as designed, the difference is what the pull request intends, or the explorer made
      a mistake.
    - unclear: the base flow did not reach the same screen, and the diff does not show the cause.
+   Decide first whether the finding is a problem at all. A finding that expects a status or a behavior that the
+   spec, the app guide, or the source does not establish is not-a-bug, on both builds. For example, a 403 that
+   shows no data and is the same for an existing id and a missing one is not a leak, even when the finding asks
+   for 404.
 
 WHEN THE FLOW FAILED ON THE BASE BUILD
 Read the diff. If the pull request adds the screen or the control, the flow cannot exist on the base build. Then
@@ -505,7 +514,7 @@ const API_JUDGE_RULES = `API RULES
 Judge each HTTP exchange by these rules:
 - A status that the spec does not declare is a bug. With \`connect.errors\`, the listed error statuses are declared.
 - A response field that the spec does not declare is a bug, even when it is harmless. Schema checks use \`additionalProperties: false\`.
-- A response that tells a caller about data of another user is a bug, for example 403 where 404 hides the data.
+- A response that tells a caller about data of another user is a bug: the data itself, or a denial that differs between an existing id and a missing one, for example 403 for an id that exists and 404 for one that does not.
 - A body that contradicts its own status is a bug (LLM judge, does not block).
 - A repeated DELETE must give the same status, unless the spec declares 404 (3c).
 - Latency is not a bug. It shows as information only.
@@ -514,6 +523,10 @@ Judge each HTTP exchange by these rules:
 
 How to apply them:
 - Expected behavior comes from the spec, the app guide, and these rules. It never comes from the code.
+- A candidate that asks for another status needs the spec or the app guide to declare that status. Its
+  detail names the statuses that the spec declares. A denial that shows no data and is the same for any id,
+  such as a 403 before the app looks the id up, is not a leak: dismiss a candidate that only asks for 404
+  there.
 - Unclear: file the issue as minor, and start its reason with "Unclear:", so that a person decides. Do not
   dismiss it.
 - Latency: do not file or dismiss a candidate for its latency. Write the latency in the issue body as information.

@@ -6,7 +6,7 @@ import { buildContract, caseKey, loadSpec, sweepCases } from '@bugpatrol/contrac
 import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { explorerPrompt, explorerSystem } from './prompts.js';
+import { explorerPrompt, explorerSystem, judgeReviewSystem, judgeSystem } from './prompts.js';
 import { runExplorer, wasBlocked } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
@@ -144,6 +144,11 @@ describe('the explorer prompt', () => {
     for (const words of ['record_screen', 'Each action tool returns a screenshot', 'FULL COVERAGE'])
       expect(api).not.toContain(words);
     expect(explorerSystem('web', '')).toContain('record_screen');
+    // A denial that does not depend on whether the id exists discloses nothing, whichever status it has.
+    for (const system of [api, judgeSystem([], 'api'), judgeReviewSystem()]) {
+      expect(system).not.toMatch(/must get 404|403 where 404/);
+      expect(system).toContain('an existing id and a missing one');
+    }
     const prompt = { screens: [], routines: [], placeholders: [], maxSteps: 5 };
     expect(explorerPrompt({ ...prompt, endpoints: [] })).not.toContain('SCREENS');
     expect(explorerPrompt(prompt)).toContain('KNOWN SCREENS\n(none yet)\n\nKNOWN ROUTINES');
@@ -371,6 +376,20 @@ describe('the api explorer', () => {
       '- DELETE /items/{id}',
     ]);
     expect(paths.summary).toContain('Goal not met: 5 of the 5 endpoint(s)');
+  });
+
+  it('gives a report the statuses that the spec declares, so the judge reads the contract it claims', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    await f.run('request', { method: 'GET', url: '/items/1', as: 'other' });
+    await f.run('report_bug', {
+      title: 'Another user gets 403 instead of 404',
+      what_is_wrong: 'The 403 tells user b that item 1 exists.',
+      expected: '404',
+      severity: 'major',
+    });
+    const [candidate] = await f.workspace.readCandidates(f.session.sessionId);
+    expect(candidate?.detail).toContain('Declared statuses of GET /items/{id}: 200; connect.errors: 401, 409.');
   });
 
   it('as: other uses the other credential set', async () => {

@@ -14,6 +14,7 @@ import {
   type Locator,
   type Routine,
   type RoutineStep,
+  resolvePointer,
   SAMPLE_FILES,
   type ScreenTransition,
   shortHash,
@@ -611,6 +612,22 @@ function stepSignature(step: RoutineStep): string {
 function testedCase(session: AgentSession): SweepCaseId | undefined {
   const step = session.trail.findLast((item) => item.kind === 'request');
   return step && responses.get(step)?.case;
+}
+
+/**
+ * The statuses that the spec declares for the endpoint of the last exchange,
+ * so a judge reads what the contract establishes before it accepts a claimed status.
+ */
+function declaredStatuses(session: AgentSession, api: ApiDriver): string | undefined {
+  const exchange = session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange;
+  if (!exchange) return undefined;
+  const { contract } = api.policy;
+  const endpoint = contract.match(exchange.request.method, exchange.request.path);
+  if (!endpoint) return undefined;
+  const operation = resolvePointer(contract.doc, endpoint.specRef)?.value as { responses?: object } | undefined;
+  const statuses = Object.keys(operation?.responses ?? {});
+  const errors = contract.errors.statuses.length ? `; connect.errors: ${contract.errors.statuses.join(', ')}` : '';
+  return `Declared statuses of ${endpoint.key}: ${statuses.join(', ') || 'none'}${errors}.`;
 }
 
 /** The request steps since the last anchor: the ones that save_routine numbers from 1. */
@@ -1279,7 +1296,15 @@ export function explorerTools(
             reportFingerprint(session, testedCase(session), rule) ??
             fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
-          detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
+          detail: session.vars.redact(
+            [
+              arg(input, 'what_is_wrong'),
+              `Expected: ${arg(input, 'expected')}`,
+              ...(api ? [declaredStatuses(session, api)] : []),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          ) as string,
           severity: input.severity as Candidate['severity'],
           evidence: {
             capture,
