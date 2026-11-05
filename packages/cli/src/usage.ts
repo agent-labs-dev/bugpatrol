@@ -1,5 +1,10 @@
 export const USAGE = `bugpatrol - a continuously-running QA engineer for your repo
 
+Global options
+  --config <file>                         use this config file, a profile such as .bugpatrol/cli.yml, before or
+                                          after the command: bugpatrol --config .bugpatrol/cli.yml review 12.
+                                          Paths stay relative to the project root. Default: .bugpatrol/bugpatrol.yml
+
 Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
@@ -211,7 +216,10 @@ export const COMMAND_HELP: Record<string, string> = {
 `,
 };
 
+const GLOBAL =
+  '  --config <file>  read this config file, a profile such as .bugpatrol/cli.yml, in place of .bugpatrol/bugpatrol.yml\n';
+
 export function commandHelp(command: string): string | undefined {
   const help = COMMAND_HELP[command];
-  return help && `${help}\nDocs: ${DOCS}\n`;
+  return help && `${help}${GLOBAL}\nDocs: ${DOCS}\n`;
 }

@@ -2,6 +2,12 @@
 
 Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the current folder or in a folder above it, the same way that git finds `.git/`. Run `npx bugpatrol --help` for the full list, and `npx bugpatrol <command> --help` for the flags of one command.
 
+## Global options
+
+| Option | What it does |
+| --- | --- |
+| `--config <file>` | Read this config file in place of `.bugpatrol/bugpatrol.yml`, for example `bugpatrol --config .bugpatrol/cli.yml review 12`. It goes before or after the command. The file is a profile with its own app map, routines and run state ([Profiles](configuration.md#profiles)). Paths in it stay relative to the project root |
+
 ## Agents
 
 | Command | What it does |
