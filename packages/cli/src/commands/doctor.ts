@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
 import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, paths } from '@bugpatrol/core';
 
@@ -31,7 +32,7 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
     fatal: true,
   });
 
-  if (config) checks.push(...agentChecks(config));
+  if (config) checks.push(...agentChecks(config, resolve(root, config.app.source)));
   if (config?.app.platform === 'cli')
     checks.push({
       name: 'cli:python3',
@@ -97,7 +98,7 @@ export function runChecks(root: string, config: BugpatrolConfig | undefined): Do
 }
 
 /** The checks that the agent commands need: an LLM for each agent, and gh for GitHub. */
-function agentChecks(config: BugpatrolConfig, env: NodeJS.ProcessEnv = process.env): DoctorCheck[] {
+function agentChecks(config: BugpatrolConfig, source: string, env: NodeJS.ProcessEnv = process.env): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   const roles = (['explorer', 'judge', 'fixer'] as const).filter(
     (role) => role !== 'fixer' || config.agents.fixer.enabled,
@@ -113,16 +114,26 @@ function agentChecks(config: BugpatrolConfig, env: NodeJS.ProcessEnv = process.e
   }
   if (config.agents.github.enabled) {
     const installed = spawnSync('gh', ['--version'], { stdio: 'ignore' }).status === 0;
-    const loggedIn = installed && spawnSync('gh', ['auth', 'status'], { stdio: 'ignore' }).status === 0;
+    // The repository read is the check: a proxy or a GitHub App can give gh access with no personal login.
+    const repo = config.agents.github.repo;
+    const read =
+      installed &&
+      spawnSync('gh', ['repo', 'view', ...(repo ? [repo] : []), '--json', 'nameWithOwner'], {
+        cwd: source,
+        encoding: 'utf8',
+      });
+    const readable = read !== false && read.status === 0;
     checks.push({
       name: 'github',
-      ok: loggedIn,
+      ok: readable,
       fatal: false,
       detail: !installed
         ? 'agents.github is on, but the gh CLI is not installed. Install it from https://cli.github.com'
-        : loggedIn
-          ? 'gh is logged in'
-          : 'agents.github is on, but gh is not logged in. Run `gh auth login`.',
+        : readable
+          ? `gh can read ${repo ?? 'the repository'}`
+          : `agents.github is on, but gh cannot read ${repo ?? 'the repository of app.source'}: ${
+              (read ? (read.stderr || read.error?.message || '').trim() : '') || 'gh repo view failed'
+            }`,
     });
   }
   return checks;

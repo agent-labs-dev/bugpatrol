@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createIssue, createPr, ensureAssetsBranch, type Gh, listFiled, syncGitHub, uploadImage } from './github.js';
+import {
+  createIssue,
+  createPr,
+  ensureAssetsBranch,
+  type Gh,
+  ghReady,
+  listFiled,
+  syncGitHub,
+  uploadImage,
+} from './github.js';
 import { buildReport } from './report.js';
 import { runPublisher } from './roles/publish.js';
 import type { Runtime } from './types.js';
@@ -204,6 +213,48 @@ describe('GitHub client', () => {
     expect(fix.error).toBeUndefined();
     expect(git(worktree, 'status', '--porcelain')).toBe('');
     expect(git(source, 'ls-remote', 'origin', 'refs/heads/fix-branch')).toContain(fix.commit);
+  });
+});
+
+describe('ghReady', () => {
+  const config = parseConfig({
+    version: 1,
+    app: { connect: { url: 'http://localhost' } },
+    agents: { github: { enabled: true, repo: 'o/r' } },
+  });
+  const ghError = (stderr: string, code = 1) =>
+    Object.assign(new Error(`Command failed: gh (exit ${code})`), { stderr });
+
+  it('accepts gh that reads the repository when it has no personal login', async () => {
+    // A proxy or GitHub App supplies the credentials: `gh auth status` fails, the repository read works.
+    const gh: Gh = async (args) => {
+      if (args[0] === '--version') return 'gh version 2';
+      if (args[0] === 'auth') throw ghError('gh auth manages a personal login, and this shell has none.', 4);
+      if (args[0] === 'repo' && args[1] === 'view') return 'main';
+      throw new Error(`Unexpected gh ${args.join(' ')}`);
+    };
+    expect(await ghReady(gh, config, '.')).toEqual({ ok: true, repo: 'o/r', defaultBranch: 'main' });
+  });
+
+  it('stops with the diagnostic gh gives when it cannot read the repository', async () => {
+    const gh: Gh = async (args) => {
+      if (args[0] === '--version') return 'gh version 2';
+      throw ghError(
+        'HTTP 401: Bad credentials (https://api.github.com/graphql)\nTry authenticating with:  gh auth login',
+      );
+    };
+    const ready = await ghReady(gh, config, '.');
+    expect(ready.ok).toBe(false);
+    expect(!ready.ok && ready.reason).toContain('gh cannot read o/r');
+    expect(!ready.ok && ready.reason).toContain('HTTP 401: Bad credentials');
+  });
+
+  it('says when gh is not installed', async () => {
+    const gh: Gh = async () => {
+      throw ghError('spawn gh ENOENT');
+    };
+    const ready = await ghReady(gh, config, '.');
+    expect(!ready.ok && ready.reason).toContain('the gh CLI is not installed');
   });
 });
 

@@ -20,7 +20,7 @@ import {
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
 import { captureParts, readExchanges, screenshotOf } from '../evidence.js';
-import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
+import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, uploadImage } from '../github.js';
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
@@ -1233,7 +1233,8 @@ export async function reviewPullRequest(
         'or run `bugpatrol review <pr> --dry-run` to write the review to .bugpatrol/runs/reviews/ only.',
     );
   const gh = opts.gh ?? defaultGh;
-  const ready = await ghReady(gh);
+  const source = resolve(root, config.app.source);
+  const ready = await ghReady(gh, config, source);
   if (!ready.ok) throw new ConfigError(ready.reason.replace('GitHub publish skipped', 'Review stopped'));
   const workspace = new Workspace(root, config.profile);
   const patrol = activePatrolPid((await workspace.readAgents()).patrol);
@@ -1241,9 +1242,8 @@ export async function reviewPullRequest(
     throw new ConfigError(
       `A patrol runs (pid ${patrol}), and it uses the app. Stop the patrol, or review when it waits for a new commit.`,
     );
-  const source = resolve(root, config.app.source);
   const log = opts.onLog ?? (() => {});
-  const { repo } = await resolveRepo(gh, config, source);
+  const { repo } = ready;
   try {
     const pr = await loadPullRequest(gh, repo, source, number, {
       allowFork: Boolean(opts.allowFork),

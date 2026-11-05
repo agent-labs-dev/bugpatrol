@@ -170,14 +170,14 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const outcomes: PublishOutcome[] = [];
   let resolved: Awaited<ReturnType<typeof resolveRepo>> | undefined;
   if (!deps.dryRun) {
-    const ready = await ghReady(gh);
+    const ready = await ghReady(gh, config, resolve(root, config.app.source));
     if (!ready.ok) {
       const record = await workspace.startSession('judge');
       await workspace.endSession(record.id, { summary: ready.reason });
       deps.onLog?.(ready.reason);
       return [];
     }
-    resolved = await resolveRepo(gh, config, resolve(root, config.app.source));
+    resolved = { repo: ready.repo, defaultBranch: ready.defaultBranch };
     const handled = await reuseFiled(
       gh,
       resolved.repo,
