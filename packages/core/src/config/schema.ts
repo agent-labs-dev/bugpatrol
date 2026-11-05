@@ -62,25 +62,35 @@ export const toleranceSchema = z
   })
   .prefault({});
 
+/** The settings of the Jev decider, which Bugpatrol no longer has. They are ignored, not rejected. */
+function withoutJev(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { decider: _decider, jev: _jev, ...rest } = value as Record<string, unknown>;
+  return rest;
+}
+
 export const decisionsSchema = z
-  .strictObject({
-    model: z
-      .strictObject({
-        via: z.enum(['auto', 'openrouter', 'vercel', 'openai', 'anthropic', 'custom']).default('auto'),
-        name: z.string().default(''),
-      })
-      .prefault({}),
-    confidence: z
-      .strictObject({ high: z.number().min(0).max(1).default(0.85), low: z.number().min(0).max(1).default(0.55) })
-      .prefault({}),
-    budget: z
-      .strictObject({
-        perRunUsd: z.number().nonnegative().default(0.5),
-        visionSampleRate: z.number().min(0).max(1).default(0.05),
-        allowFrontier: z.boolean().default(true),
-      })
-      .prefault({}),
-  })
+  .preprocess(
+    withoutJev,
+    z.strictObject({
+      model: z
+        .strictObject({
+          via: z.enum(['auto', 'openrouter', 'vercel', 'openai', 'anthropic', 'custom']).default('auto'),
+          name: z.string().default(''),
+        })
+        .prefault({}),
+      confidence: z
+        .strictObject({ high: z.number().min(0).max(1).default(0.85), low: z.number().min(0).max(1).default(0.55) })
+        .prefault({}),
+      budget: z
+        .strictObject({
+          perRunUsd: z.number().nonnegative().default(0.5),
+          visionSampleRate: z.number().min(0).max(1).default(0.05),
+          allowFrontier: z.boolean().default(true),
+        })
+        .prefault({}),
+    }),
+  )
   .prefault({});
 
 export const crawlSchema = z
