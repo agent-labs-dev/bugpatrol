@@ -82,8 +82,8 @@ async function listJson<T>(dir: string): Promise<T[]> {
 /** State stays plain JSON so a dashboard and a human can inspect the same data. */
 export class Workspace {
   /**
-   * `profile` picks the committed app map and routines (`config.profile`,
-   * see profileOf). Everything under `runs/` is shared by every profile.
+   * `profile` picks the committed app map and routines and the local state
+   * under `runs/` (`config.profile`, see profileOf).
    */
   constructor(
     readonly root: string,
@@ -91,11 +91,11 @@ export class Workspace {
   ) {}
 
   async readMemory(): Promise<MemoryFile> {
-    return (await readJson<MemoryFile>(paths.memory(this.root))) ?? { version: 1, lessons: [] };
+    return (await readJson<MemoryFile>(paths.memory(this.root, this.profile))) ?? { version: 1, lessons: [] };
   }
 
   upsertLessons(lessons: Omit<Lesson, 'id' | 'hits' | 'createdAt' | 'lastSeenAt'>[]): Promise<Lesson[]> {
-    return serialized(paths.memory(this.root), async () => {
+    return serialized(paths.memory(this.root, this.profile), async () => {
       const memory = await this.readMemory();
       const now = new Date().toISOString();
       const saved: Lesson[] = [];
@@ -124,34 +124,34 @@ export class Workspace {
           lesson.retired = { at: now, reason: 'Pruned: not seen recently' };
         }
       }
-      await atomic(paths.memory(this.root), memory);
+      await atomic(paths.memory(this.root, this.profile), memory);
       return saved;
     });
   }
 
   retireLesson(id: string, reason: string): Promise<void> {
-    return serialized(paths.memory(this.root), async () => {
+    return serialized(paths.memory(this.root, this.profile), async () => {
       const memory = await this.readMemory();
       const lesson = memory.lessons.find((item) => item.id === id);
       if (!lesson) throw new Error(`Unknown lesson ${id}`);
       lesson.retired = { at: new Date().toISOString(), reason };
-      await atomic(paths.memory(this.root), memory);
+      await atomic(paths.memory(this.root, this.profile), memory);
     });
   }
 
   removeLesson(id: string): Promise<void> {
-    return serialized(paths.memory(this.root), async () => {
+    return serialized(paths.memory(this.root, this.profile), async () => {
       const memory = await this.readMemory();
       const next = memory.lessons.filter((item) => item.id !== id);
       if (next.length === memory.lessons.length) throw new Error(`Unknown lesson ${id}`);
-      await atomic(paths.memory(this.root), { version: 1, lessons: next });
+      await atomic(paths.memory(this.root, this.profile), { version: 1, lessons: next });
     });
   }
 
   async readEvents(sessionId: string): Promise<AgentEvent[]> {
-    await eventWrites.get(join(paths.session(this.root, sessionId), 'events.jsonl'));
+    await eventWrites.get(join(paths.session(this.root, sessionId, this.profile), 'events.jsonl'));
     try {
-      const raw = await readFile(join(paths.session(this.root, sessionId), 'events.jsonl'), 'utf8');
+      const raw = await readFile(join(paths.session(this.root, sessionId, this.profile), 'events.jsonl'), 'utf8');
       return raw.split('\n').flatMap((line) => {
         try {
           return line.trim() ? [JSON.parse(line) as AgentEvent] : [];
@@ -175,20 +175,20 @@ export class Workspace {
 
   /** The sweep's coverage cells and cursor. Absent before the first sweep. */
   readCoverage(): Promise<CoverageFile | undefined> {
-    return readJson(paths.coverage(this.root));
+    return readJson(paths.coverage(this.root, this.profile));
   }
 
   async writeCoverage(coverage: CoverageFile): Promise<void> {
-    await atomic(paths.coverage(this.root), coverage);
+    await atomic(paths.coverage(this.root, this.profile), coverage);
   }
 
   /** The last probe of `app.connect.version`. Absent before the first probe. */
   readDeploy(): Promise<DeployFile | undefined> {
-    return readJson(paths.deploy(this.root));
+    return readJson(paths.deploy(this.root, this.profile));
   }
 
   async writeDeploy(deploy: DeployFile): Promise<void> {
-    await atomic(paths.deploy(this.root), deploy);
+    await atomic(paths.deploy(this.root, this.profile), deploy);
   }
 
   async upsertScreen(screen: Partial<AppMapScreen> & Pick<AppMapScreen, 'id'>): Promise<AppMapScreen> {
@@ -241,50 +241,50 @@ export class Workspace {
     return atomic(paths.routine(this.root, value.id, this.profile), value);
   }
   listIssues(): Promise<Issue[]> {
-    return listJson(paths.issues(this.root));
+    return listJson(paths.issues(this.root, this.profile));
   }
   readIssue(id: string): Promise<Issue | undefined> {
-    return readJson(paths.issue(this.root, id));
+    return readJson(paths.issue(this.root, id, this.profile));
   }
   saveIssue(value: Issue): Promise<void> {
-    return atomic(paths.issue(this.root, value.id), value);
+    return atomic(paths.issue(this.root, value.id, this.profile), value);
   }
   async findIssueByFingerprint(fingerprint: string): Promise<Issue | undefined> {
     return (await this.listIssues()).find((issue) => issue.fingerprint === fingerprint);
   }
   listFixes(): Promise<FixProposal[]> {
-    return listJson(paths.fixes(this.root));
+    return listJson(paths.fixes(this.root, this.profile));
   }
   readFix(id: string): Promise<FixProposal | undefined> {
-    return readJson(paths.fix(this.root, id));
+    return readJson(paths.fix(this.root, id, this.profile));
   }
   saveFix(value: FixProposal): Promise<void> {
-    return atomic(paths.fix(this.root, value.id), value);
+    return atomic(paths.fix(this.root, value.id, this.profile), value);
   }
   async readFixAttemptDiff(id: string, n: number): Promise<string | undefined> {
     try {
-      return await readFile(paths.fixAttemptDiff(this.root, id, n), 'utf8');
+      return await readFile(paths.fixAttemptDiff(this.root, id, n, this.profile), 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
     }
   }
   async saveFixAttemptDiff(id: string, n: number, diff: string): Promise<void> {
-    const file = paths.fixAttemptDiff(this.root, id, n);
+    const file = paths.fixAttemptDiff(this.root, id, n, this.profile);
     await mkdir(join(file, '..'), { recursive: true });
     await writeFile(file, diff);
   }
 
   readReview(pr: number): Promise<PrReview | undefined> {
-    return readJson(paths.review(this.root, pr));
+    return readJson(paths.review(this.root, pr, this.profile));
   }
   saveReview(value: PrReview): Promise<void> {
-    return atomic(paths.review(this.root, value.pr.number), value);
+    return atomic(paths.review(this.root, value.pr.number, this.profile), value);
   }
 
   /** The session header, as written by `startSession`. */
   async readSession(id: string): Promise<SessionSummary | undefined> {
-    return readJson<SessionSummary>(join(paths.session(this.root, id), 'session.json'));
+    return readJson<SessionSummary>(join(paths.session(this.root, id, this.profile), 'session.json'));
   }
 
   /**
@@ -294,16 +294,16 @@ export class Workspace {
    */
   async appendSignals(sessionId: string, signals: SessionSignal[]): Promise<void> {
     if (signals.length === 0) return;
-    await mkdir(paths.session(this.root, sessionId), { recursive: true });
+    await mkdir(paths.session(this.root, sessionId, this.profile), { recursive: true });
     await appendFile(
-      paths.sessionSignals(this.root, sessionId),
+      paths.sessionSignals(this.root, sessionId, this.profile),
       `${signals.map((signal) => JSON.stringify(signal)).join('\n')}\n`,
     );
   }
 
   async readSignals(sessionId: string): Promise<SessionSignal[]> {
     try {
-      const text = (await readFile(paths.sessionSignals(this.root, sessionId), 'utf8')).trim();
+      const text = (await readFile(paths.sessionSignals(this.root, sessionId, this.profile), 'utf8')).trim();
       return text === '' ? [] : text.split('\n').map((line) => JSON.parse(line) as SessionSignal);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -313,11 +313,11 @@ export class Workspace {
 
   /** The backend logs one session collected, and its merged flow view. */
   async saveSessionLogs(sessionId: string, logs: LogRecord[]): Promise<void> {
-    await atomic(paths.sessionLogs(this.root, sessionId), { version: 1, records: logs });
+    await atomic(paths.sessionLogs(this.root, sessionId, this.profile), { version: 1, records: logs });
   }
 
   async saveSessionFlow(sessionId: string, flow: SessionFlow): Promise<void> {
-    await atomic(paths.sessionFlow(this.root, sessionId), flow);
+    await atomic(paths.sessionFlow(this.root, sessionId, this.profile), flow);
   }
 
   async startSession(role: AgentRole): Promise<SessionSummary> {
@@ -340,12 +340,12 @@ export class Workspace {
       candidates: 0,
       issues: [],
     };
-    await atomic(join(paths.session(this.root, id), 'session.json'), session);
+    await atomic(join(paths.session(this.root, id, this.profile), 'session.json'), session);
     return session;
   }
 
   async appendEvent(sessionId: string, event: Omit<AgentEvent, 'at'>): Promise<void> {
-    const dir = paths.session(this.root, sessionId);
+    const dir = paths.session(this.root, sessionId, this.profile);
     await mkdir(dir, { recursive: true });
     await appendFile(join(dir, 'events.jsonl'), `${JSON.stringify({ ...event, at: new Date().toISOString() })}\n`);
   }
@@ -359,7 +359,7 @@ export class Workspace {
     capture: { kind: 'image'; png: Buffer } | { kind: 'http'; exchange: HttpExchange },
     label: string,
   ): Promise<string> {
-    const dir = paths.session(this.root, sessionId);
+    const dir = paths.session(this.root, sessionId, this.profile);
     await mkdir(dir, { recursive: true });
     const files = await readdir(dir);
     const number = files.filter((file) => /^\d{3}-.*\.(?:png|exchange\.json)$/.test(file)).length + 1;
@@ -370,14 +370,16 @@ export class Workspace {
   }
 
   async appendCandidate(sessionId: string, candidate: Candidate): Promise<void> {
-    const dir = paths.session(this.root, sessionId);
+    const dir = paths.session(this.root, sessionId, this.profile);
     await mkdir(dir, { recursive: true });
     await appendFile(join(dir, 'candidates.jsonl'), `${JSON.stringify(candidate)}\n`);
   }
 
   async readCandidates(sessionId: string): Promise<Candidate[]> {
     try {
-      const lines = (await readFile(join(paths.session(this.root, sessionId), 'candidates.jsonl'), 'utf8')).trim();
+      const lines = (
+        await readFile(join(paths.session(this.root, sessionId, this.profile), 'candidates.jsonl'), 'utf8')
+      ).trim();
       return lines ? lines.split('\n').map((line) => JSON.parse(line) as Candidate) : [];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -388,7 +390,7 @@ export class Workspace {
   }
 
   async updateSession(id: string, patch: Partial<SessionSummary>): Promise<SessionSummary> {
-    const file = join(paths.session(this.root, id), 'session.json');
+    const file = join(paths.session(this.root, id, this.profile), 'session.json');
     const current = await readJson<SessionSummary>(file);
     if (!current) {
       throw new Error(`Unknown session ${id}`);
@@ -410,7 +412,7 @@ export class Workspace {
   async listSessions(limit = 20): Promise<SessionSummary[]> {
     let ids: string[];
     try {
-      ids = await readdir(paths.sessions(this.root));
+      ids = await readdir(paths.sessions(this.root, this.profile));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
@@ -418,7 +420,7 @@ export class Workspace {
       throw error;
     }
     const sessions = await Promise.all(
-      ids.map((id) => readJson<SessionSummary>(join(paths.session(this.root, id), 'session.json'))),
+      ids.map((id) => readJson<SessionSummary>(join(paths.session(this.root, id, this.profile), 'session.json'))),
     );
     const valid = sessions.filter((session): session is SessionSummary => Boolean(session));
     return valid.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit);
@@ -427,14 +429,14 @@ export class Workspace {
   /** A torn or corrupt status file reads as empty: status is advisory, never a reason to fail. */
   async readAgents(): Promise<AgentsFile> {
     try {
-      return (await readJson<AgentsFile>(paths.agents(this.root))) ?? { version: 1, agents: [] };
+      return (await readJson<AgentsFile>(paths.agents(this.root, this.profile))) ?? { version: 1, agents: [] };
     } catch {
       return { version: 1, agents: [] };
     }
   }
 
   setAgentStatus(role: AgentRole, patch: Partial<AgentStatus>): Promise<AgentStatus> {
-    return serialized(paths.agents(this.root), () => this.writeAgentStatus(role, patch));
+    return serialized(paths.agents(this.root, this.profile), () => this.writeAgentStatus(role, patch));
   }
 
   private async writeAgentStatus(role: AgentRole, patch: Partial<AgentStatus>): Promise<AgentStatus> {
@@ -451,12 +453,12 @@ export class Workspace {
       updatedAt: new Date().toISOString(),
     };
     file.agents = [...file.agents.filter((agent) => agent.role !== role), next];
-    await atomic(paths.agents(this.root), file);
+    await atomic(paths.agents(this.root, this.profile), file);
     return next;
   }
 
   setPatrol(patch: Partial<NonNullable<AgentsFile['patrol']>>): Promise<void> {
-    return serialized(paths.agents(this.root), () => this.writePatrol(patch));
+    return serialized(paths.agents(this.root, this.profile), () => this.writePatrol(patch));
   }
 
   private async writePatrol(patch: Partial<NonNullable<AgentsFile['patrol']>>): Promise<void> {
@@ -469,28 +471,28 @@ export class Workspace {
       ...patch,
       pid: process.pid,
     };
-    await atomic(paths.agents(this.root), file);
+    await atomic(paths.agents(this.root, this.profile), file);
   }
 
   async readTriage(): Promise<TriageFile> {
     try {
-      return (await readJson<TriageFile>(paths.triage(this.root))) ?? { version: 1, fingerprints: {} };
+      return (await readJson<TriageFile>(paths.triage(this.root, this.profile))) ?? { version: 1, fingerprints: {} };
     } catch {
       return { version: 1, fingerprints: {} };
     }
   }
 
   recordTriage(entries: TriageFile['fingerprints']): Promise<void> {
-    return serialized(paths.triage(this.root), async () => {
+    return serialized(paths.triage(this.root, this.profile), async () => {
       const file = await this.readTriage();
       file.fingerprints = { ...file.fingerprints, ...entries };
-      await atomic(paths.triage(this.root), file);
+      await atomic(paths.triage(this.root, this.profile), file);
     });
   }
 
   recordEvent(sessionId: string, role: AgentEvent['role'], vars: Vars): EventSink {
     return (event) => {
-      const file = join(paths.session(this.root, sessionId), 'events.jsonl');
+      const file = join(paths.session(this.root, sessionId, this.profile), 'events.jsonl');
       const previous = eventWrites.get(file) ?? Promise.resolve();
       const next = previous.then(() =>
         this.appendEvent(sessionId, vars.redact({ ...event, sessionId, role }) as Omit<AgentEvent, 'at'>),

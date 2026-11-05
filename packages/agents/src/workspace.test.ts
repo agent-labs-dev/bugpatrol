@@ -1,13 +1,13 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Issue, paths } from '@bugpatrol/core';
+import { type Issue, loadConfig, paths } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
 describe('Workspace', () => {
-  it("keeps a profile's app map and routines apart from the default config's, and shares runs/", async () => {
+  it("keeps a profile's app map, routines and run state apart from the default config's", async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
     try {
       const cli = new Workspace(root, 'cli');
@@ -28,7 +28,36 @@ describe('Workspace', () => {
       expect(await main.readAppMap()).toBeUndefined();
       expect(await main.listRoutines()).toEqual([]);
       await cli.upsertLessons([{ role: 'explorer', text: 'Press q to quit.', source: 'agent' }]);
-      expect((await main.readMemory()).lessons).toHaveLength(1);
+      expect((await cli.readMemory()).lessons).toHaveLength(1);
+      expect((await main.readMemory()).lessons).toEqual([]);
+      const session = await cli.startSession('explorer');
+      expect((await cli.listSessions()).map((each) => each.id)).toEqual([session.id]);
+      expect(await main.listSessions()).toEqual([]);
+      await cli.setPatrol({ state: 'running' });
+      expect((await main.readAgents()).patrol).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the committed app map and routines of a --config profile from its folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-work-'));
+    try {
+      // The layout nebula-desktop commits: .bugpatrol/cli.yml, .bugpatrol/cli/appmap.json, .bugpatrol/cli/routines/.
+      await mkdir(join(root, '.bugpatrol', 'cli', 'routines'), { recursive: true });
+      await writeFile(
+        join(root, '.bugpatrol', 'cli.yml'),
+        'version: 1\napp: { platform: cli, connect: { cli: {} } }\n',
+      );
+      await writeFile(
+        join(root, '.bugpatrol', 'cli', 'appmap.json'),
+        JSON.stringify({ version: 1, screens: [{ id: 'tasks' }] }),
+      );
+      await writeFile(join(root, '.bugpatrol', 'cli', 'routines', 'open.json'), JSON.stringify({ id: 'open' }));
+      const config = loadConfig(root, {}, '.bugpatrol/cli.yml');
+      const workspace = new Workspace(root, config.profile);
+      expect((await workspace.readAppMap())?.screens.map((screen) => screen.id)).toEqual(['tasks']);
+      expect((await workspace.listRoutines()).map((routine) => routine.id)).toEqual(['open']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

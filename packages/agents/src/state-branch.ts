@@ -3,12 +3,15 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
-import { paths, STATE_FILES } from '@bugpatrol/core';
+import { paths, STATE_FILES, stateFile } from '@bugpatrol/core';
 
 const exec = promisify(execFile);
 
-/** The branch that `agents.patrol.state: branch` shares. */
+/** The branch that `agents.patrol.state: branch` shares for the default config. */
 export const STATE_BRANCH = 'bugpatrol-state';
+
+/** The state branch of a profile (see profileOf): each profile shares its own state. */
+export const stateBranch = (profile?: string) => (profile ? `${STATE_BRANCH}-${profile}` : STATE_BRANCH);
 const REMOTE = 'origin';
 /** Push attempts before a push that keeps losing the race fails. */
 const PUSH_ATTEMPTS = 5;
@@ -121,13 +124,12 @@ function mergeState(base: unknown, ours: unknown, theirs: unknown): unknown {
 }
 
 /** The shared view of the local state files: what this machine would put on the branch. */
-async function readLocal(root: string): Promise<{ shared: Files; full: Files }> {
-  const dir = paths.dir(root);
+async function readLocal(root: string, profile?: string): Promise<{ shared: Files; full: Files }> {
   const shared: Files = new Map();
   const full: Files = new Map();
   const read = async (path: string) => {
     try {
-      return await readFile(join(dir, path), 'utf8');
+      return await readFile(stateFile(root, path, profile), 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -138,7 +140,7 @@ async function readLocal(root: string): Promise<{ shared: Files; full: Files }> 
     if (entry.path.endsWith('/*.json')) {
       const folder = dirname(entry.path);
       try {
-        names = (await readdir(join(dir, folder)))
+        names = (await readdir(stateFile(root, folder, profile)))
           .map((name) => `${folder}/${name}`)
           .filter((path) => entryFor(path) === entry);
       } catch (error) {
@@ -168,9 +170,12 @@ async function readCommit(root: string, commit: string): Promise<Files> {
   return files;
 }
 
-async function readBase(root: string, branch: string): Promise<Files> {
+async function readBase(root: string, branch: string, profile?: string): Promise<Files> {
   try {
-    const saved = JSON.parse(await readFile(paths.stateBase(root), 'utf8')) as { branch: string; commit: string };
+    const saved = JSON.parse(await readFile(paths.stateBase(root, profile), 'utf8')) as {
+      branch: string;
+      commit: string;
+    };
     if (saved.branch === branch) return await readCommit(root, saved.commit);
   } catch {
     // No base yet, or git dropped its commit: every difference is new on both sides.
@@ -178,9 +183,9 @@ async function readBase(root: string, branch: string): Promise<Files> {
   return new Map();
 }
 
-async function saveBase(root: string, branch: string, commit: string): Promise<void> {
-  await mkdir(dirname(paths.stateBase(root)), { recursive: true });
-  await writeFile(paths.stateBase(root), json({ branch, commit }));
+async function saveBase(root: string, branch: string, commit: string, profile?: string): Promise<void> {
+  await mkdir(dirname(paths.stateBase(root, profile)), { recursive: true });
+  await writeFile(paths.stateBase(root, profile), json({ branch, commit }));
 }
 
 /** The commit at the tip of the remote branch, or undefined when the branch does not exist yet. */
@@ -198,8 +203,12 @@ async function fetchTip(root: string, branch: string): Promise<string | undefine
  * Merges the files of `tip` into the local state files. It merges every file
  * before it writes one, so a file it cannot merge changes nothing.
  */
-async function mergeLocal(root: string, branch: string, tip: string): Promise<number> {
-  const [base, theirs, local] = [await readBase(root, branch), await readCommit(root, tip), await readLocal(root)];
+async function mergeLocal(root: string, branch: string, tip: string, profile?: string): Promise<number> {
+  const [base, theirs, local] = [
+    await readBase(root, branch, profile),
+    await readCommit(root, tip),
+    await readLocal(root, profile),
+  ];
   const writes: [string, string][] = [];
   for (const [path, text] of theirs) {
     const ours = local.shared.get(path);
@@ -223,9 +232,8 @@ async function mergeLocal(root: string, branch: string, tip: string): Promise<nu
     const out = json(next);
     if (out !== full) writes.push([path, out]);
   }
-  const dir = paths.dir(root);
   for (const [path, text] of writes) {
-    const file = join(dir, path);
+    const file = stateFile(root, path, profile);
     await mkdir(dirname(file), { recursive: true });
     const temp = `${file}.tmp-state-${process.pid}`;
     await writeFile(temp, text);
@@ -239,11 +247,11 @@ async function mergeLocal(root: string, branch: string, tip: string): Promise<nu
  * (STATE_FILES), before a cycle. Returns the number of files it changed.
  * A missing branch changes nothing.
  */
-export async function pullState(root: string, branch: string): Promise<{ changed: number }> {
+export async function pullState(root: string, branch: string, profile?: string): Promise<{ changed: number }> {
   const tip = await fetchTip(root, branch);
   if (!tip) return { changed: 0 };
-  const changed = await mergeLocal(root, branch, tip);
-  await saveBase(root, branch, tip);
+  const changed = await mergeLocal(root, branch, tip, profile);
+  await saveBase(root, branch, tip, profile);
   return { changed };
 }
 
@@ -279,14 +287,14 @@ const IDENTITY = {
  * force. When another push wins the race, it merges and tries again, at most
  * PUSH_ATTEMPTS times; then it fails and overwrites nothing.
  */
-export async function pushState(root: string, branch: string): Promise<{ commit?: string }> {
+export async function pushState(root: string, branch: string, profile?: string): Promise<{ commit?: string }> {
   let lost = '';
   for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
     const tip = await fetchTip(root, branch);
-    if (tip) await mergeLocal(root, branch, tip);
-    const tree = await writeTree(root, (await readLocal(root)).shared);
+    if (tip) await mergeLocal(root, branch, tip, profile);
+    const tree = await writeTree(root, (await readLocal(root, profile)).shared);
     if (tip && (await git(root, ['rev-parse', `${tip}^{tree}`])).trim() === tree) {
-      await saveBase(root, branch, tip);
+      await saveBase(root, branch, tip, profile);
       return {};
     }
     const commit = (
@@ -304,7 +312,7 @@ export async function pushState(root: string, branch: string): Promise<{ commit?
       lost = stderr.trim();
       continue;
     }
-    await saveBase(root, branch, commit);
+    await saveBase(root, branch, commit, profile);
     return { commit };
   }
   throw new Error(

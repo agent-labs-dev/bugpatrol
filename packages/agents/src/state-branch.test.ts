@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runPatrol } from './patrol.js';
-import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
+import { pullState, pushState, STATE_BRANCH, stateBranch } from './state-branch.js';
 import { FakeDriver } from './testing/fake-driver.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -46,6 +46,25 @@ const issue = (id: string, extra: object = {}) => ({ version: 1, id, title: id, 
 afterEach(() => rmSync(temp, { recursive: true, force: true }));
 
 describe('the state branch', () => {
+  it('shares the state of a profile on its own branch, from and to its own folders', async () => {
+    const [a, b] = clones(2) as [string, string];
+    write(a, 'cli/appmap.json', { version: 1, screens: [{ id: 'tasks' }] });
+    write(a, 'runs/profiles/cli/issues/i1.json', issue('i1'));
+    write(a, 'runs/issues/d1.json', issue('d1'));
+    const branch = stateBranch('cli');
+    expect(branch).toBe('bugpatrol-state-cli');
+    expect((await pushState(a, branch, 'cli')).commit).toBeTruthy();
+    // The branch holds the profile's files at the default layout's paths, and nothing of the default config.
+    expect(git(a, 'ls-tree', '-r', '--name-only', `origin/${branch}`).split('\n').sort()).toEqual([
+      'appmap.json',
+      'runs/issues/i1.json',
+    ]);
+    await pullState(b, branch, 'cli');
+    expect(read(b, 'cli/appmap.json').screens).toEqual([{ id: 'tasks' }]);
+    expect(read(b, 'runs/profiles/cli/issues/i1.json').id).toBe('i1');
+    expect(() => read(b, 'runs/issues/i1.json')).toThrow();
+  });
+
   it('round-trips coverage, issues, triage', async () => {
     const [a, b] = clones(2) as [string, string];
     const coverage = { version: 1, cells: { 'GET /items': { at: '2026-10-01T00:00:00Z' } }, cursor: 'k' };

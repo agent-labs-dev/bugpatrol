@@ -35,4 +35,15 @@ describe('runChecks', () => {
     const config = parseConfig({ version: 1, run: { command: 'npm run dev', url: 'http://localhost:3000' } });
     expect(runChecks(project(), config).map((check) => check.name)).toContain('pinned-image');
   });
+
+  it('names where a profile keeps its app map, routines and run state', () => {
+    const config = {
+      ...parseConfig({ version: 1, app: { connect: { url: 'http://localhost:3000' } } }),
+      profile: 'cli',
+    };
+    const check = runChecks(project(), config).find((each) => each.name === 'profile');
+    expect(check?.detail).toBe(
+      'cli: app map and routines in .bugpatrol/cli/, run state in .bugpatrol/runs/profiles/cli/',
+    );
+  });
 });

@@ -39,7 +39,7 @@ function issueTitle(value: string): string {
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
   try {
-    const lines = await readFile(paths.sessionDecisions(session.root, sessionId), 'utf8');
+    const lines = await readFile(paths.sessionDecisions(session.root, sessionId, session.workspace.profile), 'utf8');
     return new Set(
       lines
         .trim()
@@ -297,20 +297,23 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
           if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
             await copyFile(
               resolve(session.root, capture.screenshot),
-              paths.agentBaseline(session.root, candidate.screenId),
+              paths.agentBaseline(session.root, candidate.screenId, session.workspace.profile),
             );
             const snapshot = join(
-              paths.session(session.root, candidate.sessionId),
+              paths.session(session.root, candidate.sessionId, session.workspace.profile),
               `${candidate.screenId}.snapshot.json`,
             );
             try {
-              await copyFile(snapshot, paths.agentBaselineSnapshot(session.root, candidate.screenId));
+              await copyFile(
+                snapshot,
+                paths.agentBaselineSnapshot(session.root, candidate.screenId, session.workspace.profile),
+              );
             } catch {
               // Explorer-only reports may not have a structural snapshot.
             }
           }
           await appendFile(
-            paths.sessionDecisions(session.root, candidate.sessionId),
+            paths.sessionDecisions(session.root, candidate.sessionId, session.workspace.profile),
             `${JSON.stringify({
               candidateId: candidate.id,
               decision: 'dismiss',

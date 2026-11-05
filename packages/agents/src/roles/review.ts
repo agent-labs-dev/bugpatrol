@@ -304,7 +304,7 @@ async function withWorktree<T>(
   run: (worktree: string) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
-  const worktree = join(paths.worktrees(root), `review-${ctx.pr.number}-${name}`);
+  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}`);
   const remove = async () => {
     try {
       await lstat(worktree);
@@ -315,7 +315,7 @@ async function withWorktree<T>(
   };
   // A review that was killed leaves its worktree behind.
   await remove();
-  await mkdir(paths.worktrees(root), { recursive: true });
+  await mkdir(paths.worktrees(root, config.profile), { recursive: true });
   await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
   let restore = async () => {};
   try {
@@ -716,7 +716,8 @@ async function settleCandidates(ctx: ReviewContext, sessionId: string, findings:
         at: new Date().toISOString(),
       }),
     );
-  if (lines.length) await appendFile(paths.sessionDecisions(ctx.root, sessionId), `${lines.join('\n')}\n`);
+  if (lines.length)
+    await appendFile(paths.sessionDecisions(ctx.root, sessionId, ctx.config.profile), `${lines.join('\n')}\n`);
 }
 
 /**
@@ -940,7 +941,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
     });
     if (claims) {
       review.claims = claims.map((claim) => notYet(claim, 'The review stopped before it tested this claim.'));
-      await rm(paths.reviewDir(ctx.root, pr.number), { recursive: true, force: true });
+      await rm(paths.reviewDir(ctx.root, pr.number, ctx.config.profile), { recursive: true, force: true });
     }
     const platform = ctx.config.app.platform;
     const testable = (claims ?? []).filter((claim) => claim.testable);
@@ -1109,7 +1110,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   ].filter((path): path is string => Boolean(path));
   const exchanges = await readExchanges(root, shown);
   if (ctx.opts.dryRun) {
-    const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
+    const file = paths.review(root, pr.number, config.profile).replace(/\.json$/, '.md');
     const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name, exchanges);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(

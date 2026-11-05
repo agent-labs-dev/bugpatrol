@@ -63,8 +63,8 @@ type Replayed = Extract<ClaimFlow, { kind: 'flow' | 'repro' }>;
 const replayed = (flow: ClaimFlow | undefined): flow is Replayed => flow?.kind === 'flow' || flow?.kind === 'repro';
 
 /** The claim routines of a review, and their replays. A new test of the pull request starts it empty. */
-const claimRoutinePath = (root: string, pr: number, claim: string) =>
-  join(paths.reviewDir(root, pr), 'routines', `${claim}.json`);
+const claimRoutinePath = (root: string, pr: number, claim: string, profile?: string) =>
+  join(paths.reviewDir(root, pr, profile), 'routines', `${claim}.json`);
 
 /** The steps of a routine with the steps of each routine that it requires before them. */
 async function chainSteps(workspace: Workspace, id: string | undefined, seen = new Set<string>()) {
@@ -215,7 +215,7 @@ const CLAIM_TOOLS = new Set(['start_claim', 'save_claim', 'note_claim', 'skip_cl
  */
 export function claimTools(
   session: AgentSession,
-  ctx: Pick<ReviewContext, 'root' | 'pr' | 'budget'>,
+  ctx: Pick<ReviewContext, 'root' | 'config' | 'pr' | 'budget'>,
   claims: Claim[],
   flows: Map<string, ClaimFlow>,
 ): { tools: Tool[]; meter: (tool: Tool) => Tool; charge: (outcome: { steps: number; costUsd: number }) => void } {
@@ -313,7 +313,7 @@ export function claimTools(
           createdAt: now,
           updatedAt: now,
         };
-        const file = claimRoutinePath(ctx.root, ctx.pr.number, claim.id);
+        const file = claimRoutinePath(ctx.root, ctx.pr.number, claim.id, ctx.config.profile);
         await mkdir(join(file, '..'), { recursive: true });
         await writeFile(file, `${JSON.stringify(routine, null, 2)}\n`);
         flows.set(claim.id, {
@@ -475,7 +475,7 @@ async function replayClaims(
       const session = new AgentSession(root, config, vars, record.id, 'explorer', current, ctx.log);
       opts.onSession?.(session);
       await session.activity(`Replaying ${claim} on ${where} of PR #${pr.number}`, 0, 'no model');
-      const dir = join(paths.reviewDir(root, pr.number), claim);
+      const dir = join(paths.reviewDir(root, pr.number, config.profile), claim);
       await mkdir(dir, { recursive: true });
       const shots: string[] = [];
       const errors: string[] = [];

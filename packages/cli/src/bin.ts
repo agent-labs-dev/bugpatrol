@@ -154,7 +154,7 @@ try {
     }
 
     case 'memory': {
-      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`));
+      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
       break;
     }
 

@@ -28,7 +28,7 @@ app:
 /**
  * Write a whole project of one shape: its config files and the data of its
  * patrols. A monorepo has `bugpatrol.yml` for the desktop app and `api.yml`
- * for its backend, and both write to the same `.bugpatrol/runs/`.
+ * for its backend, and each keeps its own run state.
  */
 export function writeProjectFixture(root: string, shape: ProjectShape): void {
   mkdirSync(paths.dir(root), { recursive: true });
@@ -39,7 +39,7 @@ export function writeProjectFixture(root: string, shape: ProjectShape): void {
   }
   if (shape !== 'client') {
     writeFileSync(join(paths.dir(root), shape === 'api' ? 'bugpatrol.yml' : 'api.yml'), API_CONFIG);
-    writeCoverageFixture(root);
+    writeCoverageFixture(root, shape === 'api' ? undefined : 'api');
   }
 }
 

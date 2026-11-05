@@ -16,7 +16,7 @@ import { recheckMerged, runFixCycle } from './roles/retest.js';
 import { cleanWorktrees } from './roles/worktrees.js';
 import { createRuntime } from './runtime/index.js';
 import { AgentSession } from './session.js';
-import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
+import { pullState, pushState, stateBranch } from './state-branch.js';
 import { runSweep } from './sweep.js';
 import { pendingCandidates } from './tools/judge.js';
 import type { RoleOutcome } from './types.js';
@@ -172,6 +172,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   // with --once tests only new commits. --force tests the first cycle anyway.
   let tested = options.force ? undefined : previous?.commit;
   const shared = config.agents.patrol.state === 'branch';
+  const branch = stateBranch(config.profile);
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
@@ -187,8 +188,8 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       await pullSource(root, config, options.onLog);
       if (shared) {
         try {
-          const { changed } = await pullState(root, STATE_BRANCH);
-          options.onLog?.(`Pulled the state from ${STATE_BRANCH}: ${changed} file(s) changed.`);
+          const { changed } = await pullState(root, branch, config.profile);
+          options.onLog?.(`Pulled the state from ${branch}: ${changed} file(s) changed.`);
           // Another writer may have tested a newer commit. --force still tests the first cycle.
           if (!(options.force && cycle === 1)) tested = (await workspace.readAgents()).patrol?.commit ?? tested;
         } catch (error) {
@@ -363,11 +364,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
       if (shared) {
         try {
-          const { commit: pushed } = await pushState(root, STATE_BRANCH);
+          const { commit: pushed } = await pushState(root, branch, config.profile);
           options.onLog?.(
-            pushed
-              ? `Pushed the state to ${STATE_BRANCH} at ${pushed.slice(0, 7)}.`
-              : 'The shared state did not change.',
+            pushed ? `Pushed the state to ${branch} at ${pushed.slice(0, 7)}.` : 'The shared state did not change.',
           );
         } catch (error) {
           problems.push(`Cycle ${cycle}: did not push the state: ${String(error)}`);

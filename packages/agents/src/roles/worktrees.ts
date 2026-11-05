@@ -12,17 +12,17 @@ const message = (error: unknown) => ((error as { stderr?: string }).stderr || St
 /** Remove finished fix checkouts without discarding local work or unpublished commits. */
 export async function cleanWorktrees(
   root: string,
-  _config: BugpatrolConfig,
+  config: BugpatrolConfig,
   deps: { onLog?: (message: string) => void } = {},
 ): Promise<{
   removed: string[];
   kept: { id: string; reason: string }[];
 }> {
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, config.profile);
   const issues = new Map((await workspace.listIssues()).map((issue) => [issue.id, issue]));
   const removed: string[] = [];
   const kept: { id: string; reason: string }[] = [];
-  const worktrees = resolve(paths.worktrees(root)) + sep;
+  const worktrees = resolve(paths.worktrees(root, config.profile)) + sep;
   for (const fix of await workspace.listFixes()) {
     // The worktree is gone, but its branch may still wait for a safe delete
     // (for example, the PR merged after the worktree went away).
