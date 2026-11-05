@@ -86,6 +86,7 @@ export function createDriver(
       throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');
     }
     const options = {
+      cwd: source,
       command: vars(launch.command),
       args: launch.args.map(vars),
       userDataDir: launch.userDataDir ? resolve(source, vars(launch.userDataDir)) : undefined,

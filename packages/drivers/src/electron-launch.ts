@@ -98,8 +98,19 @@ async function readPositiveInt(file: string): Promise<number | undefined> {
   }
 }
 
+/** True once the fixed CDP port answers: Chromium writes DevToolsActivePort only for an ephemeral port. */
+async function cdpAnswers(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1_000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForReady(
   profile: string,
+  cdp: number | 'auto',
   pidFile: string,
   child: { get: () => ChildResult | undefined },
   signal: AbortSignal | undefined,
@@ -107,17 +118,18 @@ async function waitForReady(
 ): Promise<{ port: number; pid: number }> {
   const deadline = Date.now() + timeoutMs;
   const portFile = join(profile, 'DevToolsActivePort');
+  const awaited = cdp === 'auto' ? 'DevToolsActivePort' : `CDP on port ${cdp}`;
   while (true) {
     if (signal?.aborted) throw new LaunchFailure('launch aborted');
-    const port = await readPositiveInt(portFile);
     const pid = await readPositiveInt(pidFile);
+    const port = cdp === 'auto' ? await readPositiveInt(portFile) : pid && (await cdpAnswers(cdp)) ? cdp : undefined;
     if (port && pid) return { port, pid };
     const exited = child.get();
     if (exited) {
-      throw new LaunchFailure('child exited before DevToolsActivePort appeared', exited.error);
+      throw new LaunchFailure(`child exited before ${awaited} was ready`, exited.error);
     }
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new LaunchFailure('timed out waiting for DevToolsActivePort');
+    if (remaining <= 0) throw new LaunchFailure(`timed out waiting for ${awaited}`);
     await wait(Math.min(POLL_MS, remaining));
   }
 }
@@ -187,6 +199,8 @@ export async function launchElectron(options: {
   command: string;
   args: string[];
   directory: string;
+  /** Where the app runs, so a relative command or app path resolves against the app source. */
+  cwd: string;
   userDataDir?: string;
   cdp?: number | 'auto';
   width: number;
@@ -198,6 +212,7 @@ export async function launchElectron(options: {
   const profile = join(options.directory, 'profile');
   const pidFile = join(options.directory, 'electron.pid');
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const cdp = options.cdp ?? 'auto';
   let child: ChildProcess | undefined;
   let childState: ReturnType<typeof childResult> | undefined;
   let stderr = '';
@@ -214,20 +229,20 @@ export async function launchElectron(options: {
     if (options.signal?.aborted) throw new LaunchFailure('launch aborted');
     const appArgs = [
       `--user-data-dir=${profile}`,
-      `--remote-debugging-port=${options.cdp === 'auto' || options.cdp === undefined ? 0 : options.cdp}`,
+      `--remote-debugging-port=${cdp === 'auto' ? 0 : cdp}`,
       '--ozone-platform=x11',
       ...options.args,
     ];
     child = spawn(
       display.command,
       display.args(['sh', '-c', REPORT_PID, 'bugpatrol-electron', pidFile, options.command, ...appArgs]),
-      { cwd: options.directory, env: display.env, stdio: ['ignore', 'ignore', 'pipe'] },
+      { cwd: options.cwd, env: display.env, stdio: ['ignore', 'ignore', 'pipe'] },
     );
     childState = childResult(child);
     child.stderr?.on('data', (chunk: Buffer | string) => {
       stderr = `${stderr}${chunk.toString()}`.slice(-STDERR_LIMIT);
     });
-    const ready = await waitForReady(profile, pidFile, childState, options.signal, timeoutMs);
+    const ready = await waitForReady(profile, cdp, pidFile, childState, options.signal, timeoutMs);
     let closePromise: Promise<void> | undefined;
     let removeListeners = () => {};
     const close = async (): Promise<void> => {
