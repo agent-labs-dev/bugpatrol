@@ -64,7 +64,12 @@ with all users, so the judge decides. A run stops at
 
 The patrol runs the sweep first in each explorer session of an api app. Then
 the explorer tests the endpoints with a model. It starts with the endpoints
-that have no coverage, and with the failures that did not repeat. The judge
+that have no coverage, and with the failures that did not repeat. With
+`--goal`, the endpoints that the goal names come first: the ones under a path
+of the goal, such as `/v1/runs/*`, or else the ones whose path has a word of
+the goal. When the run ends with some of them never requested, its summary
+says `Goal not met` and names them, so a run that spent its steps elsewhere
+does not read as a clean result. The judge
 reads the candidates of both, and it files one issue for each failure.
 The issue key is the endpoint, the case, and the failed check, so the same
 failure in a later run adds to its issue.

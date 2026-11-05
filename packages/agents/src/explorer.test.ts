@@ -339,6 +339,40 @@ describe('the api explorer', () => {
     expect(part.text).toBe('/result/name:\n"Alpha"');
   });
 
+  it('puts the endpoints that the goal names first, and reports the ones the run did not reach', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    const prompts: string[] = [];
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run(task) {
+        prompts.push(task.prompt);
+        await task.tools.find((tool) => tool.name === 'request')!.run({ method: 'GET', url: '/search?q=A' });
+        return { stop: 'max-steps', steps: 1, costUsd: 0 };
+      },
+    };
+    const outcome = await runExplorer(f.session, runtime, { goal: 'Audit the search and the export endpoints.' });
+    const listed = prompts[0]!.split('ENDPOINTS TO TEST FIRST\n')[1]!.split('\n');
+    expect(listed.slice(0, 2)).toEqual(['- GET /search: named by the goal', '- GET /export: named by the goal']);
+    expect(outcome.summary).toContain(
+      'Goal not met: 1 of the 2 endpoint(s) that the goal names got no request: GET /export.',
+    );
+
+    const paths = await runExplorer(f.session, runtime, { goal: 'Only test /items/* endpoints' });
+    const named = prompts[1]!
+      .split('ENDPOINTS TO TEST FIRST\n')[1]!
+      .split('\n')
+      .filter((line) => line.endsWith('named by the goal'));
+    expect(named.map((line) => line.split(':')[0])).toEqual([
+      '- GET /items',
+      '- POST /items',
+      '- GET /items/{id}',
+      '- PATCH /items/{id}',
+      '- DELETE /items/{id}',
+    ]);
+    expect(paths.summary).toContain('Goal not met: 5 of the 5 endpoint(s)');
+  });
+
   it('as: other uses the other credential set', async () => {
     const f = await apiExplorer();
     closers.push(f.fixture.close);

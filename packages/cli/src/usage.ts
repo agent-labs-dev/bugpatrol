@@ -86,7 +86,9 @@ export const COMMAND_HELP: Record<string, string> = {
   explore: `bugpatrol explore [--goal "..."] [--steps N]
   Run setup, let the explorer use the app and report problems, then run teardown.
   The reports are candidates. Run \`bugpatrol judge\` to file the real bugs as issues.
-  --goal "..."    what to test, for example "Test the checkout flow"
+  --goal "..."    what to test, for example "Test the checkout flow". On an api app,
+                  the endpoints the goal names come first, and the summary names
+                  the ones the run did not reach
   --steps N       the step limit (default: agents.explorer.maxSteps)
 `,
   judge: `bugpatrol judge [--session <id>]...
