@@ -11,7 +11,7 @@ The [skills CLI](https://github.com/vercel-labs/skills) installs the skill for C
 
 Bugpatrol needs two things from you: a command that launches your app on this machine, and a way to sign in (a test account, a seed script, or a dev auth bypass). [Before you start](#before-you-start-launch-and-sign-in) tells more. Check the [requirements](#requirements) first.
 
-1. Run `init` in your repo. It detects web, Electron, iOS or Android defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop, API or CLI explicitly:
+1. Run `init` in your repo. It detects web, Electron, iOS, Android, FastAPI and CLI defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop explicitly:
 
    ```bash
    npx bugpatrol init
@@ -85,9 +85,9 @@ Run this command in your repo:
 npx bugpatrol init
 ```
 
-`init` detects web, Electron, iOS or Android defaults and installed LLMs, then asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
+`init` detects web, Electron, iOS, Android, FastAPI and CLI defaults and installed LLMs, then asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
 
-1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads defaults from `package.json`, the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, and the Gradle files. Select desktop, HTTP API or CLI manually, or pass `--platform desktop`, `--platform api` or `--platform cli`.
+1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads defaults from `package.json` (also in a `frontend/`, `web/`, `client/`, `site/` or `apps/web/` folder), the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, the Gradle files, `pyproject.toml` and a compose file. It prefers the repo's own `dev` or `start` script to `docker compose up`, which may start production services and load real secrets, and it warns when it picks compose. For a CLI, the build step is the `build` script, never `start` or `dev`: those run the app. When it finds no app, it says so. Select desktop manually, or pass `--platform` with any platform.
 2. The LLM for each agent: the explorer, the judge, and the fixer. An installed agent CLI (Claude Code, Codex, Kimi CLI, or pi) comes first, because it needs no API key. If you have no CLI, `init` recommends an OpenRouter or a Vercel AI Gateway key, and shows where to get one.
 
 `init` puts all the Bugpatrol files in one `.bugpatrol/` folder, and it never overwrites a file:

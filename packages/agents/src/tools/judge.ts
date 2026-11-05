@@ -12,6 +12,7 @@ import {
   type TriageFile,
 } from '@bugpatrol/core';
 import { evidenceParts } from '../evidence.js';
+import { portabilityWarning } from '../routine-paths.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -80,6 +81,8 @@ async function saveRepro(
     updatedAt: now,
   };
   await session.workspace.saveRoutine(routine);
+  const warning = portabilityWarning(routine, session.root);
+  if (warning) session.emit({ kind: 'error', summary: warning });
   return routine.id;
 }
 

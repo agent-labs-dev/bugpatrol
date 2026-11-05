@@ -18,6 +18,7 @@ export * from './roles/reflect.js';
 export * from './roles/retest.js';
 export * from './roles/review.js';
 export * from './roles/worktrees.js';
+export * from './routine-paths.js';
 export * from './runtime/index.js';
 export * from './session.js';
 export * from './sweep.js';

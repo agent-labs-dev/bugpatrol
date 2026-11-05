@@ -415,7 +415,15 @@ draw();
       const pressed = await run('press', { keys: ['j', 'j', '{{PIN}}', 'enter'] });
       expect(pressed.text).toContain('Screen:\ncount 2\nlast {{PIN}}');
       expect((await run('wait_for', { text: 'never', timeoutMs: 200 })).isError).toBe(true);
-      expect((await run('save_routine', { id: 'count-twice', description: 'Counts to two' })).isError).toBeFalsy();
+      const portable = await run('save_routine', { id: 'count-twice', description: 'Counts to two' });
+      expect(portable.isError).toBeFalsy();
+      expect(portable.text).not.toContain('Warning');
+      // A helper outside the project is gone on a clean clone: the explorer hears so.
+      await run('run_command', { command: 'cat /tmp/bugpatrol-missing-helper.sh 2>/dev/null; true' });
+      const outside = await run('save_routine', { id: 'uses-helper', description: 'Runs a helper' });
+      expect(outside.text).toContain(
+        'Warning: The routine uses-helper uses /tmp/bugpatrol-missing-helper.sh, outside the project.',
+      );
       await run('stop_session');
 
       const routine = (await workspace.readRoutine('count-twice'))!;

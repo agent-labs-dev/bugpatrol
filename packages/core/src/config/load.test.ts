@@ -1,4 +1,7 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { ConfigError } from '../errors.js';
 import { parseConfig } from './load.js';
 
@@ -36,6 +39,41 @@ describe('parseConfig', () => {
     expect(() => parseConfig({ ...minimal, auth: { kind: 'form', loginUrl: '/login' } })).toThrow(
       /does not read `auth`/,
     );
+  });
+
+  it('rejects an unknown setup key, naming it and the supported readiness field', () => {
+    const setup = [{ run: 'npm run start', background: true, readyUrl: 'http://127.0.0.1:3017/demo' }];
+    expect(() => parseConfig({ version: 1, app: { connect: { url: 'http://x' }, setup } })).toThrow(
+      /app\.setup\.0: Unknown key `readyUrl`\. Use `readyWhen`/,
+    );
+    expect(() =>
+      parseConfig({ version: 1, app: { connect: { url: 'http://x' }, teardown: [{ run: 'x', cmd: 'y' }] } }),
+    ).toThrow(/app\.teardown\.0: Unknown key `cmd`\. Use `run`/);
+  });
+
+  it('rejects an unknown key anywhere a user writes one, rather than dropping it', () => {
+    const app = { connect: { url: 'http://x' } };
+    for (const [raw, where] of [
+      [{ ...minimal, plaform: 'web' }, /<root>: Unknown key `plaform`/],
+      [{ version: 1, app: { ...app, platfrom: 'cli' } }, /app: Unknown key `platfrom`/],
+      [{ version: 1, app: { connect: { url: 'http://x', cdpPort: 1 } } }, /app\.connect: Unknown key `cdpPort`/],
+      [{ version: 1, app, agents: { explorer: { maxStep: 3 } } }, /agents\.explorer: Unknown key `maxStep`/],
+      [{ version: 1, app, agents: { fixer: { retest: { prepar: 'x' } } } }, /agents\.fixer\.retest: Unknown/],
+      [{ ...minimal, run: { ...minimal.run, ready: { selector: 'x' } } }, /run\.ready: Unknown key `selector`/],
+    ] as const) {
+      expect(() => parseConfig(raw)).toThrow(where);
+    }
+  });
+
+  it('accepts every config in the repo', () => {
+    const root = join(import.meta.dirname, '../../../..');
+    const files = [
+      'bugpatrol.example.yml',
+      ...readdirSync(join(root, 'examples')).map((dir) => join('examples', dir, '.bugpatrol', 'bugpatrol.yml')),
+    ].filter((file) => existsSync(join(root, file)));
+    expect(files.length).toBeGreaterThan(3);
+    for (const file of files)
+      expect(() => parseConfig(parseYaml(readFileSync(join(root, file), 'utf8')), file)).not.toThrow();
   });
 
   it('requires a bring-up command', () => {

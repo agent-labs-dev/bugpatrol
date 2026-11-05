@@ -1,5 +1,5 @@
 import { relative } from 'node:path';
-import { promoteClaims } from '@bugpatrol/agents';
+import { portabilityWarning, promoteClaims } from '@bugpatrol/agents';
 import { type BugpatrolConfig, ConfigError, paths } from '@bugpatrol/core';
 
 /** `promote <pr> <claim>...`: the pull request as a number or a URL, then the claim ids. */
@@ -21,7 +21,11 @@ export async function runPromoteCommand(
 ): Promise<void> {
   const { pr, claims } = parsePromoteArgs(args);
   const routines = await promoteClaims(root, config, pr, claims);
-  for (const routine of routines) log(`  ${routine.id}  ${routine.description}`);
+  for (const routine of routines) {
+    log(`  ${routine.id}  ${routine.description}`);
+    const warning = portabilityWarning(routine, root);
+    if (warning) log(`  warning: ${warning}`);
+  }
   const folder = relative(root, paths.routines(root, config.profile));
   log(`Kept ${routines.length} routine(s) in ${folder}/. Commit them, and the patrol replays them.`);
 }

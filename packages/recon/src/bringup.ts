@@ -8,7 +8,21 @@ export type BringUpCandidate = {
   /** Which file implied this. Detection is a first guess, never silent. */
   source: string;
   confidence: number;
+  /** The app folder the command runs in, relative to the root. Undefined: the root. */
+  cwd?: string;
 };
+
+/** Folders that commonly hold the web app of a repo whose root is something else. */
+const APP_DIRS = ['frontend', 'web', 'client', 'site', 'apps/web'];
+
+/** Runs `script` of the package in `dir` from the root, with the folder's package manager. */
+function scriptCommand(root: string, dir: string | undefined, script: string): string {
+  const manager = detectPackageManager(dir ? join(root, dir) : root, root);
+  const run = script === 'start' ? 'start' : `run ${script}`;
+  if (!dir) return `${manager} ${run}`;
+  const flag = { npm: '--prefix', pnpm: '--dir', yarn: '--cwd', bun: '--cwd' }[manager];
+  return `${manager} ${flag} ${dir} ${run}`;
+}
 
 /**
  * The bring-up ladder, cheapest rung first (spec 1.1). Rungs 1-3 are pure file
@@ -33,29 +47,33 @@ export function detectBringUp(root: string): BringUpCandidate[] {
     }
   }
 
-  // Rung 3: convention.
-  const pkgPath = join(root, 'package.json');
-  if (existsSync(pkgPath)) {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> };
-    const manager = detectPackageManager(root);
+  // Rung 3: convention. The repo's own scripts, at the root and then in an app folder.
+  for (const dir of [undefined, ...APP_DIRS]) {
+    const pkgPath = join(dir ? join(root, dir) : root, 'package.json');
+    if (!existsSync(pkgPath)) continue;
+    let pkg: { scripts?: Record<string, string> };
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as typeof pkg;
+    } catch {
+      continue;
+    }
     for (const script of ['dev', 'start', 'preview', 'serve']) {
       if (pkg.scripts?.[script]) {
         candidates.push({
-          command: `${manager} ${script === 'start' ? 'start' : `run ${script}`}`,
+          command: scriptCommand(root, dir, script),
           rung: 'convention',
-          source: 'package.json',
-          confidence: script === 'dev' ? 0.7 : 0.5,
+          source: dir ? `${dir}/package.json` : 'package.json',
+          confidence: (script === 'dev' ? 0.7 : 0.5) - (dir ? 0.1 : 0),
+          ...(dir ? { cwd: dir } : {}),
         });
       }
     }
   }
-  if (existsSync(join(root, 'docker-compose.yml')) || existsSync(join(root, 'compose.yaml'))) {
-    candidates.push({
-      command: 'docker compose up',
-      rung: 'convention',
-      source: 'docker-compose.yml',
-      confidence: 0.5,
-    });
+  // A compose file often describes the production stack, with its public
+  // ports and real secrets: the last resort, after the repo's own scripts.
+  const compose = COMPOSE_FILES.find((file) => existsSync(join(root, file)));
+  if (compose) {
+    candidates.push({ command: 'docker compose up', rung: 'convention', source: compose, confidence: 0.2 });
   }
   if (existsSync(join(root, 'Procfile'))) {
     candidates.push({ command: 'foreman start', rung: 'convention', source: 'Procfile', confidence: 0.3 });
@@ -64,10 +82,16 @@ export function detectBringUp(root: string): BringUpCandidate[] {
   return candidates.sort((a, b) => b.confidence - a.confidence);
 }
 
-export function detectPackageManager(root: string): NonNullable<StackProfile['packageManager']> {
-  if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (existsSync(join(root, 'bun.lockb'))) return 'bun';
-  if (existsSync(join(root, 'yarn.lock'))) return 'yarn';
+export const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
+
+/** The package manager of the lockfile in `dir`, else in `fallback` (a workspace root). */
+export function detectPackageManager(dir: string, fallback?: string): NonNullable<StackProfile['packageManager']> {
+  for (const each of fallback && fallback !== dir ? [dir, fallback] : [dir]) {
+    if (existsSync(join(each, 'pnpm-lock.yaml'))) return 'pnpm';
+    if (existsSync(join(each, 'bun.lockb')) || existsSync(join(each, 'bun.lock'))) return 'bun';
+    if (existsSync(join(each, 'yarn.lock'))) return 'yarn';
+    if (existsSync(join(each, 'package-lock.json'))) return 'npm';
+  }
   return 'npm';
 }
 

@@ -13,6 +13,7 @@ import {
   detectProviders,
   type InitAnswers,
   interview,
+  nextSteps,
   PLATFORMS,
   parseInitFlags,
   providerOptions,
@@ -82,6 +83,87 @@ describe('detectApp', () => {
     expect(guess.appId).toBe(guess.platform === 'ios' ? 'com.acme.ios' : 'com.acme.android');
     expect(guess.start).toBe('npx expo start');
   });
+
+  it('says so when it finds no app, rather than writing a web guess in silence', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bugpatrol-init-addon-'));
+    writeFileSync(join(root, 'Addon.toc'), '## Title: Addon\n');
+    writeFileSync(join(root, 'core.lua'), '');
+    const guess = detectApp(root);
+    expect(guess.platform).toBe('web');
+    expect(guess.warnings.join('\n')).toMatch(/No app found.*http:\/\/localhost:3000.*--platform/);
+    expect(detectApp(fixtureRepo()).warnings).toEqual([]);
+  });
+
+  it('guesses a CLI app, and takes its build script, never start or dev, as the build step', () => {
+    const root = fixtureRepo({
+      bin: { kiln: './src/main.ts' },
+      scripts: { start: 'bun src/main.ts', dev: 'bun --watch src/main.ts' },
+    });
+    rmSync(join(root, 'vite.config.ts'));
+    const tui = detectApp(root);
+    expect(tui).toMatchObject({ platform: 'cli', start: undefined });
+    expect(tui.notes.join('\n')).toMatch(/start script runs the app.*test data/);
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ bin: 'cli.js', scripts: { start: 'node cli.js', build: 'tsc' } }),
+    );
+    expect(detectApp(root)).toMatchObject({ platform: 'cli', start: 'pnpm run build' });
+  });
+
+  it("prefers the repo's own dev command over compose, and takes the port from the app folder", () => {
+    const root = mkdtempSync(join(tmpdir(), 'bugpatrol-init-compose-'));
+    writeFileSync(join(root, 'docker-compose.yml'), 'services:\n  nginx:\n    ports: ["80:80", "443:443"]\n');
+    mkdirSync(join(root, 'frontend'));
+    writeFileSync(join(root, 'frontend', 'package.json'), JSON.stringify({ scripts: { dev: 'next dev' } }));
+    writeFileSync(join(root, 'frontend', 'next.config.ts'), '');
+    const guess = detectApp(root);
+    expect(guess).toMatchObject({ platform: 'web', start: 'npm --prefix frontend run dev', ready: 'Ready in|✓ Ready' });
+    expect(guess.url).toBe('http://localhost:3000');
+    expect(guess.warnings).toEqual([]);
+  });
+
+  it('warns that a compose stack may start production services, and takes a published port', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bugpatrol-init-compose-'));
+    writeFileSync(
+      join(root, 'docker-compose.yml'),
+      [
+        'services:',
+        '  api:',
+        '    env_file: [.env]',
+        '    ports:',
+        '      - "127.0.0.1:8080:8080"',
+        '  nginx:',
+        '    ports: ["80:80"]',
+      ].join('\n'),
+    );
+    const guess = detectApp(root);
+    expect(guess).toMatchObject({ platform: 'web', start: 'docker compose up', url: 'http://localhost:8080' });
+    expect(guess.notes).toContain('Port 8080: from a published port in docker-compose.yml.');
+    expect(guess.warnings.join('\n')).toMatch(/every service in docker-compose\.yml.*production.*env_file/);
+  });
+
+  it('guesses an API with an OpenAPI spec for a FastAPI app with no web app', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bugpatrol-init-fastapi-'));
+    writeFileSync(join(root, 'pyproject.toml'), '[project]\ndependencies = ["fastapi>=0.110", "uvicorn"]\n');
+    const guess = detectApp(root);
+    expect(guess).toMatchObject({ platform: 'api', url: 'http://localhost:8000', spec: '/openapi.json' });
+    expect(guess.start).toBeUndefined();
+    expect(defaultAnswers(guess, { ...none, clis: ['claude'] }, parseInitFlags([]))).toMatchObject({
+      platform: 'api',
+      spec: '/openapi.json',
+    });
+  });
+});
+
+describe('nextSteps', () => {
+  it('fits the platform: a CLI has no sign-in and no screen', () => {
+    const cli = nextSteps('cli').join('\n');
+    expect(cli).toContain('Run --help, then the main command');
+    expect(cli).toContain('test data');
+    expect(cli).not.toContain('Sign in');
+    expect(nextSteps('web').join('\n')).toContain('Sign in, then open the main screen');
+    expect(nextSteps('api').join('\n')).toContain('sweep --dry-run');
+  });
 });
 
 describe('detectAppId', () => {
@@ -144,7 +226,13 @@ describe('detectProviders', () => {
 });
 
 describe('defaultAnswers', () => {
-  const guess = { platform: 'web' as const, start: 'pnpm run dev', url: 'http://localhost:5173', notes: [] };
+  const guess = {
+    platform: 'web' as const,
+    start: 'pnpm run dev',
+    url: 'http://localhost:5173',
+    notes: [],
+    warnings: [],
+  };
 
   it('prefers an installed CLI over an API key', () => {
     const picked = defaultAnswers(guess, { ...none, clis: ['codex'], keys: ['openrouter'] }, parseInitFlags([]));
@@ -302,6 +390,15 @@ describe('writeInitialConfig', () => {
     expect(readFileSync(join(root, '.gitignore'), 'utf8')).toBe('dist\n.bugpatrol/runs/\n.env\n');
   });
 
+  it('writes a CLI start command as the app command, never as a build step, and warns about real data', () => {
+    const root = fixtureRepo();
+    const result = writeInitialConfig(root, answers({ platform: 'cli', start: 'bun start' }));
+    const config = loadConfig(root);
+    expect(config.app.setup).toEqual([]);
+    expect(config.app.connect.cli.command).toBe('bun start');
+    expect(result.warnings.join('\n')).toMatch(/`bun start` runs the app.*real data/);
+  });
+
   it('warns about a key that the config needs and the shell does not have', () => {
     const result = writeInitialConfig(
       fixtureRepo(),
@@ -312,7 +409,13 @@ describe('writeInitialConfig', () => {
 });
 
 describe('interview', () => {
-  const guess = { platform: 'web' as const, start: 'npm run dev', url: 'http://localhost:5173', notes: [] };
+  const guess = {
+    platform: 'web' as const,
+    start: 'npm run dev',
+    url: 'http://localhost:5173',
+    notes: [],
+    warnings: [],
+  };
   const detected: Detected = { ...none, clis: ['claude', 'codex'] };
 
   /** Plays the user: each reply gets the prefilled value, and returns what the user leaves on the line. */
@@ -370,7 +473,13 @@ describe('interview', () => {
 
 describe('api init', () => {
   it('api init asks for url and spec and detects no start command', async () => {
-    const guess = { platform: 'web' as const, start: 'npm run dev', url: 'http://localhost:5173', notes: [] };
+    const guess = {
+      platform: 'web' as const,
+      start: 'npm run dev',
+      url: 'http://localhost:5173',
+      notes: [],
+      warnings: [],
+    };
     const detected: Detected = { ...none, clis: ['claude'] };
     const prompts: string[] = [];
     const replies = [() => String(PLATFORMS.indexOf('api') + 1), () => 'http://127.0.0.1:8000', () => '/openapi.json'];

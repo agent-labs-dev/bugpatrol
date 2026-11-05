@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
 import { assertionWords, bugMisses, checkAssertions, replayRoutine } from '../replay.js';
 import { stepWords } from '../roles/fixer.js';
+import { portabilityWarning } from '../routine-paths.js';
 import type { AgentSession } from '../session.js';
 import { reportFingerprint } from '../sweep.js';
 import type { Tool, ToolResult } from '../types.js';
@@ -403,7 +404,7 @@ async function saveRoutine(
   description: string,
   screenId?: string,
   assertions = new Map<RoutineStep, Assertion[]>(),
-): Promise<{ routine: Routine; flattenedFrom?: number }> {
+): Promise<{ routine: Routine; flattenedFrom?: number; warning?: string }> {
   const prior = await session.workspace.readRoutine(id);
   const now = new Date().toISOString();
   let steps = session.trail
@@ -439,7 +440,9 @@ async function saveRoutine(
   };
   await session.workspace.saveRoutine(routine);
   session.anchor = { routineId: id, index: session.trail.length };
-  return { routine, flattenedFrom };
+  const warning = portabilityWarning(routine, session.root);
+  if (warning) session.emit({ kind: 'error', summary: warning });
+  return { routine, flattenedFrom, warning };
 }
 
 /**
@@ -1052,7 +1055,7 @@ export function explorerTools(
         const previous = session.lastScreenId;
         const edge = transition(session, id);
         const routineId = `screen-${id}`;
-        await saveRoutine(session, routineId, description, id);
+        const { warning } = await saveRoutine(session, routineId, description, id);
         await session.workspace.upsertScreen({
           id,
           name,
@@ -1091,7 +1094,7 @@ export function explorerTools(
         return {
           ...text(
             session.vars.redact(
-              `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}`,
+              `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}${warning ? `\nWarning: ${warning}` : ''}`,
             ) as string,
           ),
           meta: { summary: '', capture, screenId: id },
@@ -1146,9 +1149,9 @@ export function explorerTools(
         const assertions = stepAssertions(session, input.assert);
         if (typeof assertions === 'string') return { ...text(`Not saved: ${assertions}.`), isError: true };
         const description = arg(input, 'description');
-        const { routine, flattenedFrom } = await saveRoutine(session, id, description, undefined, assertions);
+        const { routine, flattenedFrom, warning } = await saveRoutine(session, id, description, undefined, assertions);
         return text(
-          `Saved ${routine.id} (requires ${routine.requires?.join(', ') || 'none'}, ${routine.steps.length} steps${flattenedFrom ? `, flattened from a chain of ${flattenedFrom}` : ''}).`,
+          `Saved ${routine.id} (requires ${routine.requires?.join(', ') || 'none'}, ${routine.steps.length} steps${flattenedFrom ? `, flattened from a chain of ${flattenedFrom}` : ''}).${warning ? ` Warning: ${warning}` : ''}`,
         );
       },
     },

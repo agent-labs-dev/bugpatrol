@@ -51,14 +51,16 @@ describe('profiles', () => {
     const root = project();
     const yaml = 'version: 1\nrun: { command: pnpm dev, url: http://localhost:3000 }\n';
     writeFileSync(paths.config(root), yaml);
-    // A `profile:` key in the YAML is not read: the file name decides.
-    writeFileSync(join(root, '.bugpatrol', 'cli.yml'), `${yaml}profile: other\n`);
+    writeFileSync(join(root, '.bugpatrol', 'cli.yml'), yaml);
     expect(profileOf(root)).toBeUndefined();
     expect(profileOf(root, '.bugpatrol/bugpatrol.yml')).toBeUndefined();
     const profile = profileOf(root, '.bugpatrol/cli.yml');
     expect(profile).toBe('cli');
     expect(loadConfig(root, {}, '.bugpatrol/cli.yml').profile).toBe('cli');
     expect(loadConfig(root).profile).toBeUndefined();
+    // A `profile:` key in the YAML is rejected: the file name decides.
+    writeFileSync(join(root, '.bugpatrol', 'other.yml'), `${yaml}profile: cli\n`);
+    expect(() => loadConfig(root, {}, '.bugpatrol/other.yml')).toThrow(/Unknown key `profile`.*file name/);
     expect(paths.appMap(root, profile)).toBe(join(root, '.bugpatrol', 'cli', 'appmap.json'));
     expect(paths.routine(root, 'enter-app', profile)).toBe(
       join(root, '.bugpatrol', 'cli', 'routines', 'enter-app.json'),

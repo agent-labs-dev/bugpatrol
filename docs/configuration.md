@@ -1,6 +1,6 @@
 # Configuration
 
-All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root.
+All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root. Bugpatrol rejects a key that it does not read, such as `readyUrl` in a setup command, and names the key and the supported field, so a typo never turns a setting off.
 
 ## Profiles
 
