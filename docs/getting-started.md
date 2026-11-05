@@ -148,6 +148,22 @@ app:
   instructions: .bugpatrol/instructions.md
 ```
 
+For an app that Bugpatrol should start itself in an isolated display, use
+`connect.launch` instead of `connect.cdp`. These modes are mutually exclusive:
+
+```yaml
+  connect:
+    launch:
+      command: node_modules/.bin/electron
+      args: ['.']
+      cdp: auto
+      width: 1280
+      height: 800
+```
+
+`launch` starts Electron with a copied private profile on a Linux Xvfb display,
+so it does not use the user's `DISPLAY`, `WAYLAND_DISPLAY` or `XAUTHORITY`.
+
 For iOS and Android, set `platform: ios` or `platform: android`, and set `connect.appId` to the bundle ID or the package name. Bugpatrol uses the booted simulator or the running emulator. To select a different device, set `connect.device`. The [examples](development.md#examples) show a full Electron setup and a full iOS setup.
 
 ## 3. Write the app guide

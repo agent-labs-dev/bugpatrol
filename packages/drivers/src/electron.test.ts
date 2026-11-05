@@ -164,7 +164,8 @@ describe('ElectronDriver page choice', () => {
     await browser.pages()[0]!.goto(dataUrl);
     await browser.newPage();
 
-    driver = new ElectronDriver(`http://127.0.0.1:${cdpPort}`);
+    // The driver waits for an app window to open before it gives up.
+    driver = new ElectronDriver(`http://127.0.0.1:${cdpPort}`, [], 500);
     const error = await driver.connect().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(InfrastructureError);

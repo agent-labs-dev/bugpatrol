@@ -259,6 +259,23 @@ export const appSchema = z
         allowedOrigins: z.array(z.string()).default([]),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
+        /** Electron: launch the app in a private Xvfb display instead of connecting to an existing CDP endpoint. */
+        launch: z
+          .object({
+            /** The Electron executable or wrapper command. */
+            command: z.string().min(1),
+            /** Arguments passed to the app after Bugpatrol's private-profile and CDP arguments. */
+            args: z.array(z.string()).default([]),
+            /** An existing profile to copy into the private launch profile. */
+            userDataDir: z.string().optional(),
+            /** The CDP port, or `auto` to choose a free port. */
+            cdp: z.union([z.literal('auto'), z.number().int().positive().max(65535)]).default('auto'),
+            /** The private display size in pixels. */
+            width: z.number().int().positive().default(1280),
+            height: z.number().int().positive().default(800),
+          })
+          .strict()
+          .optional(),
         /**
          * CLI: each command runs in a terminal of `cols` by `rows` from the
          * app source, and is stopped after `timeoutMs`; a session waits at

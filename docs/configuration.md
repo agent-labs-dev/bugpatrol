@@ -142,12 +142,41 @@ not mask screenshots.
 | Platform | Field | Example |
 | --- | --- | --- |
 | `web` | `url` | `http://localhost:3000` |
-| `electron` | `cdp` | `http://127.0.0.1:${CDP_PORT}` |
+| `electron` | `cdp` or `launch` | `http://127.0.0.1:${CDP_PORT}` or a private launch block |
 | `ios`, `android` | `appId`, and optional `device` | `com.example.app` |
 | `api` | `url`, and the keys below | `http://127.0.0.1:8000` |
 | `cli` | `cli`, with the keys below | `{ cols: 120, rows: 40 }` |
 
 For mobile, the default device is the booted simulator or the running emulator.
+
+### Connect for Electron
+
+Use exactly one of `connect.cdp` and `connect.launch`.
+
+`cdp` connects to an Electron app that is already running, usually one started by
+`app.setup`. It must be an HTTP CDP endpoint, such as
+`http://127.0.0.1:${CDP_PORT}`.
+
+`launch` starts the app in a private Linux Xvfb display, DBus session and profile,
+so it cannot take over the user's screen. `command` is the Electron executable or
+wrapper, and `args` are its app arguments. `userDataDir`, when set, is copied into
+the private profile before launch. `cdp` is a positive port or `auto`, which picks
+a free port. `width` and `height` set the private display size.
+
+```yaml
+app:
+  platform: electron
+  connect:
+    launch:
+      command: node_modules/.bin/electron
+      args: ['.']
+      userDataDir: .bugpatrol/electron-profile
+      cdp: auto
+      width: 1280
+      height: 800
+```
+
+Private launch requires Linux with Xvfb, xauth, setsid and dbus-run-session.
 
 ### Connect for a command line app
 

@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { type Contract, requestPolicy } from '@bugpatrol/contract';
 import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
 import { type ApiCredentials, ApiDriver } from './api.js';
@@ -6,6 +8,7 @@ import { Pacer } from './api-pacer.js';
 import { CliDriver, PRIVATE_DIR } from './cli.js';
 import { CuaDriver } from './cua/driver.js';
 import { ElectronDriver } from './electron.js';
+import { launchElectron } from './electron-launch.js';
 import { MaestroDriver } from './maestro.js';
 import type { Driver } from './types.js';
 import { WebDriver } from './web.js';
@@ -95,10 +98,26 @@ export function createDriver(
     });
   }
   if (platform === 'electron') {
-    if (!connect.cdp) {
-      throw new ConfigError('Electron driver requires app.connect.cdp');
+    const { cdp, launch } = connect;
+    const origins = connect.allowedOrigins.map(vars);
+    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins);
+    if (!launch || cdp) {
+      throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');
     }
-    return new ElectronDriver(vars(connect.cdp), connect.allowedOrigins.map(vars));
+    const options = {
+      cwd: source,
+      command: vars(launch.command),
+      args: launch.args.map(vars),
+      userDataDir: launch.userDataDir ? resolve(source, vars(launch.userDataDir)) : undefined,
+      cdp: launch.cdp,
+      width: launch.width,
+      height: launch.height,
+    };
+    // The app starts on connect, so building a driver has no side effects.
+    return new ElectronDriver(
+      async () => launchElectron({ ...options, directory: await mkdtemp(join(tmpdir(), 'bugpatrol-electron-')) }),
+      origins,
+    );
   }
   if (!connect.appId) {
     throw new ConfigError(`${platform} driver requires app.connect.appId`);

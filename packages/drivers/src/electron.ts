@@ -46,19 +46,37 @@ function pageLabel(url: string): string {
   return parsed.host ? `${parsed.protocol}//${parsed.host}` : parsed.protocol;
 }
 
-/** Reuse web observation over CDP without taking ownership of the Electron app. */
+// An app may open its first window after CDP is ready; this matches the launcher's own readiness timeout.
+const PAGE_TIMEOUT_MS = 30_000;
+const PAGE_POLL_MS = 100;
+
+type LaunchHandle = { cdpUrl: string; close(): Promise<void> };
+
+/** Where the app's CDP endpoint comes from: a running app, or one Bugpatrol launches on connect. */
+export type ElectronTarget = string | (() => Promise<LaunchHandle>);
+
+/** Reuse web observation over CDP; owns the Electron app only when it launched it. */
 export class ElectronDriver extends WebDriver {
   override readonly platform = 'electron' as const;
+  private launched?: LaunchHandle;
 
   constructor(
-    private readonly cdpUrl: string,
+    private readonly target: ElectronTarget,
     allowedOrigins: string[] = [],
+    private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
   ) {
     super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins });
   }
 
   override async connect(): Promise<void> {
-    this.browser = await chromium.connectOverCDP(this.cdpUrl);
+    let cdpUrl: string;
+    if (typeof this.target === 'string') {
+      cdpUrl = this.target;
+    } else {
+      this.launched = await this.target();
+      cdpUrl = this.launched.cdpUrl;
+    }
+    this.browser = await chromium.connectOverCDP(cdpUrl);
     this.context = this.browser.contexts()[0];
     if (!this.context) {
       throw new Error('Electron CDP connection has no context');
@@ -71,28 +89,37 @@ export class ElectronDriver extends WebDriver {
     this.context.on('page', (page) => this.watch(page));
   }
 
+  /** The page to drive, polled because the app can open its first window, or leave about:blank, after connect. */
   private async choosePage(): Promise<Page> {
-    const pages = this.context!.pages();
-    const candidates = await Promise.all(
-      pages.map(async (page) => {
-        const url = page.url();
-        const state = await page
-          .evaluate(() => ({ visible: document.visibilityState === 'visible', focused: document.hasFocus() }))
-          .catch(() => ({ visible: false, focused: false }));
-        return { url, ...state };
-      }),
-    );
-    const index = appPage(candidates);
-    if (index === undefined) {
-      throw new InfrastructureError(
-        `Electron CDP connection has no app page. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+    const deadline = Date.now() + this.pageTimeoutMs;
+    while (true) {
+      const pages = this.context!.pages();
+      const candidates = await Promise.all(
+        pages.map(async (page) => {
+          const url = page.url();
+          const state = await page
+            .evaluate(() => ({ visible: document.visibilityState === 'visible', focused: document.hasFocus() }))
+            .catch(() => ({ visible: false, focused: false }));
+          return { url, ...state };
+        }),
       );
+      const index = appPage(candidates);
+      if (index !== undefined) return pages[index]!;
+      if (Date.now() >= deadline) {
+        throw new InfrastructureError(
+          `Electron CDP connection has no app page after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));
     }
-    return pages[index]!;
   }
 
   override async close(): Promise<void> {
-    // CDP browser.close disconnects Playwright; it does not stop Electron.
-    await this.browser?.close();
+    // CDP browser.close disconnects Playwright; it does not stop Electron, so a launched app is stopped here.
+    try {
+      await this.browser?.close();
+    } finally {
+      await this.launched?.close();
+    }
   }
 }
