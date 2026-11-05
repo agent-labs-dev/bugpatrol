@@ -55,7 +55,7 @@ export async function evaluateScreen(
       : await session.capture(observation, screenId);
   if (!screenshot) return [];
   await writeFile(
-    join(paths.session(session.root, session.sessionId), `${screenId}.snapshot.json`),
+    join(paths.session(session.root, session.sessionId, session.workspace.profile), `${screenId}.snapshot.json`),
     `${JSON.stringify(snapshot, null, 2)}\n`,
   );
 
@@ -74,7 +74,7 @@ export async function evaluateScreen(
   let diffPath: string | undefined;
   let visual: Awaited<ReturnType<typeof diff>>['primary'] | undefined;
   if (!firstSight && enabled.has('pixel-diff')) {
-    diffPath = join(paths.session(session.root, session.sessionId), `${screenId}-diff.png`);
+    diffPath = join(paths.session(session.root, session.sessionId, session.workspace.profile), `${screenId}-diff.png`);
     const comparison = await diff({
       baselinePath: baseline.png,
       actualPath: join(session.root, screenshot),
@@ -109,8 +109,8 @@ export async function evaluateScreen(
 }
 
 async function readBaseline(session: AgentSession, screenId: string): Promise<Baseline> {
-  const png = paths.agentBaseline(session.root, screenId);
-  const snapshotFile = paths.agentBaselineSnapshot(session.root, screenId);
+  const png = paths.agentBaseline(session.root, screenId, session.workspace.profile);
+  const snapshotFile = paths.agentBaselineSnapshot(session.root, screenId, session.workspace.profile);
   try {
     await readFile(png);
     const snapshot = JSON.parse(await readFile(snapshotFile, 'utf8')) as ScreenSnapshot;
@@ -127,7 +127,7 @@ async function saveBaseline(
   screenshot: string,
   snapshot: ScreenSnapshot,
 ): Promise<void> {
-  await mkdir(paths.agentBaselines(session.root), { recursive: true });
+  await mkdir(paths.agentBaselines(session.root, session.workspace.profile), { recursive: true });
   await copyFile(join(session.root, screenshot), baseline.png);
   await writeFile(baseline.snapshotFile, `${JSON.stringify(snapshot, null, 2)}\n`);
 }

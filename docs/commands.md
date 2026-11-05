@@ -2,6 +2,12 @@
 
 Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the current folder or in a folder above it, the same way that git finds `.git/`. Run `npx bugpatrol --help` for the full list, and `npx bugpatrol <command> --help` for the flags of one command.
 
+## Global options
+
+| Option | What it does |
+| --- | --- |
+| `--config <file>` | Read this config file in place of `.bugpatrol/bugpatrol.yml`, for example `bugpatrol --config .bugpatrol/cli.yml review 12`. It goes before or after the command. The file is a profile with its own app map, routines and run state ([Profiles](configuration.md#profiles)). Paths in it stay relative to the project root |
+
 ## Agents
 
 | Command | What it does |
@@ -15,7 +21,7 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | `bugpatrol promote <pr> <claim>...` | Keep the routine of each proven claim of a merged pull request as `.bugpatrol/routines/pr-<pr>-<claim>.json`. Commit it, and the patrol replays it. It refuses a pull request that is not merged, a review of another commit than the one that merged, and a claim that is not proven. Refer to [GitHub](github.md#7-review-a-pull-request) |
 | `bugpatrol publish [--issue <id>] [--dry-run]` | Open PRs and issues on GitHub, or write them to local files. Refer to [GitHub](github.md) |
 | `bugpatrol ci [--issue <id>] [--wait]` | Watch the CI checks of each Bugpatrol PR, and let the fixer fix a failed check. Refer to [GitHub](github.md#5-make-ci-green) |
-| `bugpatrol [--once] [--force] [--state local\|branch]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle; `--force` explores the same commit again; `--state branch` keeps the state on the `bugpatrol-state` branch |
+| `bugpatrol [--once] [--force] [--state local\|branch]` (or `bugpatrol patrol`) | The full cycle, again and again. Explore and judge run only on a new commit; the fixes, retests, publish, and CI run in each cycle. `--once` runs one cycle and then puts the checkout back on the branch it started from; `--force` explores the same commit again; `--state branch` keeps the state on the `bugpatrol-state` branch |
 | `bugpatrol replay <routine-id>` | Replay a learned routine, with no model. For a repro routine, it then checks the bug: it exits 1 while the bug still shows, and 0 once it no longer does |
 | `bugpatrol endpoints [--spec URL\|file] [--json]` | Print the endpoints of an api contract and the operations that Bugpatrol skips. With no `--spec`, it reads `app.connect.spec` (or `.bugpatrol/endpoints.yml`) and writes the endpoints to `appmap.json` |
 | `bugpatrol sweep [--json] [--max-requests N] [--dry-run]` | Test each endpoint and case of an api with no model, and check each response against the spec. It exits 1 on a failure that repeats. Refer to [Backend testing](backend-testing.md#the-sweep) |
@@ -24,9 +30,12 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 
 | Command | What it does |
 | --- | --- |
+| `bugpatrol findings list [--session <id>]` | List the findings of the last explore or sweep session that has any, or of one session, with what became of each: filed as an issue, dismissed, ignored, or waiting for the judge |
 | `bugpatrol issue list` | List the issues, worst first |
+| `bugpatrol issue show <id>` | Print an issue: its body, the judge's reason, how it closed, and the paths of its evidence and repro routine |
 | `bugpatrol issue dismiss <id> --reason "..." [--by name]` | Close an issue as not a bug; it does not come back |
-| `bugpatrol issue reopen <id>` | Open a dismissed issue again |
+| `bugpatrol issue fixed <id> --reason "..." [--commit sha] [--by name]` | Close an issue as fixed, for example after a fix by hand. It records who fixed it and the commit, and closes its GitHub issue as completed. Unlike a dismissal, its findings stay open: a later sighting reopens it as a regression |
+| `bugpatrol issue reopen <id>` | Open a dismissed or fixed issue again |
 | `bugpatrol memory list [--role r]` | Show the lessons that the agents learned |
 | `bugpatrol memory add --role r "text" [--scope s]` | Add a lesson yourself |
 | `bugpatrol memory remove <id>` · `retire <id> --reason "..."` | Delete or retire a lesson |
@@ -51,4 +60,4 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | --- | --- |
 | `bugpatrol run [--all \| --smoke \| --screens /a,/b] [--no-models]` | Capture, compare with the baselines, and run the checks |
 
-These commands are planned and not built yet: `recon`, `model`, `baseline`, `findings`, `intent`, `report`, `export`, and `watch`.
+These commands are planned and not built yet: `recon`, `model`, `baseline`, `intent`, `report`, `export`, and `watch`.

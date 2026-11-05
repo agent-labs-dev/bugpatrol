@@ -1,5 +1,10 @@
 export const USAGE = `bugpatrol - a continuously-running QA engineer for your repo
 
+Global options
+  --config <file>                         use this config file, a profile such as .bugpatrol/cli.yml, before or
+                                          after the command: bugpatrol --config .bugpatrol/cli.yml review 12.
+                                          Paths stay relative to the project root. Default: .bugpatrol/bugpatrol.yml
+
 Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
@@ -33,7 +38,9 @@ Agents
   bugpatrol replay <routine-id>
   bugpatrol endpoints [--spec URL|file] [--json]   the endpoints of the api contract
   bugpatrol sweep [--json] [--max-requests N] [--dry-run]   test each api endpoint × case, no model
-  bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
+  bugpatrol issue list | show <id> | reopen <id>
+  bugpatrol issue dismiss <id> --reason "..." [--by name]
+  bugpatrol issue fixed <id> --reason "..." [--commit sha] [--by name]
   bugpatrol memory list [--role r] | add --role r "text" [--scope s]
   bugpatrol memory remove <id> | retire <id> --reason "..."
 
@@ -44,9 +51,7 @@ Baselines
   bugpatrol baseline accept --clean       bulk-accept everything non-blocking
 
 Triage
-  bugpatrol findings list [--route issue|question]
-  bugpatrol findings explain <id>
-  bugpatrol findings accept <id> --reason "intentional"
+  bugpatrol findings list [--session <id>]   the findings of the last session, and what became of each
   bugpatrol intent list|export|prune
 
 Dashboard
@@ -160,6 +165,9 @@ export const COMMAND_HELP: Record<string, string> = {
   The fixer and GitHub steps run only when you turn them on.
   Explore and judge run only when the commit changed since the last full cycle. The fixes, retests,
   publish, and CI checks run in each cycle.
+  Each cycle checks out the latest agents.patrol.pull commit (default origin/main) as a detached HEAD.
+  When the patrol stops, it puts the checkout back on the branch it started from.
+  Set agents.patrol.pull: false to test the checkout as it is.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
   --state <s>     local | branch: share the state on the bugpatrol-state branch (default: agents.patrol.state)
@@ -184,8 +192,19 @@ export const COMMAND_HELP: Record<string, string> = {
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.
 `,
-  issue: `bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
-  List the issues, worst first, or change the state of one issue.
+  findings: `bugpatrol findings list [--session <id>]
+  List the findings (candidates) of the last explore or sweep session that has any, or of one session,
+  with what became of each: filed as an issue, dismissed, ignored, or waiting for the judge.
+  --session <id>  the findings of this session
+`,
+  issue: `bugpatrol issue list | show <id> | dismiss <id> | fixed <id> | reopen <id>
+  List the issues, worst first, show one, or change the state of one issue.
+  list                                       the issues, worst first
+  show <id>                                  the body, the judge's reason, and the evidence paths
+  dismiss <id> --reason "..." [--by name]    close it as not a bug; its findings do not come back
+  fixed <id> --reason "..." [--commit sha] [--by name]
+                                             close it as fixed, for example by hand; a later sighting reopens it as a regression
+  reopen <id>                                open a closed issue again
 `,
   memory: `bugpatrol memory list [--role r] | add --role r "text" [--scope s] | remove <id> | retire <id> --reason "..."
   Look at and change the lessons that the agents learned.
@@ -202,7 +221,10 @@ export const COMMAND_HELP: Record<string, string> = {
 `,
 };
 
+const GLOBAL =
+  '  --config <file>  read this config file, a profile such as .bugpatrol/cli.yml, in place of .bugpatrol/bugpatrol.yml\n';
+
 export function commandHelp(command: string): string | undefined {
   const help = COMMAND_HELP[command];
-  return help && `${help}\nDocs: ${DOCS}\n`;
+  return help && `${help}${GLOBAL}\nDocs: ${DOCS}\n`;
 }

@@ -142,7 +142,7 @@ export type SessionCandidate = Candidate & {
 };
 
 export class AgentReader {
-  /** The profile of `configFile`, whose app map and routines the dashboard shows. */
+  /** The profile of `configFile`, whose app map, routines and run state the dashboard shows. */
   private readonly profile: string | undefined;
 
   constructor(
@@ -153,12 +153,12 @@ export class AgentReader {
   }
 
   memory(): MemoryFile {
-    const value = readJson<MemoryFile>(paths.memory(this.root));
+    const value = readJson<MemoryFile>(paths.memory(this.root, this.profile));
     return Array.isArray(value?.lessons) ? value : { version: 1, lessons: [] };
   }
 
   agents(): AgentsFile | undefined {
-    const value = readJson<AgentsFile>(paths.agents(this.root));
+    const value = readJson<AgentsFile>(paths.agents(this.root, this.profile));
     if (!Array.isArray(value?.agents)) return undefined;
     const agents = value.agents
       .filter((agent) => agent && roles.includes(agent.role) && typeof agent.state === 'string')
@@ -175,7 +175,7 @@ export class AgentReader {
 
   /** The endpoint × case matrix of the sweep. Absent before the first sweep. */
   coverage(): CoverageMatrix | undefined {
-    const value = readJson<CoverageFile>(paths.coverage(this.root));
+    const value = readJson<CoverageFile>(paths.coverage(this.root, this.profile));
     return value?.cells ? coverageMatrix(value) : undefined;
   }
 
@@ -192,9 +192,9 @@ export class AgentReader {
 
   issues(): (Issue & { pr?: FixProposal['pr'] & { ci?: string } })[] {
     const fixes = this.fixes();
-    return list(paths.issues(this.root))
+    return list(paths.issues(this.root, this.profile))
       .filter((name) => name.endsWith('.json'))
-      .map((name) => readJson<Issue>(join(paths.issues(this.root), name)))
+      .map((name) => readJson<Issue>(join(paths.issues(this.root, this.profile), name)))
       .filter((issue): issue is Issue =>
         Boolean(
           issue?.id &&
@@ -228,9 +228,9 @@ export class AgentReader {
   }
 
   fixes(): FixProposal[] {
-    return list(paths.fixes(this.root))
+    return list(paths.fixes(this.root, this.profile))
       .filter((name) => name.endsWith('.json'))
-      .map((name) => readJson<FixProposal>(join(paths.fixes(this.root), name)))
+      .map((name) => readJson<FixProposal>(join(paths.fixes(this.root, this.profile), name)))
       .filter((fix): fix is FixProposal => Boolean(fix?.id && fix.issueId));
   }
 
@@ -242,9 +242,12 @@ export class AgentReader {
   }
 
   sessions(limit = 50): SessionSummary[] {
-    return list(paths.sessions(this.root))
+    return list(paths.sessions(this.root, this.profile))
       .filter((id) => /^[\w-]+$/.test(id))
-      .map((id) => ({ id, value: readJson<SessionSummary>(join(paths.session(this.root, id), 'session.json')) }))
+      .map((id) => ({
+        id,
+        value: readJson<SessionSummary>(join(paths.session(this.root, id, this.profile), 'session.json')),
+      }))
       .filter(({ id, value }) => value?.id === id)
       .map(({ value }) => value)
       .filter((session): session is SessionSummary =>
@@ -268,7 +271,7 @@ export class AgentReader {
     | undefined {
     const listed = this.sessions(Infinity).find((entry) => entry.id === id);
     if (!listed) return undefined;
-    const events = jsonLines<AgentEvent>(join(paths.session(this.root, id), 'events.jsonl'));
+    const events = jsonLines<AgentEvent>(join(paths.session(this.root, id, this.profile), 'events.jsonl'));
     // A running session has no totals yet: add up its events so far.
     const session = listed.status === 'running' ? { ...listed, ...usageOf(events) } : listed;
     const issueOf = new Map(
@@ -300,19 +303,21 @@ export class AgentReader {
 
   /** The candidates of one session, in the order that they were reported. */
   candidates(sessionId: string): Candidate[] {
-    return jsonLines<Candidate>(join(paths.session(this.root, sessionId), 'candidates.jsonl'));
+    return jsonLines<Candidate>(join(paths.session(this.root, sessionId, this.profile), 'candidates.jsonl'));
   }
 
   /** The candidate ids of one session that the judge or a review dismissed. */
   private dismissed(sessionId: string): Set<string> {
     return new Set(
-      jsonLines<{ candidateId: string }>(paths.sessionDecisions(this.root, sessionId)).map((line) => line.candidateId),
+      jsonLines<{ candidateId: string }>(paths.sessionDecisions(this.root, sessionId, this.profile)).map(
+        (line) => line.candidateId,
+      ),
     );
   }
 
   /** The judge's decision on each fingerprint. */
   private triage(): TriageFile['fingerprints'] {
-    return readJson<TriageFile>(paths.triage(this.root))?.fingerprints ?? {};
+    return readJson<TriageFile>(paths.triage(this.root, this.profile))?.fingerprints ?? {};
   }
 
   /** Every candidate that waits for the judge, newest first. */
@@ -333,7 +338,7 @@ export class AgentReader {
 
   /** One session's merged flow view: actions, failed requests, backend logs. */
   flow(id: string): SessionFlow | undefined {
-    return readJson<SessionFlow>(paths.sessionFlow(this.root, id));
+    return readJson<SessionFlow>(paths.sessionFlow(this.root, id, this.profile));
   }
 
   issue(id: string):
@@ -368,7 +373,7 @@ export class AgentReader {
   private attemptDiffs(fix: FixProposal): Record<number, string> {
     return Object.fromEntries(
       (fix.attempts ?? [])
-        .map((attempt) => [attempt.n, paths.fixAttemptDiff(this.root, fix.id, attempt.n)] as const)
+        .map((attempt) => [attempt.n, paths.fixAttemptDiff(this.root, fix.id, attempt.n, this.profile)] as const)
         .filter(([, file]) => existsSync(file))
         .map(([n, file]) => [n, relative(this.root, file).split(sep).join('/')]),
     );
@@ -471,12 +476,12 @@ export class AgentReader {
   review(pr: number): { review: PrReview; recordings: Recording[] } | undefined {
     const review = this.reviewRecords().find((entry) => entry.pr.number === pr);
     if (!review) return undefined;
-    const recordings = walk(paths.reviewDir(this.root, pr))
+    const recordings = walk(paths.reviewDir(this.root, pr, this.profile))
       .map((file) => ({ file, kind: recordingKinds[extname(file).toLowerCase()] }))
       .filter((entry): entry is { file: string; kind: Recording['kind'] } => Boolean(entry.kind))
       .map(({ file, kind }) => {
         const path = relative(this.root, file).split(sep).join('/');
-        const inside = relative(paths.reviewDir(this.root, pr), file);
+        const inside = relative(paths.reviewDir(this.root, pr, this.profile), file);
         const claimId = inside.match(/\bclaim-\d+(?!\d)/)?.[0];
         const build = inside.match(/\b(head|base)\b/)?.[1] as Recording['build'];
         return { path, kind, ...(claimId ? { claimId } : {}), ...(build ? { build } : {}) };
@@ -486,7 +491,7 @@ export class AgentReader {
   }
 
   private reviewRecords(): PrReview[] {
-    const dir = dirname(paths.review(this.root, 0));
+    const dir = dirname(paths.review(this.root, 0, this.profile));
     return list(dir)
       .filter((name) => /^pr-\d+\.json$/.test(name))
       .map((name) => readJson<PrReview>(join(dir, name)))

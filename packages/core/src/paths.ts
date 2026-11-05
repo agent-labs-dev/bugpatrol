@@ -12,6 +12,7 @@ import { ConfigError } from './errors.js';
  *     routines/          committed: replayable flows, including issue repros
  *     <profile>/         committed: appmap.json and routines/ of another config, see profileOf()
  *     runs/              gitignored: sessions, issues, fixes, worktrees, memory
+ *       profiles/<profile>/  the same local state for another config
  *
  * The gate's committed manifest is small, diffs cleanly, and makes a baseline
  * change reviewable in the pull request. The pixels live in content-addressed
@@ -52,8 +53,9 @@ const RESERVED = new Set([DATA_DIR, 'routines']);
  * The profile of a `--config` file: undefined for the default config, else
  * the file name without its extension (`.bugpatrol/cli.yml` is `cli`). Each
  * config of a repo explores its own app, so a profile keeps its app map,
- * routines and endpoint inventory in `.bugpatrol/<profile>/`. The default
- * config keeps them in `.bugpatrol/` itself, where they always were.
+ * routines and endpoint inventory in `.bugpatrol/<profile>/`, and its local
+ * state in `.bugpatrol/runs/profiles/<profile>/`. The default config keeps
+ * them in `.bugpatrol/` and `.bugpatrol/runs/`.
  */
 export function profileOf(root: string, configFile?: string): string | undefined {
   if (!configFile) return undefined;
@@ -70,6 +72,17 @@ export function profileOf(root: string, configFile?: string): string | undefined
 
 /** Where a profile keeps its committed agent files: the Bugpatrol folder, or its profile folder in it. */
 const committed = (root: string, profile?: string) => (profile ? join(dir(root), recordId(profile)) : dir(root));
+
+/** The folder in DATA_DIR that holds the local state of every profile but the default one. */
+export const PROFILES_DIR = 'profiles';
+
+/**
+ * Where a profile keeps its local state: `runs/` for the default config, else
+ * `runs/profiles/<profile>/`, inside the gitignored run directory, so a
+ * profile's sessions, issues, fixes, reviews and lessons never mix with another's.
+ */
+const state = (root: string, profile: string | undefined, ...parts: string[]) =>
+  profile ? data(root, PROFILES_DIR, recordId(profile), ...parts) : data(root, ...parts);
 
 /**
  * A file-backed id is one path segment. Agents choose some ids (a screen id,
@@ -108,41 +121,50 @@ export const paths = {
   appMap: (root: string, profile?: string) => join(committed(root, profile), 'appmap.json'),
   /** Committed. The endpoint inventory of an api app without a spec (decision 1b). */
   endpointInventory: (root: string, profile?: string) => join(committed(root, profile), 'endpoints.yml'),
+  // Local, per profile (see profileOf): everything an agent records. Every
+  // reader and writer of them passes the profile.
   /** What the judge already decided, by fingerprint, so a decided finding does not come back. */
-  triage: (root: string) => data(root, 'triage.json'),
-  memory: (root: string) => data(root, 'memory.json'),
+  triage: (root: string, profile?: string) => state(root, profile, 'triage.json'),
+  memory: (root: string, profile?: string) => state(root, profile, 'memory.json'),
   /** The sweep's coverage cells and its cursor, so the next run resumes where this one stopped. */
-  coverage: (root: string) => data(root, 'coverage.json'),
+  coverage: (root: string, profile?: string) => state(root, profile, 'coverage.json'),
   /** The commit that the external backend runs, from the last probe of `app.connect.version`. */
-  deploy: (root: string) => data(root, 'deploy.json'),
+  deploy: (root: string, profile?: string) => state(root, profile, 'deploy.json'),
   /** The `bugpatrol-state` commit that this folder last shared. Not state: it belongs to this machine. */
-  stateBase: (root: string) => data(root, 'state-base.json'),
-  agentBaselines: (root: string) => data(root, 'agent-baselines'),
-  agentBaseline: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.png`),
-  agentBaselineSnapshot: (root: string, id: string) => data(root, 'agent-baselines', `${recordId(id)}.snapshot.json`),
-  worktrees: (root: string) => data(root, 'worktrees'),
+  stateBase: (root: string, profile?: string) => state(root, profile, 'state-base.json'),
+  agentBaselines: (root: string, profile?: string) => state(root, profile, 'agent-baselines'),
+  agentBaseline: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'agent-baselines', `${recordId(id)}.png`),
+  agentBaselineSnapshot: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'agent-baselines', `${recordId(id)}.snapshot.json`),
+  worktrees: (root: string, profile?: string) => state(root, profile, 'worktrees'),
   /** Committed, so a fresh clone can replay a routine and an issue's repro (ADR 0006). */
   routines: (root: string, profile?: string) => join(committed(root, profile), 'routines'),
   routine: (root: string, id: string, profile?: string) =>
     join(committed(root, profile), 'routines', `${recordId(id)}.json`),
-  issues: (root: string) => data(root, 'issues'),
-  issue: (root: string, id: string) => data(root, 'issues', `${recordId(id)}.json`),
-  fixes: (root: string) => data(root, 'fixes'),
-  fix: (root: string, id: string) => data(root, 'fixes', `${recordId(id)}.json`),
-  fixAttemptDiff: (root: string, id: string, n: number) => data(root, 'fixes', recordId(id), `attempt-${n}.diff`),
-  publish: (root: string) => data(root, 'publish'),
-  review: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}.json`),
+  issues: (root: string, profile?: string) => state(root, profile, 'issues'),
+  issue: (root: string, id: string, profile?: string) => state(root, profile, 'issues', `${recordId(id)}.json`),
+  fixes: (root: string, profile?: string) => state(root, profile, 'fixes'),
+  fix: (root: string, id: string, profile?: string) => state(root, profile, 'fixes', `${recordId(id)}.json`),
+  fixAttemptDiff: (root: string, id: string, n: number, profile?: string) =>
+    state(root, profile, 'fixes', recordId(id), `attempt-${n}.diff`),
+  publish: (root: string, profile?: string) => state(root, profile, 'publish'),
+  review: (root: string, pr: number, profile?: string) => state(root, profile, 'reviews', `pr-${pr}.json`),
   /** What one review keeps besides its record: the claim routines and their replays. Nothing else reads it. */
-  reviewDir: (root: string, pr: number) => data(root, 'reviews', `pr-${pr}`),
-  sessions: (root: string) => data(root, 'sessions'),
-  session: (root: string, id: string) => data(root, 'sessions', recordId(id)),
-  agents: (root: string) => data(root, 'agents.json'),
+  reviewDir: (root: string, pr: number, profile?: string) => state(root, profile, 'reviews', `pr-${pr}`),
+  sessions: (root: string, profile?: string) => state(root, profile, 'sessions'),
+  session: (root: string, id: string, profile?: string) => state(root, profile, 'sessions', recordId(id)),
+  agents: (root: string, profile?: string) => state(root, profile, 'agents.json'),
   /** One session's collected logs, the signals it saw, and its merged flow. */
-  sessionLogs: (root: string, id: string) => data(root, 'sessions', recordId(id), 'logs.json'),
-  sessionSignals: (root: string, id: string) => data(root, 'sessions', recordId(id), 'signals.jsonl'),
-  sessionFlow: (root: string, id: string) => data(root, 'sessions', recordId(id), 'flow.json'),
+  sessionLogs: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'sessions', recordId(id), 'logs.json'),
+  sessionSignals: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'sessions', recordId(id), 'signals.jsonl'),
+  sessionFlow: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'sessions', recordId(id), 'flow.json'),
   /** One line for each candidate of the session that the judge or a review dismissed. */
-  sessionDecisions: (root: string, id: string) => data(root, 'sessions', recordId(id), 'decisions.jsonl'),
+  sessionDecisions: (root: string, id: string, profile?: string) =>
+    state(root, profile, 'sessions', recordId(id), 'decisions.jsonl'),
 } as const;
 
 /**
@@ -182,6 +204,17 @@ export const STATE_FILES: readonly { path: string; keys?: readonly string[] }[] 
   /** The commit that the last full cycle tested. */
   { path: `${DATA_DIR}/agents.json`, keys: ['patrol.commit'] },
 ];
+
+/**
+ * The file in the checkout behind a STATE_FILES path of `profile`. The default
+ * config's paths are relative to the Bugpatrol folder. Another profile maps
+ * its committed files to `<profile>/` and its run files to `runs/profiles/<profile>/`.
+ */
+export function stateFile(root: string, path: string, profile?: string): string {
+  if (!profile) return join(dir(root), path);
+  const run = `${DATA_DIR}/`;
+  return path.startsWith(run) ? state(root, profile, path.slice(run.length)) : join(committed(root, profile), path);
+}
 
 /**
  * The project root: the nearest folder at or above `start` that holds

@@ -401,7 +401,8 @@ export async function createPr(
     fix: FixProposal;
     issue: Issue;
     commitMessage: string;
-    memoryRoot?: string;
+    /** Where a rejected commit is kept as a lesson for the fixer. */
+    memory?: Workspace;
   },
 ): Promise<{ number: number; url: string }> {
   const { fix } = input;
@@ -409,8 +410,8 @@ export async function createPr(
     await git(fix.worktree, 'add', '-A');
     const committed = await commitFix(fix.worktree, input.issue.title, input.commitMessage);
     if (!committed.ok) {
-      if (input.memoryRoot)
-        await new Workspace(input.memoryRoot).upsertLessons([
+      if (input.memory)
+        await input.memory.upsertLessons([
           {
             role: 'fixer',
             source: 'commit-hook',

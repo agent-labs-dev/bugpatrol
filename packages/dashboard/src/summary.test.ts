@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { paths } from '@bugpatrol/core';
@@ -60,9 +60,9 @@ describe('projectSummary', () => {
       ['api', ['.bugpatrol/api.yml'], false],
     ]);
     expect(client.configArg).toBe('');
-    expect(Object.keys(client.coverage)).toEqual(['screens', 'api']);
-    // Both surfaces write to one runs folder, so the findings of both wait for one judge.
-    expect(client.waiting.total).toBe(5);
+    // Each config keeps its own run state, so each view counts only its own coverage and findings.
+    expect(Object.keys(client.coverage)).toEqual(['screens']);
+    expect(client.waiting.total).toBe(1);
 
     const api = summaryOf('.bugpatrol/api.yml');
     expect(api.surfaces.map((surface) => [surface.platform, surface.active])).toEqual([
@@ -72,6 +72,8 @@ describe('projectSummary', () => {
     expect(api.config).toBe('.bugpatrol/api.yml');
     expect(api.configArg).toBe(' --config .bugpatrol/api.yml');
     expect(api.logs).toEqual([]);
+    expect(Object.keys(api.coverage)).toContain('api');
+    expect(api.waiting.total).toBe(4);
   });
 
   it('finds a surface in the data when no config tests it', () => {
@@ -111,6 +113,29 @@ describe('projectSummary', () => {
       }),
     );
     expect(summaryOf().waiting.total).toBe(3);
+  });
+});
+
+describe('profiles', () => {
+  it('reads the issues and lessons of the selected profile only', () => {
+    writeProjectFixture(root, 'client');
+    writeFileSync(join(root, '.bugpatrol', 'cli.yml'), 'version: 1\n');
+    mkdirSync(paths.issues(root, 'cli'), { recursive: true });
+    const lesson = {
+      id: 'les_1',
+      role: 'explorer',
+      text: 'Press q',
+      source: 'agent',
+      hits: 1,
+      createdAt: '',
+      lastSeenAt: '',
+    };
+    writeFileSync(paths.memory(root, 'cli'), JSON.stringify({ version: 1, lessons: [lesson] }));
+    const cli = new AgentReader(root, '.bugpatrol/cli.yml');
+    expect(cli.issues()).toEqual([]);
+    expect(cli.memory().lessons.map((each) => each.id)).toEqual(['les_1']);
+    expect(new AgentReader(root).issues()).toHaveLength(5);
+    expect(new AgentReader(root).memory().lessons.map((each) => each.id)).not.toContain('les_1');
   });
 });
 
@@ -165,8 +190,8 @@ describe('GET /api/summary', () => {
       expect(summary.config).toBe('.bugpatrol/api.yml');
       expect(summary.surfaces[0]).toMatchObject({ platform: 'api', active: true });
       const overview = await (await fetch(`${dashboard.url}/api/overview`)).json();
-      // The overview lists the candidates that wait, with the status of an exchange and no body.
-      expect(overview.waiting).toHaveLength(5);
+      // The overview lists the candidates of this config that wait, with the status of an exchange and no body.
+      expect(overview.waiting).toHaveLength(4);
       const http = overview.waiting.find((candidate: { source: string }) => candidate.source === 'sweep');
       expect(http.capture).toEqual({ kind: 'http', exchange: { response: { status: expect.any(Number) } } });
       writeFileSync(join(root, '.bugpatrol', 'api.yml'), 'not: a config');

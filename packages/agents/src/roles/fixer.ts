@@ -270,9 +270,10 @@ export async function runFixer(
       )
       .map((fix) => [fix.issueId, fix]),
   );
-  // `runs/issues` is shared by every profile, but a fix edits this profile's
-  // app: an issue another profile filed would be retested against the wrong
-  // config, so only the active profile's issues are eligible.
+  // A fix edits this profile's app: an issue another profile filed would be
+  // retested against the wrong config, so only the active profile's issues
+  // are eligible. Each profile has its own issues folder, and this also keeps
+  // out an issue another profile filed there before profiles had one.
   const owned = new Set(
     all
       .filter((issue) => (issue.evidence?.reproProfile ?? undefined) === session.workspace.profile)
@@ -327,8 +328,8 @@ export async function runFixer(
       while (await branchExists(source, `${baseBranch}-${n}`)) n++;
       branch = `${baseBranch}-${n}`;
     }
-    const worktree = join(paths.worktrees(session.root), issue.id);
-    await mkdir(paths.worktrees(session.root), { recursive: true });
+    const worktree = join(paths.worktrees(session.root, session.workspace.profile), issue.id);
+    await mkdir(paths.worktrees(session.root, session.workspace.profile), { recursive: true });
     let existing = false;
     try {
       await realpath(worktree);

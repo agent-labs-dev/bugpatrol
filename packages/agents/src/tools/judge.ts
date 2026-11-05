@@ -1,4 +1,4 @@
-import { appendFile, copyFile, readFile } from 'node:fs/promises';
+import { appendFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   awaitsJudge,
@@ -39,19 +39,7 @@ function issueTitle(value: string): string {
 }
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
-  try {
-    const lines = await readFile(paths.sessionDecisions(session.root, sessionId), 'utf8');
-    return new Set(
-      lines
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => (JSON.parse(line) as { candidateId: string }).candidateId),
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw error;
-  }
+  return new Set((await session.workspace.readDecisions(sessionId)).map((line) => line.candidateId));
 }
 
 /**
@@ -300,20 +288,23 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
           if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
             await copyFile(
               resolve(session.root, capture.screenshot),
-              paths.agentBaseline(session.root, candidate.screenId),
+              paths.agentBaseline(session.root, candidate.screenId, session.workspace.profile),
             );
             const snapshot = join(
-              paths.session(session.root, candidate.sessionId),
+              paths.session(session.root, candidate.sessionId, session.workspace.profile),
               `${candidate.screenId}.snapshot.json`,
             );
             try {
-              await copyFile(snapshot, paths.agentBaselineSnapshot(session.root, candidate.screenId));
+              await copyFile(
+                snapshot,
+                paths.agentBaselineSnapshot(session.root, candidate.screenId, session.workspace.profile),
+              );
             } catch {
               // Explorer-only reports may not have a structural snapshot.
             }
           }
           await appendFile(
-            paths.sessionDecisions(session.root, candidate.sessionId),
+            paths.sessionDecisions(session.root, candidate.sessionId, session.workspace.profile),
             `${JSON.stringify({
               candidateId: candidate.id,
               decision: 'dismiss',

@@ -16,6 +16,7 @@ import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
 import { doctorExitCode, readDoctorConfig, runChecks } from './commands/doctor.js';
 import { runEndpointsCommand } from './commands/endpoints.js';
+import { runFindingsCommand } from './commands/findings.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
@@ -153,7 +154,12 @@ try {
     }
 
     case 'memory': {
-      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`));
+      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
+      break;
+    }
+
+    case 'findings': {
+      await runFindingsCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
       break;
     }
 
@@ -221,7 +227,6 @@ try {
     case 'recon':
     case 'model':
     case 'baseline':
-    case 'findings':
     case 'intent':
     case 'report':
     case 'export':

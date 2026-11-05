@@ -13,6 +13,7 @@ import {
   moveRoutines,
   paths,
   profileOf,
+  stateFile,
 } from './paths.js';
 
 function project(): string {
@@ -67,8 +68,32 @@ describe('profiles', () => {
     );
     expect(paths.endpointInventory(root, profile)).toBe(join(root, '.bugpatrol', 'cli', 'endpoints.yml'));
     expect(paths.appMap(root)).toBe(join(root, '.bugpatrol', 'appmap.json'));
-    // The run directory stays shared.
     expect(paths.memory(root)).toBe(join(root, '.bugpatrol', 'runs', 'memory.json'));
+  });
+
+  it('keeps the run state of another config in its own folder of the gitignored run directory', () => {
+    const root = '/repo';
+    const own = '/repo/.bugpatrol/runs/profiles/cli/';
+    for (const file of [
+      paths.issue(root, 'i', 'cli'),
+      paths.fix(root, 'f', 'cli'),
+      paths.session(root, 's', 'cli'),
+      paths.sessionDecisions(root, 's', 'cli'),
+      paths.memory(root, 'cli'),
+      paths.triage(root, 'cli'),
+      paths.agents(root, 'cli'),
+      paths.worktrees(root, 'cli'),
+      paths.review(root, 7, 'cli'),
+      paths.stateBase(root, 'cli'),
+    ])
+      expect(file.startsWith(own)).toBe(true);
+    // The default config keeps the paths it always had.
+    expect(paths.issue(root, 'i')).toBe('/repo/.bugpatrol/runs/issues/i.json');
+    expect(paths.memory(root)).toBe('/repo/.bugpatrol/runs/memory.json');
+    // The state branch paths of a profile land in its two folders.
+    expect(stateFile(root, 'appmap.json', 'cli')).toBe('/repo/.bugpatrol/cli/appmap.json');
+    expect(stateFile(root, 'runs/issues/i.json', 'cli')).toBe(`${own}issues/i.json`);
+    expect(stateFile(root, 'runs/issues/i.json')).toBe('/repo/.bugpatrol/runs/issues/i.json');
   });
 
   it('refuses a config name that would take a folder Bugpatrol uses, in any letter case', () => {

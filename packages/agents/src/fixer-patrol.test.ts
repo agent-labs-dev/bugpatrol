@@ -1199,6 +1199,41 @@ describe('patrol pull', () => {
     }
   });
 
+  it('puts the checked-out branch back after a --once cycle, and says so', async () => {
+    const f = await remoteFixture();
+    try {
+      await git(f.source, 'checkout', '-q', '-b', 'feature');
+      const logs: string[] = [];
+      let tested: string | undefined;
+      const config = parseConfig({
+        ...f.config,
+        agents: { ...f.config.agents, memory: { enabled: false }, judge: { enabled: false } },
+      });
+      await runPatrol({
+        root: f.root,
+        config,
+        once: true,
+        onLog: (message) => logs.push(message),
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run() {
+            tested = await readFile(join(f.source, 'app.txt'), 'utf8');
+            return { stop: 'done', steps: 0, costUsd: 0 };
+          },
+        }),
+      });
+      // The cycle tested the pulled commit, then the checkout went back to the branch.
+      expect(tested).toBe('fixed\n');
+      expect((await git(f.source, 'branch', '--show-current')).stdout.trim()).toBe('feature');
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('broken\n');
+      expect(logs[0]).toMatch(/^Pulled origin\/\S+ at \w+, a detached HEAD: the checkout was on branch feature\.$/);
+      expect(logs.at(-1)).toMatch(/^Put the checkout back on branch feature\. The cycle tested \w+\.$/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('pulls in a linked worktree while another worktree holds the branch', async () => {
     const f = await remoteFixture();
     try {

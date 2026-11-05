@@ -100,6 +100,7 @@ npx bugpatrol init
   routines/          # the routines Bugpatrol replays with no model: commit them
   <profile>/         # appmap.json and routines/ of another config, such as cli.yml: commit it
   runs/              # sessions, issues, fixes, and screenshots: init adds it to .gitignore
+    profiles/<profile>/  # the same for another config
 ```
 
 To use the detected values with no questions, add `--yes`. To select the LLM, add `--agent`:

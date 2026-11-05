@@ -11,14 +11,16 @@ A repo can test more than one app config, for example its desktop app with `bugp
 | App map | `.bugpatrol/appmap.json` | `.bugpatrol/cli/appmap.json` |
 | Routines | `.bugpatrol/routines/` | `.bugpatrol/cli/routines/` |
 | Endpoint inventory | `.bugpatrol/endpoints.yml` | `.bugpatrol/cli/endpoints.yml` |
+| Run state: sessions, issues, fixes, lessons, triage, coverage, reviews, worktrees | `.bugpatrol/runs/` | `.bugpatrol/runs/profiles/cli/` |
+| State branch (`agents.patrol.state: branch`) | `bugpatrol-state` | `bugpatrol-state-cli` |
 
-The default config keeps the paths it always had. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folder of that profile: `explore`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, and the dashboard.
+The default config keeps the paths it always had. A profile's run state stays inside the gitignored `.bugpatrol/runs/`. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folders of that profile: `explore`, `judge`, `fix`, `retest`, `publish`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, `issue`, `memory`, `doctor`, `github sync`, `worktrees clean`, and the dashboard. `bugpatrol doctor --config <file>` prints where the profile keeps them. The app source still resolves against the project root.
 
 ### Migrating an existing non-default config
 
 Before profiles existed, a config such as `--config .bugpatrol/api.yml` kept its app map, routines and endpoint inventory in `.bugpatrol/` itself. No file says which config those files belong to, so selecting a config never moves them. When there is no default `bugpatrol.yml` and `.bugpatrol/<profile>/` does not exist yet, a command that uses the config prints a note. If the files are that config's, run `bugpatrol adopt --config .bugpatrol/api.yml` once: it moves `appmap.json`, `endpoints.yml` and the routines in `.bugpatrol/routines/` to `.bugpatrol/api/`, and prints what it moved. Commit that folder. Issues filed before the move name `bugpatrol:routine repro-x` without a profile, so they replay from `.bugpatrol/routines/`.
 
-`.bugpatrol/runs/` stays one folder for all profiles. Sessions, issues and fixes have unique ids, so the dashboard and `bugpatrol issue` see the work of every profile. The memory of lessons is shared too, and so is the review record of a pull request: review a pull request with one profile at a time. The `bugpatrol-state` branch (`agents.patrol.state: branch`) shares the app map and the routines of the default config only.
+Run state is not moved either. Sessions, issues and lessons that a profile recorded in `.bugpatrol/runs/` stay there, where the default config reads them, and the profile starts with empty run state in `.bugpatrol/runs/profiles/<profile>/`.
 
 ## The `.bugpatrol/` folder
 
@@ -31,7 +33,7 @@ Bugpatrol keeps all of its files in one folder at the root of your project:
 | `.bugpatrol/appmap.json` | The screens that the explorer found | Commit it |
 | `.bugpatrol/routines/` | The routines, and the repro routine of each issue. CI and a fresh clone replay them | Commit it |
 | `.bugpatrol/<profile>/` | The app map, routines and endpoint inventory of another config ([Profiles](#profiles)) | Commit it |
-| `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots | `init` adds it to `.gitignore` |
+| `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots. `runs/profiles/<profile>/` holds the same for another config | `init` adds it to `.gitignore` |
 
 The project root is the folder that holds `.bugpatrol/`. All paths in the config (`source`, `cwd`, `instructions`) are relative to the project root. You can run a command from any folder in the project: Bugpatrol finds `.bugpatrol/` in the current folder or in a folder above it.
 

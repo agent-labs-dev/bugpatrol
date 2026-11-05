@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { dirname, relative } from 'node:path';
 import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
 import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, loadConfig, paths } from '@bugpatrol/core';
 import { chromiumProblem } from '@bugpatrol/drivers';
@@ -46,6 +47,16 @@ export async function runChecks(
 ): Promise<DoctorCheck[]> {
   const { config } = loaded;
   const checks: DoctorCheck[] = [configCheck(root, loaded, loaded.path !== paths.config(root))];
+
+  if (config?.profile) {
+    const where = (file: string) => relative(root, file) || '.';
+    checks.push({
+      name: 'profile',
+      ok: true,
+      detail: `${config.profile}: app map and routines in ${where(dirname(paths.appMap(root, config.profile)))}/, run state in ${where(dirname(paths.memory(root, config.profile)))}/`,
+      fatal: false,
+    });
+  }
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   checks.push({

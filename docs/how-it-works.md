@@ -12,7 +12,7 @@
 
 A patrol cycle has these steps:
 
-1. **Pull** fetches `origin/main` and checks out its latest commit in the source repository, so each cycle tests the latest code. The checkout is a detached `HEAD`: your local `main` does not change, and the pull works in a linked worktree. Set `agents.patrol.pull` to use a different branch, or to `false` to keep the checkout as it is. If the checkout has uncommitted changes, the cycle uses the current checkout. If the commit is the same as in the last full cycle, the patrol skips the explore and the judge. It still runs the fixes, the retests, publish, the CI checks, and the GitHub sync, so the open work continues.
+1. **Pull** fetches `origin/main` and checks out its latest commit in the source repository, so each cycle tests the latest code. The checkout is a detached `HEAD`: your local `main` does not change, and the pull works in a linked worktree. When the patrol stops, for example after `--once`, it puts the checkout back on the branch or commit it started from, and the log says so. If git refuses that checkout, the log names the command that goes back. Set `agents.patrol.pull` to use a different branch, or to `false` to keep the checkout as it is. If the checkout has uncommitted changes, the cycle uses the current checkout. If the commit is the same as in the last full cycle, the patrol skips the explore and the judge. It still runs the fixes, the retests, publish, the CI checks, and the GitHub sync, so the open work continues.
 2. **Setup** runs your commands and connects the driver to the app.
 3. The **explorer** enters the app (with the `enter-app` routine when it can), records screens, and reports problems. With each screen, it also gets the console errors and the failed requests of the app.
 4. The **judge** looks at each finding with its screenshot. It files an issue, adds the finding to an issue that is already open, or dismisses it with a reason.
@@ -29,9 +29,9 @@ A patrol cycle has these steps:
 - The patrol explores and judges only when `main` has new commits. On the same commit, it skips these two steps, but it still finishes the open work: fixes, retests, publish, CI checks, and the GitHub sync. So a patrol that runs all day costs little when nobody merges code, and a fix never waits for the next merge.
 - Bugpatrol keeps the last tested commit in `.bugpatrol/runs/`, so a restart also skips a commit that it tested before. To test again with no new commit, for example after a config change, use `npx bugpatrol --force`.
 - You can change the wait with `agents.patrol.intervalMinutes`. To stop after a number of cycles, set `agents.patrol.cycles`. To run one cycle only, use `npx bugpatrol --once`.
-- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start.
+- You can also run `npx bugpatrol --once` from cron, for example every 30 minutes. Each run tests only a new commit. If the last patrol still runs, the new run does not start. To explore and judge from a scheduled GitHub Actions workflow, refer to [GitHub](github.md#explore-and-judge-on-a-schedule).
 - To use a different branch, set `agents.patrol.pull`.
-- Let the patrol run all the time on a dedicated computer or a cloud VM. The patrol changes the checkout of the repo, so do not run it in the checkout where you work.
+- Let the patrol run all the time on a dedicated computer or a cloud VM. While it runs, the checkout of the repo is the pulled commit, so do not run it in the checkout where you work. To test your own branch as it is, set `agents.patrol.pull: false`.
 
 When you turn on GitHub, the patrol opens GitHub issues and PRs automatically, in each cycle, with no approval step. It opens a PR for each fix, and an issue for each major bug with no fix. The PRs are ready for review by default (`agents.github.pullRequests`). You can close any issue or PR: the patrol learns from it, and it does not open it again. [GitHub](github.md) tells more.
 
