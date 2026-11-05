@@ -310,7 +310,13 @@ export async function runAgentCommand(
     // the lesson pass after an explore is also an explorer session, with no
     // candidates. The judge skips the candidates that it already decided.
     const recent = (await workspace.listSessions())
-      .filter((item) => item.role === 'explorer' && item.candidates > 0 && item.status !== 'running')
+      .filter(
+        (item) =>
+          item.role === 'explorer' &&
+          item.profile === workspace.profile &&
+          item.candidates > 0 &&
+          item.status !== 'running',
+      )
       .slice(0, 5)
       .map((item) => item.id);
     const ids = (flags.session as string[] | undefined) ?? recent;

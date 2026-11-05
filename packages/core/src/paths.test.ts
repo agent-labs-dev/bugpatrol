@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -79,6 +79,8 @@ describe('profiles', () => {
 
   it('moves the shared app map, routines and endpoints into a profile once, when it has none', () => {
     const root = project();
+    // A repo that used only `--config .bugpatrol/api.yml` before profiles: no default config owns the files.
+    rmSync(paths.config(root));
     mkdirSync(paths.routines(root), { recursive: true });
     writeFileSync(paths.appMap(root), '{}');
     writeFileSync(paths.endpointInventory(root), 'endpoints: []');

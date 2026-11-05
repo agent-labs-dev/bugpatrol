@@ -766,6 +766,8 @@ export type SessionSummary = {
   version: 1;
   id: string;
   role: AgentRole;
+  /** The config profile the session ran under (see profileOf). Absent for the default config. */
+  profile?: string;
   /** The process that runs the session, so a crash does not look like a session in progress. */
   pid?: number;
   startedAt: string;

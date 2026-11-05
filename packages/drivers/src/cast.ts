@@ -4,7 +4,7 @@ import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
 import * as gifenc from 'gifenc';
 import { PNG } from 'pngjs';
-import { secretSpans, withoutEscapes } from './secret-spans.js';
+import { type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
 import { GIF_MAX_BYTES } from './video.js';
 
 /**
@@ -202,6 +202,11 @@ export class Terminal {
             this.emulator.write(text, resolve);
           }),
       );
+  }
+
+  /** What the terminal sends back to the program, such as its answer to a cursor-position query. */
+  onData(listener: (data: string) => void): void {
+    this.emulator.onData(listener);
   }
 
   /** Waits until all output queued through write has been parsed by xterm. */
@@ -788,20 +793,33 @@ export class CastRecorder {
  * The output events with each secret replaced, across the events it spans:
  * its placeholder goes in the event where it starts. A program may break a
  * secret up with escape codes, so the match is made on the stream without
- * them and mapped back to the raw output. When the redacted stream cannot be
- * lined up with the output, the output is one event, redacted whole.
+ * them and mapped back to the raw output. A secret inside an escape sequence
+ * (a hyperlink target, a window title) is then found in the raw output. When
+ * the redacted stream cannot be lined up with the output, the output is one
+ * event, redacted whole.
  */
 function redactEvents(events: CastEvent[], redact: (value: string) => string): CastEvent[] {
+  const visible = redactSpans(events, redact, (text) => {
+    const { plain, at } = withoutEscapes(text);
+    // A span in `plain` becomes the raw range that holds it, escape codes and all.
+    return secretSpans(plain, redact)?.map((span) => ({
+      start: at[span.start]!,
+      end: at[span.end - 1]! + 1,
+      placeholder: span.placeholder,
+    }));
+  });
+  return redactSpans(visible, redact, (text) => secretSpans(text, redact));
+}
+
+/** The output events with the spans that `find` locates in the joined output replaced. */
+function redactSpans(
+  events: CastEvent[],
+  redact: (value: string) => string,
+  find: (text: string) => SecretSpan[] | undefined,
+): CastEvent[] {
   const output = events.filter(([, , kind]) => kind !== 'r');
   const text = output.map(([, chunk]) => chunk).join('');
-  const { plain, at } = withoutEscapes(text);
-  const visible = secretSpans(plain, redact);
-  // A span in `plain` becomes the raw range that holds it, escape codes and all.
-  const spans = visible?.map((span) => ({
-    start: at[span.start]!,
-    end: at[span.end - 1]! + 1,
-    placeholder: span.placeholder,
-  }));
+  const spans = find(text);
   if (!spans) return [...events.filter(([, , kind]) => kind === 'r'), [output[0]?.[0] ?? 0, redact(text)]];
   const result: CastEvent[] = [];
   let offset = 0;

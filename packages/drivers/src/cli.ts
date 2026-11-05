@@ -463,6 +463,10 @@ export class CliDriver implements Driver {
         if (code !== null) session.exitCode = code;
       }),
     };
+    // The terminal answers the program's queries, as a real one does.
+    session.screen.onData((data) => {
+      if (session.running) helper.child.stdin?.write(data);
+    });
     helper.child.stdout?.setEncoding('utf8');
     helper.child.stdout?.on('data', (chunk: string) => {
       session.screen.write(chunk);

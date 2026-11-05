@@ -90,6 +90,8 @@ export async function pendingCandidates(session: AgentSession, sessionIds: strin
   const triaged = Object.keys((await session.workspace.readTriage()).fingerprints);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
+    // A candidate of another profile belongs to another app: its repro would land in the wrong folder.
+    if ((await session.workspace.readSession(id))?.profile !== session.workspace.profile) continue;
     const decided = new Set([...filed, ...triaged, ...(await decisions(session, id))]);
     for (const candidate of await session.workspace.readCandidates(id))
       if (awaitsJudge(candidate, decided)) pending.push(candidate);
