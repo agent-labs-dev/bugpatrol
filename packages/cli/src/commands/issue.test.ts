@@ -84,4 +84,39 @@ describe('bugpatrol issue', () => {
     expect(await workspace.readIssue('iss_1')).toMatchObject({ status: 'new' });
     expect((await workspace.readIssue('iss_1'))!.closedBy).toBeUndefined();
   });
+
+  it('marks a hand-fixed issue fixed without triaging it, so a later sighting is a regression', async () => {
+    const { workspace } = await seed();
+    const lines: string[] = [];
+    await runIssueCommand(
+      ['fixed', 'iss_1', '--commit', 'abc1234', '--reason', 'Fixed the blank window', '--by', 'dev'],
+      root,
+      (line) => lines.push(line),
+    );
+    expect(await workspace.readIssue('iss_1')).toMatchObject({
+      status: 'fixed',
+      closedBy: { by: 'dev', reason: 'Fixed the blank window', commit: 'abc1234' },
+    });
+    // Unlike a dismissal, the fingerprints stay open: the judge reopens a sighting as a regression.
+    expect((await workspace.readTriage()).fingerprints).toEqual({});
+    expect((await workspace.readMemory()).lessons).toEqual([]);
+    expect(lines[0]).toBe('Marked iss_1 fixed in abc1234: The window is blank');
+  });
+
+  it('refuses to mark an issue fixed with no reason', async () => {
+    await seed();
+    await expect(runIssueCommand(['fixed', 'iss_1'], root, () => {})).rejects.toThrow(/--reason/);
+  });
+
+  it('shows an issue with its body and evidence', async () => {
+    await seed();
+    const lines: string[] = [];
+    await runIssueCommand(['show', 'iss_1'], root, (line) => lines.push(line));
+    const text = lines.join('\n');
+    expect(text).toContain('iss_1  major  new  x1');
+    expect(text).toContain('The window is blank');
+    expect(text).toContain('Judge: It is blank.');
+    expect(text).toContain('Screenshot: shot.png');
+    expect(text).toContain('Candidates: can_1');
+  });
 });

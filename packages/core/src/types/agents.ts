@@ -341,8 +341,13 @@ export type Issue = {
   fixRejected?: { pr: number; url: string; at: string };
   publishSkipped?: { reason: string; at: string };
   fixId?: string;
-  /** Set when a human closed the issue. A human decision overrides the judge. */
-  closedBy?: { by: string; reason: string; at: string };
+  /** Set when a human or Bugpatrol closed the issue. A human decision overrides the judge. */
+  closedBy?: {
+    by: string;
+    reason: string;
+    at: string /** The commit that fixed it, when one is known. */;
+    commit?: string;
+  };
   regression?: { at: string; fromStatus: 'fixed' };
   notSeen?: number;
 };

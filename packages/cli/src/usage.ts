@@ -33,7 +33,9 @@ Agents
   bugpatrol replay <routine-id>
   bugpatrol endpoints [--spec URL|file] [--json]   the endpoints of the api contract
   bugpatrol sweep [--json] [--max-requests N] [--dry-run]   test each api endpoint × case, no model
-  bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
+  bugpatrol issue list | show <id> | reopen <id>
+  bugpatrol issue dismiss <id> --reason "..." [--by name]
+  bugpatrol issue fixed <id> --reason "..." [--commit sha] [--by name]
   bugpatrol memory list [--role r] | add --role r "text" [--scope s]
   bugpatrol memory remove <id> | retire <id> --reason "..."
 
@@ -186,8 +188,14 @@ export const COMMAND_HELP: Record<string, string> = {
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.
 `,
-  issue: `bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
-  List the issues, worst first, or change the state of one issue.
+  issue: `bugpatrol issue list | show <id> | dismiss <id> | fixed <id> | reopen <id>
+  List the issues, worst first, show one, or change the state of one issue.
+  list                                       the issues, worst first
+  show <id>                                  the body, the judge's reason, and the evidence paths
+  dismiss <id> --reason "..." [--by name]    close it as not a bug; its findings do not come back
+  fixed <id> --reason "..." [--commit sha] [--by name]
+                                             close it as fixed, for example by hand; a later sighting reopens it as a regression
+  reopen <id>                                open a closed issue again
 `,
   memory: `bugpatrol memory list [--role r] | add --role r "text" [--scope s] | remove <id> | retire <id> --reason "..."
   Look at and change the lessons that the agents learned.

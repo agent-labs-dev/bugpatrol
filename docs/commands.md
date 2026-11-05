@@ -25,8 +25,10 @@ Run each command in your repo. Bugpatrol finds the `.bugpatrol/` folder in the c
 | Command | What it does |
 | --- | --- |
 | `bugpatrol issue list` | List the issues, worst first |
+| `bugpatrol issue show <id>` | Print an issue: its body, the judge's reason, how it closed, and the paths of its evidence and repro routine |
 | `bugpatrol issue dismiss <id> --reason "..." [--by name]` | Close an issue as not a bug; it does not come back |
-| `bugpatrol issue reopen <id>` | Open a dismissed issue again |
+| `bugpatrol issue fixed <id> --reason "..." [--commit sha] [--by name]` | Close an issue as fixed, for example after a fix by hand. It records who fixed it and the commit, and closes its GitHub issue as completed. Unlike a dismissal, its findings stay open: a later sighting reopens it as a regression |
+| `bugpatrol issue reopen <id>` | Open a dismissed or fixed issue again |
 | `bugpatrol memory list [--role r]` | Show the lessons that the agents learned |
 | `bugpatrol memory add --role r "text" [--scope s]` | Add a lesson yourself |
 | `bugpatrol memory remove <id>` · `retire <id> --reason "..."` | Delete or retire a lesson |
