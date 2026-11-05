@@ -558,7 +558,7 @@ export function showsOnly(step: RoutineStep): boolean {
       return /^((\d+|\$|\/[^/]*\/)(,(\d+|\$|\/[^/]*\/))?)?p$/.test(script);
     }
     if (program === 'find' || program === 'fd')
-      return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint)|^--exec/.test(arg));
+      return !args.some((arg) => /^-(delete|exec|execdir|ok|fprint|fls)|^--exec/.test(arg));
     if (program === 'sort') return !args.some((arg) => /^-\w*o|^--output/.test(arg));
     // `uniq in out` writes out; a lone `uniq` or `uniq in` only prints.
     if (program === 'uniq') return args.filter((arg) => !arg.startsWith('-')).length < 2;
