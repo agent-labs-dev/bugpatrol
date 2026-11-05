@@ -86,7 +86,7 @@ A local agent CLI uses your existing login, so you do not need an API key. Bugpa
 | `claude` | [Claude Code](https://claude.com/claude-code) | |
 | `codex` | [Codex CLI](https://github.com/openai/codex) | |
 | `kimi` | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | |
-| `opencode` | [opencode](https://opencode.ai) | 1.x only (`npm i -g opencode-ai@1`). `doctor` refuses 2.x |
+| `opencode` | [opencode](https://opencode.ai) | 1.x (`npm i -g opencode-ai@1`). Where the installed opencode is 2.x, Bugpatrol runs 1.x through `npx -y --allow-scripts=opencode-ai opencode-ai@1`, and says so in the session log |
 | `pi` | [pi](https://github.com/badlogic/pi-mono) | Needs MCP: `pi install npm:pi-mcp-adapter`. With `pi-permission-modes`, add `--perm yolo` |
 
 ```yaml
