@@ -51,13 +51,17 @@ export function keyBytes(key: string): string {
   throw new Error(`A terminal has no key ${key}. Use ctrl+ and a letter`);
 }
 
+/** The cursor keys, which application cursor mode moves from `ESC [` to `ESC O`. */
+const CURSOR_KEYS = ['\u001b[A', '\u001b[B', '\u001b[C', '\u001b[D', '\u001b[H', '\u001b[F'];
+
 /**
  * keyBytes for a terminal in which the program may have turned on application
- * cursor mode, as a full-screen app does: then the arrows send `ESC O`.
+ * cursor mode, as a full-screen app does: then the arrows, Home and End send
+ * `ESC O`.
  */
 export function sessionKeyBytes(key: string, applicationCursor: boolean): string {
   const bytes = keyBytes(key);
-  const arrow = bytes.slice(-3);
-  if (!applicationCursor || !['\u001b[A', '\u001b[B', '\u001b[C', '\u001b[D'].includes(arrow)) return bytes;
-  return `${bytes.slice(0, -3)}\u001bO${arrow[2]}`;
+  const cursor = bytes.slice(-3);
+  if (!applicationCursor || !CURSOR_KEYS.includes(cursor)) return bytes;
+  return `${bytes.slice(0, -3)}\u001bO${cursor[2]}`;
 }
