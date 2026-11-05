@@ -489,10 +489,7 @@ export function explorerPrompt(input: {
 ${goal}
 
 You have ${input.maxSteps} steps.
-${endpoints}
-KNOWN SCREENS
-${screens}
-
+${endpoints}${input.endpoints ? '' : `\nKNOWN SCREENS\n${screens}\n`}
 KNOWN ROUTINES
 ${routines}
 

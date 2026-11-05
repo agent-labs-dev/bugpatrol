@@ -1166,15 +1166,19 @@ export function explorerTools(
     },
     {
       name: 'report_bug',
-      description:
-        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
-        'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
-        'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
-        'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
-        'this screen. Without them, a fix of the bug cannot be proven by a replay.',
+      description: api
+        ? 'Report a product bug in the last exchange for judge review. Name how a replay can tell that the bug ' +
+          'shows, with no one looking, in one or more of: shows (text in the response only while the bug is there), ' +
+          'lacks (text that the response should have and lacks), error (part of a network error that you saw). ' +
+          'Bugpatrol checks each against the last exchange. Without them, a fix of the bug cannot be proven by a replay.'
+        : "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+          'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+          'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+          'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+          'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
-          screen_id: string,
+          ...(api ? {} : { screen_id: string }),
           title: string,
           what_is_wrong: string,
           expected: string,
@@ -1186,7 +1190,7 @@ export function explorerTools(
             ? { rule: { type: 'string', enum: API_RULES, description: 'The API rule that the bug breaks.' } }
             : {}),
         },
-        ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
+        [...(api ? [] : ['screen_id']), 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
@@ -1213,7 +1217,9 @@ export function explorerTools(
         const requested = arg(input, 'screen_id');
         const known = (await session.workspace.readAppMap())?.screens.some((screen) => screen.id === requested);
         const screenId = known ? requested : currentScreenId(session);
-        const fallback = known ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
+        // An API has no screens, so a missing screen_id is no fallback worth naming.
+        const fallback =
+          known || api ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
         const candidate: Candidate = {
           id: `can_${shortHash(`${session.sessionId}:${title}:${randomUUID()}`)}`,
           sessionId: session.sessionId,

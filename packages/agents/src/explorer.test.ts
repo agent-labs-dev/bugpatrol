@@ -6,7 +6,7 @@ import { buildContract, caseKey, loadSpec, sweepCases } from '@bugpatrol/contrac
 import { type EndpointKey, parseConfig, type RoutineStep } from '@bugpatrol/core';
 import { createDriver } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { explorerSystem } from './prompts.js';
+import { explorerPrompt, explorerSystem } from './prompts.js';
 import { runExplorer, wasBlocked } from './roles/explorer.js';
 import { AgentSession } from './session.js';
 import { runSweep } from './sweep.js';
@@ -144,6 +144,9 @@ describe('the explorer prompt', () => {
     for (const words of ['record_screen', 'Each action tool returns a screenshot', 'FULL COVERAGE'])
       expect(api).not.toContain(words);
     expect(explorerSystem('web', '')).toContain('record_screen');
+    const prompt = { screens: [], routines: [], placeholders: [], maxSteps: 5 };
+    expect(explorerPrompt({ ...prompt, endpoints: [] })).not.toContain('SCREENS');
+    expect(explorerPrompt(prompt)).toContain('KNOWN SCREENS\n(none yet)\n\nKNOWN ROUTINES');
   });
 });
 
@@ -296,6 +299,31 @@ describe('the api explorer', () => {
     expect(cell).toMatchObject({ ok: false, failed: ['contract:status'], repeats: false });
     expect(cell?.exchange).toMatch(/^\.bugpatrol\/.*\.exchange\.json$/);
     expect(cell?.at).not.toBe('2024-01-01T00:00:00Z');
+  });
+
+  it('reports a bug and sums up the session with no screen wording', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    await f.run('request', { method: 'GET', url: '/items/1' });
+    const reported = await f.run('report_bug', {
+      title: 'Item 1 has the wrong name',
+      what_is_wrong: 'The name is Alpha',
+      expected: 'Beta',
+      severity: 'minor',
+    });
+    expect(reported.isError).toBeFalsy();
+    expect(reported.text).not.toMatch(/screen/i);
+    const report = f.tools.find((tool) => tool.name === 'report_bug')!;
+    expect((report.inputSchema as { required: string[] }).required).not.toContain('screen_id');
+    expect(report.description).not.toMatch(/screen/i);
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run() {
+        return { stop: 'max-steps', steps: 3, costUsd: 0 };
+      },
+    };
+    const outcome = await runExplorer(f.session, runtime);
+    expect(outcome.summary).toBe('The explorer used all its steps. 1 candidate(s) raised in 3 steps.');
   });
 
   it('as: other uses the other credential set', async () => {

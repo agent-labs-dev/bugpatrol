@@ -24,9 +24,10 @@ const STOP_REASONS: Record<RoleOutcome['stop'], string> = {
  * Bugpatrol writes itself: the model's last thought at a step limit is a note to
  * itself ("I'll open Settings next"), not a summary of the session.
  */
-function sessionSummary(outcome: RoleOutcome, screens: number, candidates: number): string {
-  // The counts come from the files, not from the model: its own count can be wrong.
-  const counts = `${screens} screen(s) known, ${candidates} candidate(s) raised in ${outcome.steps} steps.`;
+function sessionSummary(outcome: RoleOutcome, screens: number | undefined, candidates: number): string {
+  // The counts come from the files, not from the model: its own count can be wrong. An API has no screens.
+  const known = screens === undefined ? '' : `${screens} screen(s) known, `;
+  const counts = `${known}${candidates} candidate(s) raised in ${outcome.steps} steps.`;
   if (outcome.stop === 'done' && outcome.summary) return `${outcome.summary.trim()}\n${counts}`;
   if (outcome.stop === 'error') {
     const cause = (outcome.error ?? outcome.summary ?? '').trim().replace(/\s+/g, ' ');
@@ -96,7 +97,7 @@ export async function runExplorer(
     const outcome = await runtime.run(task, session.emit);
     const candidates = await session.workspace.readCandidates(session.sessionId);
     const screens = (await session.workspace.readAppMap())?.screens ?? [];
-    outcome.summary = sessionSummary(outcome, screens.length, candidates.length);
+    outcome.summary = sessionSummary(outcome, api ? undefined : screens.length, candidates.length);
     await session.workspace.endSession(session.sessionId, {
       status: outcome.stop === 'error' ? 'failed' : 'finished',
       steps: outcome.steps,
