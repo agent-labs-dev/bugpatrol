@@ -2,11 +2,12 @@
 import { readFileSync } from 'node:fs';
 import { cleanWorktrees, syncGitHub } from '@bugpatrol/agents';
 import {
+  adoptHint,
+  adoptSharedFiles,
   BugpatrolError,
   ExitCode,
   findProjectRoot,
   loadConfig,
-  moveProfileFiles,
   moveRoutines,
   profileOf,
 } from '@bugpatrol/core';
@@ -52,11 +53,9 @@ try {
   }
   const moved = moveRoutines(root);
   if (moved) process.stderr.write(`${moved}\n`);
-  // A repo that used a non-default `--config` before profiles kept its app
-  // map, routines and endpoint inventory in the shared folder. Move them into
-  // that config's folder once, so they are not silently lost.
-  const adopted = selected.configFile ? moveProfileFiles(root, profileOf(root, selected.configFile)) : undefined;
-  if (adopted) process.stderr.write(`${adopted}\n`);
+  // Nothing says which config owns the shared files, so selecting one only points at `adopt`.
+  const hint = selected.configFile && adoptHint(root, profileOf(root, selected.configFile), selected.configFile);
+  if (hint && command !== 'adopt') process.stderr.write(`${hint}\n`);
   switch (command) {
     case '--version':
     case '-v':
@@ -134,6 +133,13 @@ try {
 
     case 'sweep': {
       process.exit(await runSweepCommand(args, root, readConfig(), (line) => process.stdout.write(`${line}\n`)));
+      break;
+    }
+
+    case 'adopt': {
+      const { profile } = readConfig();
+      if (args.length || !profile) throw new Error('Use bugpatrol adopt --config .bugpatrol/<name>.yml');
+      process.stdout.write(`${adoptSharedFiles(root, profile)}\n`);
       break;
     }
 
