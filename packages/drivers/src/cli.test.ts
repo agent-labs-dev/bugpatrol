@@ -408,6 +408,41 @@ describe('CliDriver isolation', () => {
     }),
   );
 
+  it.skipIf(process.platform !== 'linux')(
+    'kills a daemon that a command started in its own session, when the command exits',
+    { timeout: 30_000 },
+    () =>
+      withDriver(async (driver, dir) => {
+        // A daemon leaves the process group the way a tmux server does: fork, setsid, fork.
+        await writeFile(
+          join(dir, 'daemon.py'),
+          `import os, sys, time
+if os.fork():
+    sys.exit(0)
+os.setsid()
+if os.fork():
+    os._exit(0)
+open(sys.argv[1], 'w').write(str(os.getpid()))
+time.sleep(300)
+`,
+        );
+        for (const [index, step] of [
+          { kind: 'run' as const, command: 'python3 daemon.py pid-run; sleep 0.3' },
+          { kind: 'session' as const, op: 'start' as const, command: 'python3 daemon.py pid-session; sleep 300' },
+        ].entries()) {
+          expect(await driver.act(step)).toMatchObject({ ok: true });
+          let pid = 0;
+          for (let tries = 0; tries < 100 && !pid; tries++) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            pid = Number(await readFile(join(dir, index ? 'pid-session' : 'pid-run'), 'utf8').catch(() => '0'));
+          }
+          expect(pid).toBeGreaterThan(0);
+          if (index) await driver.act({ kind: 'session', op: 'stop' });
+          expect(await gone([pid]), `${step.kind}: the daemon outlived its step`).toBe(true);
+        }
+      }),
+  );
+
   it('keeps the app env away from the terminal helper', { timeout: 30_000 }, () =>
     withDriver(
       async (driver) => {

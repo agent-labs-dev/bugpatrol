@@ -209,7 +209,7 @@ app:
 
 A program does not create these folders itself in most cases, so create them first: start it with `mkdir -p "$XDG_CONFIG_HOME" && my-app`, or tell the explorer to in the app guide.
 
-The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you.
+The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you. Each process that a command starts ends with it: when the command exits or times out, when a program that stays open is stopped, and when the session ends. On Linux this covers a daemon that left the process group, as a tmux server does, since it is reparented to Bugpatrol's terminal helper.
 
 ### Connect for an API
 

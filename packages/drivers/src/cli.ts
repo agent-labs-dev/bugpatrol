@@ -79,7 +79,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * the terminal, which a process it left behind can hold open.
  */
 const PTY = `
-import fcntl, json, os, pty, select, signal, struct, sys, termios, time
+import ctypes, fcntl, json, os, pty, select, signal, struct, sys, termios, time
 cols, rows = int(sys.argv[1]), int(sys.argv[2])
 lines = b''
 while b'\\n' not in lines:
@@ -94,6 +94,29 @@ spec = json.loads(first)
 os.set_inheritable(3, False)
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+# Linux: a daemon that leaves the process group, as a tmux server does, is
+# reparented here when its parent exits, so stop() still finds it.
+try:
+    ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+except Exception:
+    pass
+def descendants():
+    parents = {}
+    for entry in os.listdir('/proc') if os.path.isdir('/proc') else []:
+        if entry.isdigit():
+            try:
+                with open('/proc/%s/stat' % entry) as stat:
+                    parents[int(entry)] = int(stat.read().rsplit(')', 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                pass
+    found, todo = set(), [os.getpid()]
+    while todo:
+        parent = todo.pop()
+        for child, ppid in parents.items():
+            if ppid == parent and child not in found:
+                found.add(child)
+                todo.append(child)
+    return found
 wake, woken = os.pipe()
 os.set_blocking(woken, False)
 signal.set_wakeup_fd(woken)
@@ -107,6 +130,18 @@ def stop(*_):
         os.killpg(pid, signal.SIGKILL)
     except OSError:
         pass
+    # The command itself is reaped where its exit status is read.
+    for _ in range(50):
+        left = descendants() - {pid}
+        if not left:
+            break
+        for child in left:
+            try:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, os.WNOHANG)
+            except OSError:
+                pass
+        time.sleep(0.01)
 signal.signal(signal.SIGTERM, stop)
 os.write(3, b'%d\\n' % pid)
 inputs = [fd, 0, 3, wake]
