@@ -20,7 +20,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@xterm/headless": "^6.0.0",
+    "@xterm/headless": "6.0.0",
     "@bugpatrol/contract": "workspace:*",
     "@bugpatrol/core": "workspace:*",
     "@bugpatrol/invariants": "workspace:*",
