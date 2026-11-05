@@ -75,7 +75,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * command there, reads `resize <cols> <rows>` lines from it, and kills the
  * command's process group when it closes or the command exits. The command
  * leads its own session, so a stop, its exit, or the end of Bugpatrol, kills
- * every process it started.
+ * every process it started. Its exit is seen through SIGCHLD, not the end of
+ * the terminal, which a process it left behind can hold open.
  */
 const PTY = `
 import fcntl, json, os, pty, select, signal, struct, sys, termios
@@ -90,6 +91,10 @@ first, lines = lines.split(b'\\n', 1)
 spec = json.loads(first)
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+wake, woken = os.pipe()
+os.set_blocking(woken, False)
+signal.set_wakeup_fd(woken)
+signal.signal(signal.SIGCHLD, lambda *_: None)
 pid, fd = pty.fork()
 if pid == 0:
     size(0, cols, rows)
@@ -101,7 +106,8 @@ def stop(*_):
         pass
 signal.signal(signal.SIGTERM, stop)
 os.write(3, b'%d\\n' % pid)
-inputs = [fd, 0, 3]
+inputs = [fd, 0, 3, wake]
+status = None
 def control(data):
     global lines
     lines += data
@@ -111,11 +117,22 @@ def control(data):
         if len(words) == 3 and words[0] == b'resize':
             size(fd, int(words[1]), int(words[2]))
 control(b'')
-while True:
+def output(timeout=None):
     try:
-        ready = select.select(inputs, [], [])[0]
-    except InterruptedError:
-        continue
+        data = os.read(fd, 65536) if select.select([fd], [], [], timeout)[0] else b''
+    except OSError:
+        data = b''
+    if data:
+        os.write(1, data)
+    return data
+while status is None:
+    ready = select.select(inputs, [], [])[0]
+    if wake in ready:
+        os.read(wake, 4096)
+        done, code = os.waitpid(pid, os.WNOHANG)
+        if done:
+            status = code
+            break
     if 0 in ready:
         data = os.read(0, 4096)
         if data:
@@ -129,16 +146,14 @@ while True:
         else:
             inputs.remove(3)
             stop()
-    if fd in ready:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b''
-        if not data:
-            break
-        os.write(1, data)
-status = os.waitpid(pid, 0)[1]
+    if fd in ready and not output(0):
+        break
+if status is None:
+    status = os.waitpid(pid, 0)[1]
 stop()
+# What the command printed before it exited is still in the terminal.
+while output(0.05):
+    pass
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
 `;
 
