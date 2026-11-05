@@ -22,6 +22,8 @@ npx bugpatrol
 
 `npx bugpatrol` runs the patrol: explore, judge, fix, retest, and publish, again and again. The fixer and GitHub stay off until you turn them on.
 
+If npx fails in your repository (npm rejects a package.json whose `overrides` has a `//` comment key), run `pnpm dlx bugpatrol`, `bunx bugpatrol`, or `npm install -g bugpatrol` and then `bugpatrol`.
+
 ```mermaid
 flowchart TB
   start(["npx bugpatrol"]) --> pull["Pull main and start the app"]

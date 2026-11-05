@@ -17,6 +17,8 @@ Bugpatrol needs two things from you: a command that launches your app on this ma
    npx bugpatrol init
    ```
 
+   Every `npx bugpatrol` command in this guide also runs as `pnpm dlx bugpatrol`, `bunx bugpatrol`, or `bugpatrol` after `npm install -g bugpatrol`. Use one of them if npx fails in your repository, for example when npm rejects a package.json whose `overrides` has a `//` comment key.
+
 2. Check `.bugpatrol/bugpatrol.yml`. It tells Bugpatrol how to start your app.
 
 3. Write `.bugpatrol/instructions.md`. It is a plain-English note for the explorer: what the app is, how to sign in, and what never to do.
