@@ -188,7 +188,8 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
     }
     const ids = failed(first);
     let differs: string | undefined;
-    if (!first.blocked && ids.length) {
+    // An unmet prerequisite still tests the contract of its response, so a failure of it is confirmed and reported.
+    if ((!first.blocked || first.unmet) && ids.length) {
       const confirmed = await confirmFailure(new Map([[key, outcome(first)]]), async () => {
         const again = await runCase(session, item, contract);
         requests += again.sent;
@@ -221,7 +222,7 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
     }))
       write(cell);
     next.splice(next.indexOf(key), 1);
-    if (ids.length && !first.unmet) {
+    if (ids.length) {
       const words = first.results.filter((r) => !r.ok).map((r) => assertionWords(r, true));
       const shared = item.case === 'other-user' && first.status !== undefined && first.status < 300;
       const finding: SweepFinding = {
@@ -308,7 +309,9 @@ async function runCase(session: AgentSession, item: SweepCase, contract: Contrac
     const unmet = !run.results.some((r) => !r.ok) && unmetPrerequisite(step, run.status, run.declared);
     if (unmet) {
       // The status that the case expects was not tested, so only the contract of the response counts.
-      run.results.push(...results.filter((r) => r.assertion.kind !== 'status'));
+      const contractResults = results.filter((r) => r.assertion.kind !== 'status');
+      run.results.push(...contractResults);
+      if (contractResults.some((r) => !r.ok)) run.failing = screen;
       return { ...run, blocked: unmet, unmet: true };
     }
     run.results.push(...results);

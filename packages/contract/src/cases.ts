@@ -453,6 +453,14 @@ function branches(doc: OpenApiDoc, raw: unknown): Json[] {
   return out;
 }
 
+/** Every `type` a schema can take, across all of its `allOf`, `oneOf` and `anyOf` branches. */
+function typesOf(doc: OpenApiDoc, raw: unknown): unknown[] {
+  const schema = deref(doc, raw);
+  if (!isObject(schema)) return [];
+  const nested = ['allOf', 'oneOf', 'anyOf'].flatMap((key) => (Array.isArray(schema[key]) ? schema[key] : []));
+  return [[schema.type].flat(), ...nested.map((branch) => typesOf(doc, branch))].flat();
+}
+
 function successSchema(doc: OpenApiDoc, endpoint: Endpoint): unknown {
   for (const [code, raw] of Object.entries(responses(doc, endpoint))) {
     const response = deref(doc, raw);
@@ -492,7 +500,7 @@ function minimalBody(
     for (const [name, encoded] of Object.entries(path)) {
       if (!(name in fields)) continue;
       const text = decodeURIComponent(encoded);
-      const types = branches(doc, fields[name]).flatMap((schema) => [schema.type].flat());
+      const types = typesOf(doc, fields[name]);
       const isNumber = types.includes('integer') || types.includes('number');
       if (isNumber && /^\{\{[A-Za-z_][A-Za-z_0-9]*(\|missing)?\}\}$/.test(text)) numeric.push(text);
       body[name] = /^\d+$/.test(text) && isNumber ? Number(text) : text;
