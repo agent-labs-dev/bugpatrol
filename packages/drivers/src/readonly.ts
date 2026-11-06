@@ -15,7 +15,10 @@ export type ReadOnlyOptions = {
   dropFrames: RegExp[];
 };
 
-/** A write that read-only mode kept from the backend. `method` is `WEBSOCKET` for a refused socket and `FRAME` for a dropped frame. */
+/**
+ * A write that read-only mode kept from the backend. `method` is `WEBSOCKET` for a refused socket, `FRAME` for a
+ * dropped frame and `WORKER` for a refused worker.
+ */
 export type BlockedWrite = { at: string; method: string; url: string };
 
 /** The URL with each query value hidden, since a query can carry a token. */
@@ -57,7 +60,9 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
  * Holds back the writes of a browser: every request but a read is aborted,
  * and WebSockets are refused or have their matching client frames dropped.
  * Routes apply to pages and requests made after this call; a service worker's
- * own requests bypass them, so a web context blocks service workers.
+ * own requests bypass them, so a web context blocks service workers. WebSocket
+ * routes do not reach a dedicated or shared worker, so while a WebSocket rule
+ * applies, pages cannot start one.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
   await context.route('**/*', async (route) => {
@@ -67,6 +72,8 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
     await route.abort('blockedbyclient');
   });
   if (options.websockets === 'pass' && !options.dropFrames.length) return;
+  await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) => options.log.record('WORKER', url));
+  await context.addInitScript(refuseWorkers);
   await context.routeWebSocket(/.*/, async (socket) => {
     if (options.websockets === 'block') {
       options.log.record('WEBSOCKET', socket.url());
@@ -79,6 +86,21 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
       else server.send(message);
     });
   });
+}
+
+/** Runs in each frame before its scripts: replaces the worker constructors with ones that log and throw. */
+function refuseWorkers() {
+  const scope = globalThis as unknown as Record<string, unknown> & { __bugpatrolBlockedWorker?: (url: string) => void };
+  for (const name of ['Worker', 'SharedWorker']) {
+    if (typeof scope[name] !== 'function') continue;
+    const refused = class {
+      constructor(url: string | URL) {
+        scope.__bugpatrolBlockedWorker?.(new URL(String(url), location.href).href);
+        throw new DOMException('Bugpatrol read-only mode blocks workers', 'SecurityError');
+      }
+    };
+    Object.defineProperty(scope, name, { value: refused, writable: false, configurable: false });
+  }
 }
 
 const HOP_BY_HOP = new Set([

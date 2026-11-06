@@ -8,7 +8,7 @@ import type { Duplex } from 'node:stream';
 import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ElectronDriver } from './electron.js';
-import { type ReadOnlyProxy, redactQuery, startReadOnlyProxy, WriteLog } from './readonly.js';
+import { guardBrowser, type ReadOnlyProxy, redactQuery, startReadOnlyProxy, WriteLog } from './readonly.js';
 import type { Driver } from './types.js';
 import { WebDriver } from './web.js';
 
@@ -208,6 +208,32 @@ describe('read-only mode in a browser', () => {
     expect(blocked.filter((line) => line.startsWith('POST'))).toHaveLength(3);
     expect(api.seen.filter((line) => /^(POST|PUT|PATCH|DELETE|UPGRADE) /.test(line))).toEqual([]);
     expect(blocked).toContainEqual(expect.stringMatching(/^WEBSOCKET /));
+  });
+});
+
+describe('read-only mode in a browser worker', () => {
+  it('keeps a worker from opening a WebSocket past the rules', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = readOnly();
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(`${api.url}/`);
+    const outcome = await page.evaluate((url) => {
+      const source = `new WebSocket(${JSON.stringify(url.replace('http', 'ws'))} + '/sync')`;
+      try {
+        new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
+        return 'started';
+      } catch {
+        return 'refused';
+      }
+    }, api.url);
+    await new Promise((done) => setTimeout(done, 500));
+    expect(outcome).toBe('refused');
+    expect(api.seen.filter((line) => line.startsWith('UPGRADE'))).toEqual([]);
+    expect(options.log.drain()).toEqual([expect.stringMatching(/^WORKER blob:/)]);
   });
 });
 
