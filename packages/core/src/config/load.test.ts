@@ -58,16 +58,16 @@ describe('parseConfig', () => {
     expect(() => cli({ proxy: { API: 'https://api.test' }, mode: 'strict' })).toThrow(ConfigError);
   });
 
-  it('asks a launched Electron app in read-only mode for a proxy, since it can write before Bugpatrol attaches', () => {
+  it('asks an Electron app in read-only mode for a proxy, since it can write past the CDP rules', () => {
     const electron = (connect: unknown, readOnly: unknown) =>
       parseConfig({ version: 1, app: { platform: 'electron', connect, readOnly } });
     const launch = { launch: { command: 'electron', args: ['--api={{API}}'] } };
     expect(() => electron(launch, true)).toThrow(/before Bugpatrol attaches.*app.readOnly.proxy/s);
+    // An app that is already running keeps its service workers, whose WebSockets the CDP rules do not reach.
+    expect(() => electron({ cdp: 'http://127.0.0.1:9222' }, true)).toThrow(/service workers.*app.readOnly.proxy/s);
     expect(electron(launch, { proxy: { API: 'https://api.test' } }).app.readOnly?.proxy).toEqual({
       API: 'https://api.test',
     });
-    // An app that is already running was started by its operator, not by Bugpatrol.
-    expect(electron({ cdp: 'http://127.0.0.1:9222' }, true).app.readOnly).toBeDefined();
   });
 
   it('rejects an unknown version rather than guessing', () => {
