@@ -25,9 +25,14 @@ export type BlockedWrite = { at: string; method: string; url: string };
 export function redactQuery(url: string): string {
   if (!URL.canParse(url)) return url.replace(/\?.*$/s, '?[redacted]');
   const parsed = new URL(url);
-  if (!parsed.search) return `${parsed.origin}${parsed.pathname}`;
   const names = [...new Set(parsed.searchParams.keys())];
-  return `${parsed.origin}${parsed.pathname}?${names.map((name) => `${name}=[redacted]`).join('&')}`;
+  // Built from the href, not origin + pathname: for a `blob:` URL the pathname already holds the inner origin.
+  parsed.username = '';
+  parsed.password = '';
+  parsed.search = '';
+  parsed.hash = '';
+  if (!names.length) return parsed.href;
+  return `${parsed.href}?${names.map((name) => `${name}=[redacted]`).join('&')}`;
 }
 
 /** Every write that read-only mode blocked in a run. */
