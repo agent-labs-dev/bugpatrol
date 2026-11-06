@@ -10,10 +10,12 @@ import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { locatorFor, stepFor } from './dom.js';
+import type { WriteLog } from './readonly.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 
 const exec = promisify(execFile);
-export type MaestroOptions = { appId: string; device?: string; command?: string };
+/** `writes` is the log of the app's read-only proxies. */
+export type MaestroOptions = { appId: string; device?: string; command?: string; writes?: WriteLog };
 type TextPart = { type: 'text'; text: string };
 type ImagePart = { type: 'image'; data: string; mimeType: string };
 type Part = TextPart | ImagePart;
@@ -388,6 +390,10 @@ export class MaestroDriver implements Driver {
     this.platform = platform;
   }
 
+  get writes() {
+    return this.options.writes;
+  }
+
   async connect(): Promise<void> {
     this.transport = new StdioClientTransport({
       command: this.options.command ?? 'maestro',
@@ -489,6 +495,7 @@ export class MaestroDriver implements Driver {
         },
       ],
       consoleErrors: [],
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;

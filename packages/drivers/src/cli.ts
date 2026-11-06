@@ -406,7 +406,7 @@ export class CliDriver implements Driver {
     await this.showView('shell');
     const command = this.redact(action.command);
     this.show(prompt(command), false);
-    this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows) };
+    this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows, true) };
     const step = { kind: 'run' as const, command: action.command, ...(action.input ? { input: action.input } : {}) };
     const helper = this.spawnHelper(action.command, false);
     this.running = helper;

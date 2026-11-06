@@ -86,6 +86,7 @@ export function createDriver(
       windowTitle: connect.cua.windowTitle ? vars(connect.cua.windowTitle) : undefined,
       viewport: config.viewports[0]!,
       redact,
+      ...(readOnly ? { writes: readOnly.log } : {}),
     });
   }
   if (platform === 'api') {
@@ -145,6 +146,7 @@ export function createDriver(
   return new MaestroDriver(platform, {
     appId: vars(connect.appId),
     device: connect.device ? vars(connect.device) : undefined,
+    ...(readOnly ? { writes: readOnly.log } : {}),
   });
 }
 

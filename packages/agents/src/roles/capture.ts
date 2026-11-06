@@ -25,9 +25,7 @@ export type CaptureTarget = { capture: RetestCapture; steps: RoutineStep[]; repo
 
 /** What a model sees of a target as it was reported. */
 export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
-  return target.reported?.kind === 'http'
-    ? evidenceParts(root, target.reported)
-    : captureParts(root, target.capture.before);
+  return target.reported ? evidenceParts(root, target.reported) : captureParts(root, target.capture.before);
 }
 
 export function targetLines(targets: CaptureTarget[]): string {

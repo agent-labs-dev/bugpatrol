@@ -153,6 +153,9 @@ function loadUnifont(): Promise<UnifontGlyphs> {
   return unifontLoading;
 }
 
+/** Characters parsed at once by a terminal that keeps all its lines: fewer than its scrollback holds. */
+const ARCHIVE_SLICE = 4096;
+
 /**
  * A headless xterm terminal. xterm owns VT parsing and its buffer is the
  * source of truth for scrollback, alternate screen state, widths, and SGR.
@@ -161,8 +164,15 @@ export class Terminal {
   private readonly emulator: InstanceType<typeof XtermTerminal>;
   private pending = Promise.resolve();
   private cursorVisible = true;
+  /** With `complete`: the lines that scrolled off, moved out of xterm's bounded scrollback. */
+  private readonly archived: string[] = [];
 
-  constructor(cols: number, rows: number) {
+  /** `complete` keeps every line that scrolls off, for the whole output of a command. */
+  constructor(
+    cols: number,
+    rows: number,
+    private readonly complete = false,
+  ) {
     this.emulator = new XtermTerminal({
       cols,
       rows,
@@ -203,12 +213,31 @@ export class Terminal {
       .then(async () => {
         await font;
       })
-      .then(
-        () =>
-          new Promise<void>((resolve) => {
-            this.emulator.write(text, resolve);
-          }),
-      );
+      .then(() => (this.complete ? this.writeKeeping(text) : this.parse(text)));
+  }
+
+  private parse(text: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.emulator.write(text, resolve);
+    });
+  }
+
+  /**
+   * Parses `text` in slices too short to fill the scrollback, and after each
+   * moves the lines that scrolled off into `archived`. The cursor cannot reach
+   * them, so they are final.
+   */
+  private async writeKeeping(text: string): Promise<void> {
+    for (let at = 0; at < text.length; at += ARCHIVE_SLICE) {
+      await this.parse(text.slice(at, at + ARCHIVE_SLICE));
+      const buffer = this.emulator.buffer.active;
+      const above = buffer.length - this.rows;
+      if (buffer.type !== 'normal' || above <= 0) continue;
+      for (let index = 0; index < above; index++)
+        this.archived.push(buffer.getLine(index)?.translateToString(true) ?? '');
+      // Erases the scrollback only.
+      await this.parse('\u001b[3J');
+    }
   }
 
   /** The program turned on application cursor mode, so the arrows send `ESC O`. Flush first. */
@@ -234,9 +263,11 @@ export class Terminal {
   text(): string {
     const buffer =
       this.emulator.buffer.active.type === 'alternate' ? this.emulator.buffer.active : this.emulator.buffer.normal;
-    return trimLines(
-      Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? ''),
+    const lines = Array.from(
+      { length: buffer.length },
+      (_, index) => buffer.getLine(index)?.translateToString(true) ?? '',
     );
+    return trimLines(buffer.type === 'normal' ? [...this.archived, ...lines] : lines);
   }
 
   /**
