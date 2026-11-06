@@ -18,6 +18,13 @@ describe('Vars', () => {
     expect(() => vars.capture({ RESPONSE_AUTH: 'replacement' })).toThrow('cannot overwrite');
   });
 
+  it('keeps a configured secret redacted when a public capture reuses its name', () => {
+    const vars = new Vars(['TOKEN'], { TOKEN: 'configured-secret' });
+    vars.setPublic('TOKEN', 'plain-id');
+    vars.set('TOKEN', 'later-secret');
+    expect(vars.redact('configured-secret plain-id later-secret')).toBe('{{TOKEN}} plain-id {{TOKEN}}');
+  });
+
   it('lists names but never values for an unknown strict placeholder', () => {
     const vars = new Vars();
     vars.set('TOKEN', 'top-secret');
