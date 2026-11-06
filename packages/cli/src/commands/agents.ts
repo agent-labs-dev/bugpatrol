@@ -321,11 +321,12 @@ export async function runAgentCommand(
       .slice(0, 5);
     // A session that tested another commit may hold findings that this one fixed: --session judges it anyway.
     const revision = await sessionRevision(root, config);
-    const stale = recent.filter((item) => item.revision && revision && item.revision !== revision);
+    const stale = staleSessions(recent, revision);
+    const short = (value: string | undefined) => value?.slice(0, 7) ?? 'unknown';
     if (stale.length && !flags.session)
       log(
-        `Skipped ${stale.length} session(s) recorded at another commit than ${revision!.slice(0, 7)}: ` +
-          `${stale.map((item) => `${item.id} (${item.revision!.slice(0, 7)})`).join(', ')}. ` +
+        `Skipped ${stale.length} session(s) recorded at another commit than ${revision ? short(revision) : 'this unknown one'}: ` +
+          `${stale.map((item) => `${item.id} (${short(item.revision)})`).join(', ')}. ` +
           'Judge one with `bugpatrol judge --session <id>`.',
       );
     const ids =
@@ -477,4 +478,12 @@ export async function runAgentCommand(
       process.off('SIGTERM', onSignal);
     }
   }
+}
+
+/**
+ * The sessions that `judge` leaves out by default: any not recorded at `revision`. Two unknown revisions are not
+ * one revision (a dirty or untracked source has none), so only a known, equal revision is judged.
+ */
+export function staleSessions<T extends { revision?: string | undefined }>(sessions: T[], revision?: string): T[] {
+  return sessions.filter((item) => !revision || item.revision !== revision);
 }
