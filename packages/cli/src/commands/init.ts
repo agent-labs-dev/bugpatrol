@@ -18,7 +18,7 @@ import {
   paths,
   type StackProfile,
 } from '@bugpatrol/core';
-import { detectBringUp, detectStack } from '@bugpatrol/recon';
+import { type BringUpCandidate, detectBringUp, detectPackageManager, detectStack } from '@bugpatrol/recon';
 
 export type { Platform } from '@bugpatrol/core';
 export const PLATFORMS: Platform[] = ['web', 'electron', 'ios', 'android', 'api', 'desktop', 'cli'];
@@ -90,11 +90,16 @@ export type AppGuess = {
   cdpPort?: number;
   /** The regex for the start command's output when the app is ready. */
   ready?: string;
+  /** API: the OpenAPI spec. */
+  spec?: string;
   /** Where each guess came from, for the summary. */
   notes: string[];
+  /** What the user must check before the config can work, for the summary. */
+  warnings: string[];
 };
 
 type PackageJson = {
+  bin?: string | Record<string, string>;
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
@@ -199,6 +204,92 @@ function detectPort(root: string, pkg: PackageJson, framework?: string): { port:
   };
 }
 
+/** The frameworks of a web app. go and rust say nothing about a web app. */
+const WEB_FRAMEWORKS = new Set(['next', 'vite', 'angular', 'django', 'rails']);
+/** Libraries that a command line tool or a terminal UI is built on. */
+const CLI_LIBRARIES = [
+  'ink',
+  '@opentui/core',
+  '@opentui/react',
+  '@opentui/solid',
+  'blessed',
+  'commander',
+  'yargs',
+  'cac',
+  'citty',
+  'clipanion',
+];
+
+/**
+ * A start or dev script runs the app and stays open: it is never a build step
+ * that runs to its end, and on a CLI or TUI it runs on the machine's real data.
+ */
+function isAppCommand(command: string): boolean {
+  return (
+    /^(?:npm|pnpm|yarn|bun)\s(?:.*\s)?(?:start|dev|serve|preview|watch)(?:\s|$)/.test(command) ||
+    /\bcompose\s+up\b/.test(command)
+  );
+}
+
+/** A CLI app, from package.json (a bin, or a CLI library), Cargo.toml, or pyproject.toml scripts. */
+function detectCli(root: string, pkg: PackageJson, deps: Record<string, string>): AppGuess | undefined {
+  const notes: string[] = [];
+  const warnings: string[] = [];
+  const library = CLI_LIBRARIES.find((name) => deps[name]);
+  if (pkg.bin || library) {
+    notes.push(`Platform cli: detected from package.json (${pkg.bin ? 'bin' : library}).`);
+    const build = pkg.scripts?.build ? `${detectPackageManager(root)} run build` : undefined;
+    if (build) notes.push('Build command: the build script in package.json.');
+    const runs = (['start', 'dev'] as const).find((script) => pkg.scripts?.[script]);
+    if (runs)
+      notes.push(
+        `The ${runs} script runs the app, so it is not a build step. To start the app in each session, set app.connect.cli.command to run it on test data, and say how in .bugpatrol/instructions.md.`,
+      );
+    return { platform: 'cli', start: build, notes, warnings };
+  }
+  if (existsSync(join(root, 'Cargo.toml')) && existsSync(join(root, 'src', 'main.rs'))) {
+    notes.push('Platform cli: detected from Cargo.toml and src/main.rs.');
+    return { platform: 'cli', start: 'cargo build', notes, warnings };
+  }
+  if (/^\[project\.scripts\]/m.test(readText(join(root, 'pyproject.toml')))) {
+    notes.push('Platform cli: detected from the [project.scripts] of pyproject.toml.');
+    return { platform: 'cli', notes, warnings };
+  }
+  return undefined;
+}
+
+/** The file that names FastAPI as a dependency: its app serves an OpenAPI spec at /openapi.json. */
+function fastApiSource(root: string): string | undefined {
+  return ['pyproject.toml', 'requirements.txt', 'requirements-dev.txt'].find((file) =>
+    /\bfastapi\b/i.test(readText(join(root, file))),
+  );
+}
+
+/** The first host port that a compose file publishes, skipping 443: Bugpatrol connects over http. */
+function composePort(text: string): number | undefined {
+  const published = [
+    ...text.matchAll(/["'\s[,-](?:\d{1,3}(?:\.\d{1,3}){3}:)?(\d{2,5}):\d{2,5}(?:\/(?:tcp|udp))?(?=["'\s,\]]|$)/gm),
+  ].map((match) => Number(match[1]));
+  return published.find((port) => port !== 443);
+}
+
+/** The web app guess for a compose stack: the published port, and a warning about what compose starts. */
+function composeGuess(root: string, best: BringUpCandidate, notes: string[]): AppGuess {
+  const text = readText(join(root, best.source));
+  const port = composePort(text);
+  notes.push(port ? `Port ${port}: from a published port in ${best.source}.` : 'Port 3000: from the usual default.');
+  const secrets = /^\s*env_file:/m.test(text) ? ', and its env_file loads real secrets' : '';
+  return {
+    platform: 'web',
+    start: best.command,
+    url: `http://localhost:${port ?? 3000}`,
+    notes,
+    warnings: [
+      `\`docker compose up\` starts every service in ${best.source}, which may be the production stack${secrets}. Prefer the app's own dev command in app.setup.`,
+    ],
+  };
+}
+
 /** The platform that this machine can run a mobile app on. */
 function mobilePlatform(root: string): 'ios' | 'android' {
   const hasIos = xcodeProjects(root).length > 0 || existsSync(join(root, 'app.json')) || existsSync(join(root, 'ios'));
@@ -217,7 +308,13 @@ export function detectApp(root: string): AppGuess {
 
   if (deps.electron) {
     notes.push('Platform electron: detected from package.json.');
-    return { platform: 'electron', start: 'npx electron . --remote-debugging-port=9222', cdpPort: 9222, notes };
+    return {
+      platform: 'electron',
+      start: 'npx electron . --remote-debugging-port=9222',
+      cdpPort: 9222,
+      notes,
+      warnings: [],
+    };
   }
 
   const reactNative = deps.expo || deps['react-native'];
@@ -234,16 +331,39 @@ export function detectApp(root: string): AppGuess {
     // A native app has no dev server: the user installs it on the device.
     const start = deps.expo ? 'npx expo start' : deps['react-native'] ? 'npx react-native start' : undefined;
     if (!start) notes.push('Install the app on the simulator or the emulator before you run Bugpatrol.');
-    return { platform, start, appId: id?.appId, notes };
+    return { platform, start, appId: id?.appId, notes, warnings: [] };
   }
 
   const stack = detectStack(root);
+  const web = stack.framework && WEB_FRAMEWORKS.has(stack.framework);
+  const cli = web ? undefined : detectCli(root, pkg, deps);
+  if (cli) return cli;
+
   const best = detectBringUp(root)[0];
+  const api = fastApiSource(root);
+  if (api && (!best || best.command === 'docker compose up')) {
+    // Bugpatrol tests a backend that runs, so an api config has no start command.
+    notes.push(`Platform api: FastAPI detected from ${api}. Start the API before you run Bugpatrol.`);
+    return { platform: 'api', url: API_URL, spec: '/openapi.json', notes, warnings: [] };
+  }
   if (best) notes.push(`Start command: detected from ${best.source}.`);
-  const { port, source } = detectPort(root, pkg, stack.framework);
-  notes.push(`Port ${port}: from ${source}.`);
-  const ready = stack.framework ? FRAMEWORK_READY[stack.framework] : undefined;
-  return { platform: 'web', start: best?.command, url: `http://localhost:${port}`, ready, notes };
+  if (api)
+    notes.push(`FastAPI detected from ${api}: \`bugpatrol init --platform api --spec /openapi.json\` tests its API.`);
+  if (best?.command === 'docker compose up') return composeGuess(root, best, notes);
+
+  const dir = best?.cwd ? join(root, best.cwd) : root;
+  const appPkg = best?.cwd ? (readJson<PackageJson>(join(dir, 'package.json')) ?? {}) : pkg;
+  const framework = best?.cwd ? detectStack(dir).framework : stack.framework;
+  const { port, source } = detectPort(dir, appPkg, framework);
+  notes.push(`Port ${port}: from ${best?.cwd && !source.startsWith('the ') ? `${best.cwd}/${source}` : source}.`);
+  const ready = framework ? FRAMEWORK_READY[framework] : undefined;
+  const warnings =
+    best || web
+      ? []
+      : [
+          `No app found: Bugpatrol found no web, Electron, mobile, API or CLI app here, so it guessed a web app at http://localhost:${port} that nothing starts. Check app.connect, or run init again with --platform ${PLATFORMS.join('|')}.`,
+        ];
+  return { platform: 'web', start: best?.command, url: `http://localhost:${port}`, ready, notes, warnings };
 }
 
 export type InitAnswers = {
@@ -327,9 +447,11 @@ export function renderConfig(answers: InitAnswers): string {
     '# Paths are relative to the project root: the folder that holds .bugpatrol/.',
     '  source: .                          # the repo that the fixer edits',
   ];
-  if (answers.start && platform === 'cli') {
+  // On a CLI, a start or dev command is the app itself: the driver starts it on connect.
+  const cliCommand = platform === 'cli' && answers.start && isAppCommand(answers.start) ? answers.start : undefined;
+  if (answers.start && platform === 'cli' && !cliCommand) {
     lines.push('  setup:', `    - run: ${quoteYaml(answers.start)}   # builds the app before each session`);
-  } else if (answers.start) {
+  } else if (answers.start && !cliCommand) {
     lines.push(
       '  setup:',
       `    - run: ${quoteYaml(answers.start)}`,
@@ -337,6 +459,8 @@ export function renderConfig(answers: InitAnswers): string {
       `      readyWhen: ${quoteYaml(answers.ready ?? READY[platform])}   # start when the output matches`,
       `      timeoutMs: ${platform === 'web' ? 120000 : 180000}`,
     );
+  } else if (platform === 'cli') {
+    lines.push('  setup: []                          # empty: no build step before each session');
   } else {
     lines.push('  setup: []                          # empty: start the app yourself before you run Bugpatrol');
   }
@@ -352,7 +476,13 @@ export function renderConfig(answers: InitAnswers): string {
       '        allowTakeover: false',
     );
   if (platform === 'cli')
-    lines.push('    cli:', '      timeoutMs: 60000                # a command that runs longer is stopped');
+    lines.push(
+      '    cli:',
+      ...(cliCommand
+        ? [`      command: ${quoteYaml(cliCommand)}   # the app, started on connect: point it at test data`]
+        : []),
+      '      timeoutMs: 60000                # a command that runs longer is stopped',
+    );
   if (platform === 'electron')
     lines.push(`    cdp: http://127.0.0.1:${answers.cdpPort ?? 9222}   # the app must open this CDP port`);
   if (platform === 'ios' || platform === 'android') {
@@ -465,6 +595,11 @@ export function writeInitialConfig(root: string, answers: InitAnswers): InitResu
   }
   if (ignoreData(root)) result.written.push('.gitignore');
 
+  if (answers.platform === 'cli' && answers.start && isAppCommand(answers.start)) {
+    result.warnings.push(
+      `\`${answers.start}\` runs the app, so init wrote it as app.connect.cli.command, not as a build step. It runs on this machine's real data: point it at test data with app.connect.cli.env or its flags, and say how in .bugpatrol/instructions.md.`,
+    );
+  }
   for (const provider of new Set(Object.values(answers.providers))) {
     if (provider in KEY_PROVIDERS && !process.env[KEY_PROVIDERS[provider as KeyProvider].env]) {
       const route = KEY_PROVIDERS[provider as KeyProvider];
@@ -574,12 +709,13 @@ export function defaultAnswers(guess: AppGuess, detected: Detected, flags: InitF
       ].join('\n'),
     );
   }
-  // detectApp never guesses api, so an api app gets no detected start command: Bugpatrol tests a backend that runs (5).
+  // An api guess has no start command: Bugpatrol tests a backend that runs (5).
+  const same = platform === guess.platform;
   return {
     platform,
-    start: flags.start ?? (platform === guess.platform ? guess.start : undefined),
-    url: flags.url ?? (platform === 'api' ? API_URL : guess.url),
-    spec: flags.spec,
+    start: flags.start ?? (same ? guess.start : undefined),
+    url: flags.url ?? (platform === 'api' ? (same && guess.url) || API_URL : guess.url),
+    spec: flags.spec ?? (same ? guess.spec : undefined),
     appId: flags.appId ?? guess.appId,
     cdpPort: guess.cdpPort,
     ready: platform === guess.platform ? guess.ready : undefined,
@@ -626,9 +762,10 @@ export async function interview(
   detected: Detected,
   answers: InitAnswers,
 ): Promise<InitAnswers> {
-  if (guess.notes.length) {
+  if (guess.notes.length || guess.warnings.length) {
     process.stdout.write('\nBugpatrol looked at the repo:\n');
     for (const note of guess.notes) process.stdout.write(`  ${note}\n`);
+    for (const warning of guess.warnings) process.stdout.write(`  warning: ${warning}\n`);
   }
   const platform = await choose(
     ask,
@@ -646,6 +783,12 @@ export async function interview(
       ask,
       'OpenAPI spec: a URL, a path on the API URL, or a file (clear it if there is none)',
       next.spec,
+    );
+  } else if (platform === 'cli') {
+    next.start = await text(
+      ask,
+      'Build command, which runs to its end before each session (clear it if none)',
+      next.start,
     );
   } else {
     next.start = await text(ask, 'Start command (clear it if you start the app yourself)', next.start);
@@ -749,20 +892,35 @@ export async function runInit(root: string, args: string[], log: (line: string) 
     for (const note of answers.platform === guess.platform ? guess.notes : []) {
       if (!given.some(([value, prefix]) => value !== undefined && note.startsWith(prefix))) log(`  ${note}`);
     }
+    // The warnings are about the guessed start command and URL: a flag that replaced them makes them moot.
+    if (answers.platform === guess.platform && answers.start === guess.start && !flags.url)
+      for (const warning of guess.warnings) log(`  warning: ${warning}`);
   }
   for (const warning of result.warnings) log(`  warning: ${warning}`);
   log('\nNext steps:');
-  log(
-    '  1. Check .bugpatrol/bugpatrol.yml, and write .bugpatrol/instructions.md: what the app is, how to sign in, and what never to do.',
-  );
-  if (answers.platform === 'api') {
-    log('  2. Start the API, then see the requests that the sweep plans: `npx bugpatrol sweep --dry-run`');
-  } else {
-    log(
-      '  2. Test the launch and the sign-in: `npx bugpatrol explore --steps 10 --goal "Sign in, then open the main screen"`',
-    );
-  }
-  log('  3. Start the patrol: `npx bugpatrol`. Watch it on `npx bugpatrol dashboard` (http://127.0.0.1:4311).');
+  for (const line of nextSteps(answers.platform)) log(`  ${line}`);
+}
+
+/** What to do after init, in the words of the platform: a CLI has no sign-in and no screen. */
+export function nextSteps(platform: Platform): string[] {
+  const patrol = '3. Start the patrol: `npx bugpatrol`. Watch it on `npx bugpatrol dashboard` (http://127.0.0.1:4311).';
+  if (platform === 'api')
+    return [
+      '1. Check .bugpatrol/bugpatrol.yml, and write .bugpatrol/instructions.md: what the API is, how to authenticate, and what never to do.',
+      '2. Start the API, then see the requests that the sweep plans: `npx bugpatrol sweep --dry-run`',
+      patrol,
+    ];
+  if (platform === 'cli')
+    return [
+      '1. Check .bugpatrol/bugpatrol.yml, and write .bugpatrol/instructions.md: what the tool does, how to run it on test data instead of your real data, and what never to do.',
+      '2. Test a first session: `npx bugpatrol explore --steps 10 --goal "Run --help, then the main command"`',
+      patrol,
+    ];
+  return [
+    '1. Check .bugpatrol/bugpatrol.yml, and write .bugpatrol/instructions.md: what the app is, how to sign in, and what never to do.',
+    '2. Test the launch and the sign-in: `npx bugpatrol explore --steps 10 --goal "Sign in, then open the main screen"`',
+    patrol,
+  ];
 }
 
 /** Interactive mode may start with no provider: the user picks one from the list. */

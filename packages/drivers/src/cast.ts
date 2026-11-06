@@ -5,7 +5,7 @@ import regular from 'bdf-fonts/fonts/Terminus/16.js';
 import bold from 'bdf-fonts/fonts/Terminus/16-b.js';
 import * as gifenc from 'gifenc';
 import { PNG } from 'pngjs';
-import { type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
+import { controlRanges, type SecretSpan, secretSpans, withoutEscapes } from './secret-spans.js';
 import { GIF_MAX_BYTES } from './video.js';
 
 /**
@@ -153,6 +153,9 @@ function loadUnifont(): Promise<UnifontGlyphs> {
   return unifontLoading;
 }
 
+/** Characters parsed at once by a terminal that keeps all its lines: fewer than its scrollback holds. */
+const ARCHIVE_SLICE = 4096;
+
 /**
  * A headless xterm terminal. xterm owns VT parsing and its buffer is the
  * source of truth for scrollback, alternate screen state, widths, and SGR.
@@ -161,8 +164,15 @@ export class Terminal {
   private readonly emulator: InstanceType<typeof XtermTerminal>;
   private pending = Promise.resolve();
   private cursorVisible = true;
+  /** With `complete`: the lines that scrolled off, moved out of xterm's bounded scrollback. */
+  private readonly archived: string[] = [];
 
-  constructor(cols: number, rows: number) {
+  /** `complete` keeps every line that scrolls off, for the whole output of a command. */
+  constructor(
+    cols: number,
+    rows: number,
+    private readonly complete = false,
+  ) {
     this.emulator = new XtermTerminal({
       cols,
       rows,
@@ -203,12 +213,31 @@ export class Terminal {
       .then(async () => {
         await font;
       })
-      .then(
-        () =>
-          new Promise<void>((resolve) => {
-            this.emulator.write(text, resolve);
-          }),
-      );
+      .then(() => (this.complete ? this.writeKeeping(text) : this.parse(text)));
+  }
+
+  private parse(text: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.emulator.write(text, resolve);
+    });
+  }
+
+  /**
+   * Parses `text` in slices too short to fill the scrollback, and after each
+   * moves the lines that scrolled off into `archived`. The cursor cannot reach
+   * them, so they are final.
+   */
+  private async writeKeeping(text: string): Promise<void> {
+    for (let at = 0; at < text.length; at += ARCHIVE_SLICE) {
+      await this.parse(text.slice(at, at + ARCHIVE_SLICE));
+      const buffer = this.emulator.buffer.active;
+      const above = buffer.length - this.rows;
+      if (buffer.type !== 'normal' || above <= 0) continue;
+      for (let index = 0; index < above; index++)
+        this.archived.push(buffer.getLine(index)?.translateToString(true) ?? '');
+      // Erases the scrollback only.
+      await this.parse('\u001b[3J');
+    }
   }
 
   /** The program turned on application cursor mode, so the arrows send `ESC O`. Flush first. */
@@ -234,9 +263,11 @@ export class Terminal {
   text(): string {
     const buffer =
       this.emulator.buffer.active.type === 'alternate' ? this.emulator.buffer.active : this.emulator.buffer.normal;
-    return trimLines(
-      Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? ''),
+    const lines = Array.from(
+      { length: buffer.length },
+      (_, index) => buffer.getLine(index)?.translateToString(true) ?? '',
     );
+    return trimLines(buffer.type === 'normal' ? [...this.archived, ...lines] : lines);
   }
 
   /**
@@ -408,6 +439,64 @@ export class Terminal {
       cells.push(rowCells);
     }
     return cells;
+  }
+
+  /**
+   * The visible screen as text that names each cell's colours: for each row
+   * that shows anything, the runs of cells with one style, as 1-based
+   * columns, the colours as drawn (inverse and dim applied), and the text.
+   * A blank cell joins the run before it when its background matches, and
+   * blank cells on the terminal's own background end a row. A reader can
+   * then tell two close shades apart, which a screenshot does not let it do
+   * reliably. With `redact`, a secret anywhere on the screen hides the text
+   * of every run; the colours stay. Flush first.
+   */
+  styleRuns(redact?: (value: string) => string): string {
+    const grid = this.cells();
+    const shown = grid.map((row) => row.map((cell) => cell.char).join('')).join('');
+    const hideText = redact !== undefined && redact(shown) !== shown;
+    const hex = (rgb: TerminalRgb) => `#${rgb.map((part) => part.toString(16).padStart(2, '0')).join('')}`;
+    const lines: string[] = [];
+    grid.forEach((row, index) => {
+      let end = row.length;
+      while (end > 0) {
+        const cell = row[end - 1]!;
+        const blank = cell.width === 0 || cell.char === ' ';
+        if (!blank || hex(effectiveColors(cell).bg) !== hex(BACKGROUND)) break;
+        end--;
+      }
+      type Run = { from: number; to: number; bg: string; style?: string; text: string };
+      const runs: Run[] = [];
+      for (let col = 0; col < end; col++) {
+        const cell = row[col]!;
+        if (cell.width === 0) continue;
+        const { fg, bg } = effectiveColors(cell);
+        const blank = cell.char === ' ';
+        const style = blank
+          ? undefined
+          : [
+              `fg ${hex(fg)}`,
+              `bg ${hex(bg)}`,
+              ...(cell.bold ? ['bold'] : []),
+              ...(cell.italic ? ['italic'] : []),
+              ...(cell.underline ? ['underline'] : []),
+            ].join(' ');
+        const last = runs.at(-1);
+        const to = col + Math.max(1, cell.width) - 1;
+        if (last && last.bg === hex(bg) && (blank || last.style === style)) {
+          last.to = to;
+          last.text += cell.char;
+        } else runs.push({ from: col, to, bg: hex(bg), style, text: cell.char });
+      }
+      if (!runs.length) return;
+      const described = runs.map((run) => {
+        const columns = run.from === run.to ? `${run.from + 1}` : `${run.from + 1}-${run.to + 1}`;
+        const text = run.text.trimEnd();
+        return `${columns} ${run.style ?? `bg ${run.bg}`}${text && !hideText ? ` ${JSON.stringify(text)}` : ''}`;
+      });
+      lines.push(`row ${index + 1}: ${described.join(' | ')}`);
+    });
+    return lines.join('\n');
   }
 
   /** The cursor position used by the PNG renderer. */
@@ -953,8 +1042,9 @@ export class CastRecorder {
  * The output events with each secret replaced, across the events it spans:
  * its placeholder goes in the event where it starts. A program may break a
  * secret up with escape codes, so the match is made on the stream without
- * them and mapped back to the raw output. A secret inside an escape sequence
- * (a hyperlink target, a window title) is then found in the raw output. When
+ * them and mapped back to the raw output. A secret inside an OSC payload
+ * (a hyperlink target, a window title) is then found in the raw output, and
+ * the parameters of a CSI or other control sequence are never altered. When
  * the redacted stream cannot be lined up with the output, the output is one
  * event, redacted whole.
  */
@@ -973,7 +1063,13 @@ async function redactEvents(
     }));
   });
   return hideScreenSecrets(
-    redactSpans(visible, redact, (text) => secretSpans(text, redact)),
+    redactSpans(visible, redact, (text) => {
+      // A control sequence stays whole: a short secret such as `18` in `ESC[2;18m` is a parameter, not text.
+      const controls = controlRanges(text);
+      return secretSpans(text, redact)?.filter((span) =>
+        controls.every(([start, end]) => span.end <= start || span.start >= end),
+      );
+    }),
     size,
     redact,
   );

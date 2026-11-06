@@ -10,10 +10,12 @@ import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { locatorFor, stepFor } from './dom.js';
+import type { WriteLog } from './readonly.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 
 const exec = promisify(execFile);
-export type MaestroOptions = { appId: string; device?: string; command?: string };
+/** `writes` is the log of the app's read-only proxies. */
+export type MaestroOptions = { appId: string; device?: string; command?: string; writes?: WriteLog };
 type TextPart = { type: 'text'; text: string };
 type ImagePart = { type: 'image'; data: string; mimeType: string };
 type Part = TextPart | ImagePart;
@@ -92,16 +94,27 @@ function inside(box: UiElement['box'], root: UiElement['box']): boolean {
   );
 }
 
-function nativeRole(
-  leaf: boolean,
-  hint: string,
-  val: string,
-  name: string,
-  a11y: string,
-  rid: string,
-  txt: string,
-): string {
-  if (leaf && (hint || val || /email|password|search|name/i.test(name))) {
+type NativeFields = {
+  leaf: boolean;
+  clickable: boolean;
+  cls: string;
+  hint: string;
+  val: string;
+  name: string;
+  a11y: string;
+  rid: string;
+  txt: string;
+};
+
+function nativeRole({ leaf, clickable, cls, hint, val, name, a11y, rid, txt }: NativeFields): string {
+  if (/EditText|TextField/.test(cls) || (leaf && (hint || val))) {
+    return 'textbox';
+  }
+  // Compose and View report a tappable node as clickable: an icon button, a row, a tab.
+  if (clickable) {
+    return 'button';
+  }
+  if (leaf && /email|password|search|name/i.test(name)) {
     return 'textbox';
   }
   if (leaf && (a11y || rid)) {
@@ -140,6 +153,21 @@ function rootBounds(roots: Node[], read: (node: Node, name: string) => unknown):
   return undefined;
 }
 
+/** The text and descriptions inside a node, in order, as one label. */
+function textWithin(nodes: Node[], read: (node: Node, name: string) => unknown): string {
+  const parts: string[] = [];
+  const visit = (node: Node) => {
+    const label = String(
+      read(node, 'accessibilityText') || read(node, 'content-desc') || read(node, 'text') || '',
+    ).trim();
+    if (label) parts.push(label);
+    const children = read(node, 'children');
+    if (Array.isArray(children)) for (const child of children as Node[]) visit(child);
+  };
+  for (const node of nodes) visit(node);
+  return parts.join(' ').slice(0, 120);
+}
+
 /** Keep only visible native nodes so refs match the current screen geometry. */
 export function flattenHierarchy(schema: Schema): {
   elements: UiElement[];
@@ -158,20 +186,27 @@ export function flattenHierarchy(schema: Schema): {
   const elements: UiElement[] = [];
   const visit = (node: Node, parent?: UiElement) => {
     const box = bounds(read(node, 'bounds'));
-    const a11y = String(read(node, 'accessibilityText') ?? '').trim();
+    // iOS reports accessibilityText; Android reports content-desc, the only name of an icon-only button.
+    const a11y = String(read(node, 'accessibilityText') || read(node, 'content-desc') || '').trim();
     const txt = String(read(node, 'text') ?? '').trim();
     const hint = String(read(node, 'hintText') ?? '').trim();
     const val = String(read(node, 'value') ?? '').trim();
     const rid = String(read(node, 'resource-id') ?? '').trim();
-    const name = a11y || txt || hint || val || rid;
+    const clickable = read(node, 'clickable') === true;
     const children = read(node, 'children');
     const descendants = Array.isArray(children) ? (children as Node[]) : [];
+    // A clickable row or tab with no label of its own is named by the text inside it.
+    const name = a11y || txt || hint || val || rid || (clickable ? textWithin(descendants, read) : '');
     let current = parent;
     if (box && inside(box, root) && name) {
-      const duplicate = parent && parent.name === name && JSON.stringify(parent.box) === JSON.stringify(box);
+      const duplicate =
+        parent &&
+        parent.name === name &&
+        (JSON.stringify(parent.box) === JSON.stringify(box) || (parent.interactive && !clickable));
       if (!duplicate && elements.length < 150) {
         const leaf = descendants.length === 0;
-        const role = nativeRole(leaf, hint, val, name, a11y, rid, txt);
+        const cls = String(read(node, 'class') ?? '');
+        const role = nativeRole({ leaf, clickable, cls, hint, val, name, a11y, rid, txt });
         current = {
           ref: `e${elements.length + 1}`,
           role,
@@ -355,6 +390,10 @@ export class MaestroDriver implements Driver {
     this.platform = platform;
   }
 
+  get writes() {
+    return this.options.writes;
+  }
+
   async connect(): Promise<void> {
     this.transport = new StdioClientTransport({
       command: this.options.command ?? 'maestro',
@@ -456,6 +495,7 @@ export class MaestroDriver implements Driver {
         },
       ],
       consoleErrors: [],
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;

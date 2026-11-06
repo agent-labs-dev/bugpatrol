@@ -3,11 +3,13 @@ import { closeOnGitHub, dismissedFingerprints, Workspace } from '@bugpatrol/agen
 import { type BugpatrolConfig, ConfigError, fitLesson, type Issue } from '@bugpatrol/core';
 
 /**
- * `bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>`
+ * `bugpatrol issue list | show <id> | dismiss <id> --reason "..." [--by name]
+ *  | fixed <id> --reason "..." [--commit sha] [--by name] | reopen <id>`
  *
  * The judge is a model, and a model is sometimes wrong. A human override is
  * the last word: a dismissed issue closes, and its fingerprints go into
  * triage.json, so the same finding does not come back on the next patrol.
+ * A fixed issue closes without triage, so a later sighting reopens it as a regression.
  */
 export async function runIssueCommand(
   args: string[],
@@ -62,13 +64,63 @@ export async function runIssueCommand(
     return;
   }
 
+  if (action === 'show') {
+    for (const line of showIssue(issue)) log(line);
+    return;
+  }
+
+  if (action === 'fixed') {
+    const reason = flagValue(rest, '--reason');
+    if (!reason) throw new ConfigError('bugpatrol issue fixed needs --reason "what fixed it"');
+    const commit = flagValue(rest, '--commit');
+    const by = flagValue(rest, '--by') ?? author();
+    const fixed: Issue = {
+      ...issue,
+      status: 'fixed',
+      notSeen: 0,
+      closedBy: { by, reason, at: new Date().toISOString(), ...(commit && { commit }) },
+    };
+    await workspace.saveIssue(fixed);
+    if (config) await closeOnGitHub(root, config, fixed, undefined, log);
+    log(`Marked ${issue.id} fixed${commit ? ` in ${commit}` : ''}: ${issue.title}`);
+    return;
+  }
+
   if (action === 'reopen') {
     await workspace.saveIssue({ ...issue, status: 'new', closedBy: undefined, publishSkipped: undefined });
     log(`Reopened ${issue.id}. Its fingerprints stay in triage.json until the judge files it again.`);
     return;
   }
 
-  throw new ConfigError(`Unknown issue action: ${action}. Use list, dismiss or reopen.`);
+  throw new ConfigError(`Unknown issue action: ${action}. Use list, show, dismiss, fixed or reopen.`);
+}
+
+/** The issue as text: its status, body, the judge's reason, and where its evidence is. */
+function showIssue(issue: Issue): string[] {
+  const { evidence, closedBy } = issue;
+  const capture =
+    evidence.capture.kind === 'image'
+      ? [`Screenshot: ${evidence.capture.screenshot}`]
+      : [`Exchange: ${evidence.capture.exchange.request.method} ${evidence.capture.exchange.request.path}`];
+  return [
+    `${issue.id}  ${issue.severity}  ${issue.status}  x${issue.occurrences}${issue.github ? `  #${issue.github.number}` : ''}`,
+    issue.title,
+    '',
+    issue.body,
+    '',
+    `Judge: ${issue.judgement.reason}`,
+    ...(closedBy
+      ? [`Closed by ${closedBy.by}${closedBy.commit ? ` in ${closedBy.commit}` : ''}: ${closedBy.reason}`]
+      : []),
+    ...(issue.regression ? [`Regression since ${issue.regression.at}`] : []),
+    ...(issue.screenId ? [`Screen: ${issue.screenId}`] : []),
+    ...capture,
+    ...(evidence.reproRoutineId
+      ? [`Repro routine: ${evidence.reproProfile ? `${evidence.reproProfile}/` : ''}${evidence.reproRoutineId}`]
+      : []),
+    `Candidates: ${issue.candidateIds.join(', ')}`,
+    `First seen ${issue.firstSeenAt}, last seen ${issue.lastSeenAt}`,
+  ];
 }
 
 function flagValue(args: string[], flag: string): string | undefined {

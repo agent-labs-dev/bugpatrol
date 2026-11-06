@@ -17,6 +17,7 @@ import {
   fingerprint,
   type HttpExchange,
   type HttpMethod,
+  type RoutineStep,
   shortHash,
 } from '@bugpatrol/core';
 import { ApiDriver, type Observation } from '@bugpatrol/drivers';
@@ -110,6 +111,8 @@ type CaseRun = {
   sent: number;
   rateLimited?: true;
   blocked?: string;
+  /** The response came, and it shows that a prerequisite of the case is missing, so it proves nothing. */
+  unmet?: true;
   results: AssertionResult[];
   status?: number;
   /** The status of the checked request is declared for its endpoint. */
@@ -185,7 +188,8 @@ export async function runSweep(session: AgentSession, cases: SweepCase[], budget
     }
     const ids = failed(first);
     let differs: string | undefined;
-    if (!first.blocked && ids.length) {
+    // An unmet prerequisite still tests the contract of its response, so a failure of it is confirmed and reported.
+    if ((!first.blocked || first.unmet) && ids.length) {
       const confirmed = await confirmFailure(new Map([[key, outcome(first)]]), async () => {
         const again = await runCase(session, item, contract);
         requests += again.sent;
@@ -282,7 +286,16 @@ async function runCase(session: AgentSession, item: SweepCase, contract: Contrac
     const result = await driver.act(toAction(step, session));
     if (result.error === 'rate-limited') return { ...run, rateLimited: true };
     run.sent += 1;
-    if (!result.ok) return { ...run, blocked: `step ${index + 1} did not run: ${result.error ?? 'no response'}` };
+    if (!result.ok) {
+      // A setup request that answered without the id, for example an empty list.
+      const capture = step.kind === 'request' && /^(?:Error: )?(Response capture.*)$/.exec(result.error ?? '')?.[1];
+      return {
+        ...run,
+        blocked: capture
+          ? `no known id: ${step.method} ${step.url} gave none. ${capture}`
+          : `step ${index + 1} did not run: ${result.error ?? 'no response'}`,
+      };
+    }
     session.vars.capture(result.captures);
     if (!step.assert?.length) continue;
     const screen = await driver.observe();
@@ -291,13 +304,40 @@ async function runCase(session: AgentSession, item: SweepCase, contract: Contrac
     // T8: Bugpatrol does not test an event stream, so a stream proves nothing.
     if (response?.stream) return { ...run, blocked: 'the response is an event stream, which the sweep does not test' };
     const results = checkAssertions(step.assert, screen, { raw: driver.lastRaw(), contract });
-    run.results.push(...results);
     run.status = response?.status;
     run.declared = results.some((r) => r.assertion.kind === 'contract' && r.assertion.check === 'status' && r.ok);
+    const unmet = !run.results.some((r) => !r.ok) && unmetPrerequisite(step, run.status, run.declared);
+    if (unmet) {
+      // The status that the case expects was not tested, so only the contract of the response counts.
+      const contractResults = results.filter((r) => r.assertion.kind !== 'status');
+      run.results.push(...contractResults);
+      if (contractResults.some((r) => !r.ok)) run.failing = screen;
+      return { ...run, blocked: unmet, unmet: true };
+    }
+    run.results.push(...results);
     if (!run.failing && results.some((r) => !r.ok)) run.failing = screen;
     if (screen.capture.kind === 'http' && response && response.status >= 400) run.error = screen.capture.exchange;
   }
   return run;
+}
+
+/**
+ * Why a response says nothing about its case, or undefined. A 401 to
+ * configured credentials means that the endpoint needs another scheme, for
+ * example a session cookie, so a check that comes after authentication, such
+ * as a missing id, never ran. A declared 503 means that the API lacks a
+ * dependency, which its contract allows. A case that expects the status is
+ * tested by it, so it is not blocked.
+ */
+function unmetPrerequisite(step: RoutineStep, status: number | undefined, declared: boolean): string | undefined {
+  if (status === undefined || step.kind !== 'request') return undefined;
+  const expected = step.assert?.find((item) => item.kind === 'status');
+  if (expected && [expected.value].flat().includes(status)) return undefined;
+  if (status === 401 && step.as !== 'none')
+    return `credentials not accepted for this endpoint: the user ${step.as ?? 'self'} got 401`;
+  if (status === 503 && declared)
+    return 'the endpoint answered 503, which its contract declares: a dependency that it needs is not available';
+  return undefined;
 }
 
 const failed = (run: CaseRun) => [
@@ -324,7 +364,7 @@ const findingFingerprint = (finding: SweepFinding) =>
  * case that the explorer gave its last request. A request without one, for
  * example a step of a replayed routine, takes the case from its credentials.
  * A report that no contract check confirms is a bug that only the judge sees,
- * `judge:<rule>`.
+ * `judge:<rule>`, keyed on the shape of its request too.
  */
 export function reportFingerprint(session: AgentSession, named?: SweepCaseId, rule?: string): string | undefined {
   const { driver, lastObservation: screen } = session;
@@ -342,7 +382,19 @@ export function reportFingerprint(session: AgentSession, named?: SweepCaseId, ru
     endpoint: endpoint?.key ?? (`${request.method} ${request.path.split('?')[0]}` as EndpointKey),
     case: named ?? (as === 'none' ? 'no-auth' : as === 'other' ? 'other-user' : 'ok'),
     assertionId: failed ? assertionId(failed.assertion) : `judge:${rule ?? 'explorer'}`,
+    ...(failed ? {} : { shape: requestShape(request) }),
   });
+}
+
+/** The query parameter names and top-level JSON body keys of a request, sorted, without values. */
+function requestShape(request: HttpExchange['request']): string {
+  const query = [...new URLSearchParams(request.path.split('?')[1] ?? '').keys()];
+  let body: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(request.body ?? '');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = Object.keys(parsed);
+  } catch {}
+  return [...[...new Set(query)].sort().map((name) => `?${name}`), ...body.sort().map((key) => `.${key}`)].join(',');
 }
 
 /**

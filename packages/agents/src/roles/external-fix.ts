@@ -32,9 +32,15 @@ async function resolveRef(repo: string, ref: string): Promise<string> {
 }
 
 /** A detached checkout of `commit` that Bugpatrol owns, so `worktrees clean` may remove it later. */
-async function checkout(root: string, repo: string, issueId: string, commit: string): Promise<string> {
-  const worktree = join(paths.worktrees(root), `${issueId}-external`);
-  await mkdir(paths.worktrees(root), { recursive: true });
+async function checkout(
+  root: string,
+  profile: string | undefined,
+  repo: string,
+  issueId: string,
+  commit: string,
+): Promise<string> {
+  const worktree = join(paths.worktrees(root, profile), `${issueId}-external`);
+  await mkdir(paths.worktrees(root, profile), { recursive: true });
   try {
     await git(repo, 'worktree', 'remove', '--force', worktree);
   } catch {
@@ -89,7 +95,7 @@ export async function attachExternalFix(
     case 'branch': {
       commit = await resolveRef(repo, target.ref);
       branch = target.ref;
-      worktree = await checkout(root, repo, issueId, commit);
+      worktree = await checkout(root, config.profile, repo, issueId, commit);
       source = { kind: 'branch', ref: target.ref };
       break;
     }
@@ -124,7 +130,7 @@ export async function attachExternalFix(
       await git(repo, 'fetch', '-q', 'origin', `+refs/pull/${view.number}/head:refs/bugpatrol/pr-${view.number}`);
       commit = view.headRefOid;
       branch = view.headRefName;
-      worktree = await checkout(root, repo, issueId, commit);
+      worktree = await checkout(root, config.profile, repo, issueId, commit);
       summary ??= view.title;
       pr = {
         number: view.number,

@@ -17,8 +17,10 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   - Use request for each HTTP call. Each result is the HTTP exchange as text (the request, the status, the
     allowed headers, the body, the latency) and the expected contract of the endpoint from the spec.
   - Give each request its case.
-  - With a second user, send as: other on an id of the first user. The second user must get 404, not 403 and
-    not the data.
+  - With a second user, send as: other on an id of the first user. The second user must not get the data. A
+    denial (401, 403, 404) leaks only when it differs between an existing id and a missing one: send the same
+    request on a missing id and compare before you report it. Never claim a status that the spec, the app
+    guide, or the source does not establish.
   - When a flow works, call save_routine with assert checks that the contract or the app guide promises.
   - Call report_bug right after the request that shows the bug, so the issue gets that exchange. Use
     'unrecorded' for screen_id, and give the rule that the bug breaks.
@@ -37,7 +39,9 @@ const PLATFORM_NOTES: Record<Platform, string> = {
   - A program that stays open, such as a full screen terminal UI: start_session, then press keys, for
     example ["j", "j", "enter"], and read the screen after each press. Use wait_for when the program is
     slow to draw, resize to try a narrow terminal such as 60 by 20, and stop_session when you are done.
-    start_session again starts the program fresh.
+    start_session again starts the program fresh. Bugpatrol stops every process that a command or a
+    session started when the command exits, the session stops, or the explorer ends, so your summary
+    need not say that you stopped anything.
   - Learn the keys from the app guide and from what the program shows: a help screen (often ?), a key bar,
     or a status line. Try each key that it shows, and escape to close what you opened.
   - Each view, dialog or picker of a terminal UI is a screen: record_screen it. save_routine works the
@@ -170,7 +174,10 @@ more than one request, and the data of a second user.
 WHAT TO REPORT
 - A status that the spec, or connect.errors, does not declare for the endpoint.
 - A response field that the spec does not declare, also when it is harmless.
-- A response that tells the second user about data of the first user, for example 403 where 404 hides it.
+- A response that tells the second user about data of the first user: the data itself, or a denial that
+  differs between an existing id and a missing one, for example 403 for an id that exists and 404 for one that
+  does not. A denial that is the same for any id, such as a 403 for a workspace that the user is not in, tells
+  nothing.
 - A body that contradicts its own status.
 - A second DELETE of the same id that gives another status than the first, unless the spec declares 404.
 Do not report latency, or an HTTP rule that the spec does not require.
@@ -317,6 +324,10 @@ FOR EACH FINDING
    - not-a-bug: the app works as designed, the difference is what the pull request intends, or the explorer made
      a mistake.
    - unclear: the base flow did not reach the same screen, and the diff does not show the cause.
+   Decide first whether the finding is a problem at all. A finding that expects a status or a behavior that the
+   spec, the app guide, or the source does not establish is not-a-bug, on both builds. For example, a 403 that
+   shows no data and is the same for an existing id and a missing one is not a leak, even when the finding asks
+   for 404.
 
 WHEN THE FLOW FAILED ON THE BASE BUILD
 Read the diff. If the pull request adds the screen or the control, the flow cannot exist on the base build. Then
@@ -489,10 +500,7 @@ export function explorerPrompt(input: {
 ${goal}
 
 You have ${input.maxSteps} steps.
-${endpoints}
-KNOWN SCREENS
-${screens}
-
+${endpoints}${input.endpoints ? '' : `\nKNOWN SCREENS\n${screens}\n`}
 KNOWN ROUTINES
 ${routines}
 
@@ -504,11 +512,26 @@ ${input.placeholders.length ? input.placeholders.map((name) => `{{${name}}}`).jo
  * The judge rules of an api app: the rules of the calibration (map section
  * 3), word for word, then how the judge's tools carry them out.
  */
+const TERMINAL_JUDGE_RULES = `TERMINAL RULES
+A terminal candidate has a screenshot and the terminal's text. The screenshot of a command shows only its
+last screenful. The text has everything the command printed, and the colours of each cell of the screenshot.
+- Read the text before you decide. A failure that is in the text and not in the screenshot is still
+  evidence: never dismiss a candidate because the screenshot does not show it.
+- Before you accept a layout, colour, or alignment claim, compare the cells: the background of the cells in
+  question against the surface around them, and the row against the other rows of the same kind. Two shades
+  that look alike in the screenshot can be different surfaces, such as a dialog and its selected row.
+- A list can hold rows of different kinds, such as screens and rooms, each with its own marker or label. A
+  row that differs from rows of another kind is not inconsistent.
+- When neither the screenshot nor the text settles the claim, do not dismiss it and do not file it as a fact:
+  file it as minor, and start its reason with "Unverified:", saying what evidence would settle it.
+
+`;
+
 const API_JUDGE_RULES = `API RULES
 Judge each HTTP exchange by these rules:
 - A status that the spec does not declare is a bug. With \`connect.errors\`, the listed error statuses are declared.
 - A response field that the spec does not declare is a bug, even when it is harmless. Schema checks use \`additionalProperties: false\`.
-- A response that tells a caller about data of another user is a bug, for example 403 where 404 hides the data.
+- A response that tells a caller about data of another user is a bug: the data itself, or a denial that differs between an existing id and a missing one, for example 403 for an id that exists and 404 for one that does not.
 - A body that contradicts its own status is a bug (LLM judge, does not block).
 - A repeated DELETE must give the same status, unless the spec declares 404 (3c).
 - Latency is not a bug. It shows as information only.
@@ -517,6 +540,10 @@ Judge each HTTP exchange by these rules:
 
 How to apply them:
 - Expected behavior comes from the spec, the app guide, and these rules. It never comes from the code.
+- A candidate that asks for another status needs the spec or the app guide to declare that status. Its
+  detail names the statuses that the spec declares. A denial that shows no data and is the same for any id,
+  such as a 403 before the app looks the id up, is not a leak: dismiss a candidate that only asks for 404
+  there.
 - Unclear: file the issue as minor, and start its reason with "Unclear:", so that a person decides. Do not
   dismiss it.
 - Latency: do not file or dismiss a candidate for its latency. Write the latency in the issue body as information.
@@ -533,8 +560,8 @@ things that might be wrong. Some came from automatic checks, some from the explo
 which ones are real problems for a user, and you write the issues that the team will read.
 
 FOR EACH CANDIDATE
-1. Call view_candidate and look at the evidence: the screenshot, or the HTTP exchange of an API. Do not decide
-   from the summary alone.
+1. Call view_candidate and look at the evidence: the screenshot (with a terminal's text), or the HTTP
+   exchange of an API. Do not decide from the summary alone.
 2. Decide:
    - A real problem that a user would notice: call file_issue. Put candidates with the same cause in one
      issue.
@@ -568,7 +595,7 @@ HOW TO WRITE AN ISSUE
 Be strict. A report that nobody can act on costs the team time. When you have decided every candidate,
 call finish with one sentence per decision.
 
-${platform === 'api' ? API_JUDGE_RULES : ''}${memoryPart('judge')}${lessonPart(lessons)}`;
+${platform === 'api' ? API_JUDGE_RULES : platform === 'cli' ? TERMINAL_JUDGE_RULES : ''}${memoryPart('judge')}${lessonPart(lessons)}`;
 }
 
 export function judgePrompt(sessionIds: string[], candidates: Candidate[], issues: Issue[]): string {

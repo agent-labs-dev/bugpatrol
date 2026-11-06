@@ -42,6 +42,10 @@ describe('CliDriver', () => {
       expect(observation.terminal).toMatchObject({ exitCode: 3 });
       expect(observation.terminal!.output).toBe(`a terminal in ${dir.split('/').at(-1)}\n[redacted]\ndone`);
       expect(observation.capture.kind === 'image' && observation.capture.png.subarray(1, 4).toString()).toBe('PNG');
+      // The colours of each cell of the screenshot, as text: the green prompt, then the redacted output.
+      expect(observation.terminal!.cells).toMatch(/^row 1: 1-2 fg #0dbc79 bg #1e1e1e bold "\$" \| /);
+      expect(observation.terminal!.cells).toContain('"[redacted]"');
+      expect(observation.terminal!.cells).not.toContain(SECRET);
 
       const file = await driver.stopRecording(join(dir, 'head'));
       expect(file).toBe(join(dir, 'head.cast'));
@@ -68,6 +72,17 @@ describe('CliDriver', () => {
       expect(terminal!.output).toContain('hi ada');
       expect(terminal!.command).toBe('read name; echo "hi $name" # [redacted]');
     }),
+  );
+
+  it('keeps the colours of a command whole when a short secret matches their parameters', { timeout: 30_000 }, () =>
+    withDriver(
+      async (driver) => {
+        await driver.act({ kind: 'run', command: `printf '\\033[2;18mdim\\033[0m 18 rows\\n'` });
+        expect((await driver.observe()).terminal!.output).toBe('dim {{ROWS}} rows');
+      },
+      10_000,
+      { redact: (value) => value.replaceAll('18', '{{ROWS}}') },
+    ),
   );
 
   it('stops a command that runs past the time limit', { timeout: 30_000 }, () =>
@@ -406,6 +421,41 @@ describe('CliDriver isolation', () => {
         expect(await driver.act({ kind: 'run', command }), command).toMatchObject({ ok: true });
       }
     }),
+  );
+
+  it.skipIf(process.platform !== 'linux')(
+    'kills a daemon that a command started in its own session, when the command exits',
+    { timeout: 30_000 },
+    () =>
+      withDriver(async (driver, dir) => {
+        // A daemon leaves the process group the way a tmux server does: fork, setsid, fork.
+        await writeFile(
+          join(dir, 'daemon.py'),
+          `import os, sys, time
+if os.fork():
+    sys.exit(0)
+os.setsid()
+if os.fork():
+    os._exit(0)
+open(sys.argv[1], 'w').write(str(os.getpid()))
+time.sleep(300)
+`,
+        );
+        for (const [index, step] of [
+          { kind: 'run' as const, command: 'python3 daemon.py pid-run; sleep 0.3' },
+          { kind: 'session' as const, op: 'start' as const, command: 'python3 daemon.py pid-session; sleep 300' },
+        ].entries()) {
+          expect(await driver.act(step)).toMatchObject({ ok: true });
+          let pid = 0;
+          for (let tries = 0; tries < 100 && !pid; tries++) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            pid = Number(await readFile(join(dir, index ? 'pid-session' : 'pid-run'), 'utf8').catch(() => '0'));
+          }
+          expect(pid).toBeGreaterThan(0);
+          if (index) await driver.act({ kind: 'session', op: 'stop' });
+          expect(await gone([pid]), `${step.kind}: the daemon outlived its step`).toBe(true);
+        }
+      }),
   );
 
   it('keeps the app env away from the terminal helper', { timeout: 30_000 }, () =>

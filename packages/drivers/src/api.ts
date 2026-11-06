@@ -40,12 +40,18 @@ const CREDENTIAL =
 /** A JSON Web Token, whatever the key that holds it is named. */
 const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
-function responseCaptures(body: string, pointers: Record<string, string>): Record<string, string> {
-  const parsed: unknown = JSON.parse(body);
+function responseCaptures(status: number, body: string, pointers: Record<string, string>): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`Response capture: the ${status} response is not JSON`);
+  }
   return Object.fromEntries(
     Object.entries(pointers).map(([name, pointer]) => {
       const found = resolvePointer(parsed, pointer);
-      if (!found) throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve`);
+      if (!found)
+        throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve in the ${status} response`);
       const { value } = found;
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
@@ -137,8 +143,10 @@ function redactJson(text: string, indent?: number): string | undefined {
 type Sent = {
   method: HttpMethod;
   url: URL;
-  /** Only the headers that the action set. The configured headers carry the app's credentials. */
+  /** The headers that the action set. */
   headers: Record<string, string>;
+  /** The names of the configured credential headers sent with it. Their values never leave the driver. */
+  credentials: string[];
   body?: string;
   at: number;
 };
@@ -221,7 +229,14 @@ export class ApiDriver implements Driver {
       // A 429 waits for its turn one time. A second 429 is "try later", not evidence (T7).
       for (let attempt = 1; ; attempt++) {
         await this.api.pacer.acquire();
-        sent = { method: action.method, url, headers: action.headers ?? {}, body: action.body, at: Date.now() };
+        sent = {
+          method: action.method,
+          url,
+          headers: action.headers ?? {},
+          credentials: Object.keys(credentials),
+          body: action.body,
+          at: Date.now(),
+        };
         response = await fetch(url, {
           method: action.method,
           headers,
@@ -256,7 +271,7 @@ export class ApiDriver implements Driver {
       if (Object.keys(pointers).length && received.tooLarge)
         throw new Error('Response captures need the body, and the response was over 1 MiB');
       const captures = Object.keys(pointers).length
-        ? responseCaptures(redactCredentials(received.text), pointers)
+        ? responseCaptures(received.status, redactCredentials(received.text), pointers)
         : undefined;
       this.exchange = exchange;
       this.location = url.href;
@@ -282,12 +297,14 @@ export class ApiDriver implements Driver {
     const request: HttpExchange['request'] = {
       method: sent.method,
       path: this.api.redact(`${sent.url.pathname}${sent.url.search}`),
-      headers: Object.fromEntries(
-        Object.entries(sent.headers).map(([name, value]) => [
+      // A configured header is shown by name, so a reader sees which credentials were sent.
+      headers: Object.fromEntries([
+        ...sent.credentials.map((name) => [name.toLowerCase(), '[redacted]']),
+        ...Object.entries(sent.headers).map(([name, value]) => [
           name.toLowerCase(),
           CREDENTIAL.test(name) ? '[redacted]' : this.api.redact(value),
         ]),
-      ),
+      ]),
       ...(sent.body ? { body: redact(sent.body) } : {}),
     };
     const exchange = { request, latencyMs: Date.now() - sent.at, at: new Date(sent.at).toISOString() };

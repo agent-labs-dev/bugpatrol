@@ -25,9 +25,14 @@ export type CaptureTarget = { capture: RetestCapture; steps: RoutineStep[]; repo
 
 /** What a model sees of a target as it was reported. */
 export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
-  return target.reported?.kind === 'http'
-    ? evidenceParts(root, target.reported)
-    : captureParts(root, target.capture.before);
+  return target.reported ? evidenceParts(root, target.reported) : captureParts(root, target.capture.before);
+}
+
+/** What a model sees of a target as the explorer captured it now. */
+export async function afterParts(root: string, capture: RetestCapture): Promise<ToolContent[]> {
+  return capture.after && capture.afterTerminal
+    ? evidenceParts(root, { kind: 'image', screenshot: capture.after, terminal: capture.afterTerminal })
+    : captureParts(root, capture.after);
 }
 
 export function targetLines(targets: CaptureTarget[]): string {
@@ -57,6 +62,8 @@ export async function captureTargets(
   const selected = (input: Record<string, unknown>) =>
     Number.isInteger(input.target) ? targets[Number(input.target) - 1] : undefined;
   let finishTried = false;
+  /** The targets that capture_after ran for, with a file or with nothing to save. */
+  const captured = new Set<CaptureTarget>();
   let finishSummary = '';
   const allowed = new Set([
     'look',
@@ -136,10 +143,18 @@ export async function captureTargets(
         await driver.settle();
         const observation = await driver.observe();
         target.capture.after = await session.capture(observation, `retest-after-${input.target}`);
+        target.capture.afterTerminal = session.lastTerminal;
         target.capture.note = String(input.note ?? '');
-        target.capture.reached = input.reached === true;
+        captured.add(target);
+        // An API with no answered request has no exchange, and a flow with no capture reached nothing.
+        target.capture.reached = input.reached === true && target.capture.after !== undefined;
+        const kind = observation.capture.kind === 'http' ? 'exchange' : 'screen';
         return {
-          ...response(`Saved the after capture for screen ${input.target}: ${target.capture.after}`),
+          ...response(
+            target.capture.after
+              ? `Saved the after capture for target ${input.target}: ${target.capture.after}`
+              : `No ${kind} to save for target ${input.target}: no request got an answer. Recorded the note, with the target not reached.`,
+          ),
           meta: { capture: target.capture.after, summary: `Retest capture: ${target.capture.note}` },
         };
       },
@@ -149,7 +164,7 @@ export async function captureTargets(
       description: 'Finish after capturing every target.',
       inputSchema: schema({ summary: string }, ['summary']),
       async run(input) {
-        const missing = targets.flatMap((target, index) => (target.capture.after ? [] : [index + 1]));
+        const missing = targets.flatMap((target, index) => (captured.has(target) ? [] : [index + 1]));
         if (missing.length && !finishTried) {
           finishTried = true;
           return {
@@ -176,21 +191,22 @@ export async function captureTargets(
       },
       session.emit,
     );
-    if (!finishSummary && !targets.some((target) => target.capture.after))
+    if (!finishSummary && !targets.some((target) => captured.has(target)))
       targets[0]!.capture.note = `The explorer stopped without capture_after (${result.stop}).`;
     return result;
   } finally {
-    if (!targets.some((target) => target.capture.after) && targets[0]) {
+    if (!targets.some((target) => captured.has(target)) && targets[0]) {
       targets[0].capture.note ??= 'The explorer stopped without capture_after.';
       targets[0].capture.reached = false;
       try {
         targets[0].capture.after = await session.capture(await driver.observe(), 'retest-after-1');
+        targets[0].capture.afterTerminal = session.lastTerminal;
       } catch {
         /* no screen */
       }
     }
     for (const target of targets)
-      if (!target.capture.after) {
+      if (!target.capture.after && !captured.has(target)) {
         target.capture.reached = false;
         target.capture.note = 'The explorer did not reach this screen.';
       }

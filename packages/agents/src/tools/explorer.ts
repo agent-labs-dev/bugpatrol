@@ -9,10 +9,12 @@ import {
   type Evidence,
   fingerprint,
   formatHttpExchange,
+  formatJsonAt,
   type HttpExchange,
   type Locator,
   type Routine,
   type RoutineStep,
+  resolvePointer,
   SAMPLE_FILES,
   type ScreenTransition,
   shortHash,
@@ -22,6 +24,7 @@ import { z } from 'zod';
 import { addOccurrence, evaluateScreen } from '../evaluate.js';
 import { assertionWords, bugMisses, checkAssertions, replayRoutine } from '../replay.js';
 import { stepWords } from '../roles/fixer.js';
+import { portabilityWarning } from '../routine-paths.js';
 import type { AgentSession } from '../session.js';
 import { reportFingerprint } from '../sweep.js';
 import type { Tool, ToolResult } from '../types.js';
@@ -49,7 +52,7 @@ export const API_RULES = [
 const apiRequestSchema = z.object({
   method: z.enum(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']),
   url: z.string().min(1),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
   capture: z.record(z.string().regex(/^RESPONSE_[A-Z0-9_]+$/), z.string()).optional(),
   as: z.enum(['self', 'other']).optional(),
@@ -126,6 +129,10 @@ export function errorLines(observation: Observation): string[] {
     ...lines('Failed requests', unique(observation.networkErrors)),
     ...lines('Dialogs (Bugpatrol accepts each one)', unique(observation.dialogs)),
     ...lines('Left the app (Bugpatrol went back)', unique(observation.leftApp)),
+    ...lines(
+      'Writes blocked by read-only mode (the backend never got them, so an error that the app shows for one is not a bug)',
+      observation.blockedWrites ?? [],
+    ),
   ];
 }
 
@@ -177,12 +184,18 @@ function terminalLines(terminal: NonNullable<Observation['terminal']>): string[]
   ];
 }
 
-/** The evidence of the last capture: its PNG, or the redacted exchange of an API. */
+/** The evidence of the last capture: its PNG and a terminal's text, or the redacted exchange of an API. */
 function captureEvidence(session: AgentSession): Evidence | undefined {
   const capture = session.lastObservation?.capture;
   if (capture?.kind === 'http')
     return capture.exchange && { kind: 'http', exchange: session.vars.redact(capture.exchange) as HttpExchange };
-  return session.lastCapture ? { kind: 'image', screenshot: session.lastCapture } : undefined;
+  return session.lastCapture
+    ? {
+        kind: 'image',
+        screenshot: session.lastCapture,
+        ...(session.lastTerminal ? { terminal: session.lastTerminal } : {}),
+      }
+    : undefined;
 }
 
 async function observe(session: AgentSession, label: string, summary?: string): Promise<ToolResult> {
@@ -397,7 +410,7 @@ async function saveRoutine(
   description: string,
   screenId?: string,
   assertions = new Map<RoutineStep, Assertion[]>(),
-): Promise<{ routine: Routine; flattenedFrom?: number }> {
+): Promise<{ routine: Routine; flattenedFrom?: number; warning?: string }> {
   const prior = await session.workspace.readRoutine(id);
   const now = new Date().toISOString();
   let steps = session.trail
@@ -433,7 +446,9 @@ async function saveRoutine(
   };
   await session.workspace.saveRoutine(routine);
   session.anchor = { routineId: id, index: session.trail.length };
-  return { routine, flattenedFrom };
+  const warning = portabilityWarning(routine, session.root);
+  if (warning) session.emit({ kind: 'error', summary: warning });
+  return { routine, flattenedFrom, warning };
 }
 
 /**
@@ -610,6 +625,22 @@ function stepSignature(step: RoutineStep): string {
 function testedCase(session: AgentSession): SweepCaseId | undefined {
   const step = session.trail.findLast((item) => item.kind === 'request');
   return step && responses.get(step)?.case;
+}
+
+/**
+ * The statuses that the spec declares for the endpoint of the last exchange,
+ * so a judge reads what the contract establishes before it accepts a claimed status.
+ */
+function declaredStatuses(session: AgentSession, api: ApiDriver): string | undefined {
+  const exchange = session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange;
+  if (!exchange) return undefined;
+  const { contract } = api.policy;
+  const endpoint = contract.match(exchange.request.method, exchange.request.path);
+  if (!endpoint) return undefined;
+  const operation = resolvePointer(contract.doc, endpoint.specRef)?.value as { responses?: object } | undefined;
+  const statuses = Object.keys(operation?.responses ?? {});
+  const errors = contract.errors.statuses.length ? `; connect.errors: ${contract.errors.statuses.join(', ')}` : '';
+  return `Declared statuses of ${endpoint.key}: ${statuses.join(', ') || 'none'}${errors}.`;
 }
 
 /** The request steps since the last anchor: the ones that save_routine numbers from 1. */
@@ -868,12 +899,60 @@ export function explorerTools(
           },
         ]
       : []),
-    {
-      name: 'look',
-      description: 'Observe the current screen.',
-      inputSchema: schema({}),
-      run: () => observe(session, 'look'),
-    },
+    api
+      ? {
+          name: 'look',
+          description:
+            'Show the last exchange again. pointer: a JSON pointer into the body of the last response, such as ' +
+            '/result/0, to read a part of it past the body cut, without sending the request again.',
+          inputSchema: schema({ pointer: string }),
+          async run(input) {
+            const pointer = arg(input, 'pointer');
+            if (!pointer) return observe(session, 'look');
+            const response =
+              session.lastObservation?.capture.kind === 'http' && session.lastObservation.capture.exchange?.response;
+            if (!response) return { ...text('No response yet: send a request first.'), isError: true };
+            if (response.tooLarge)
+              return {
+                ...text(
+                  `The body of the last response was over the read limit, so none of it was kept (${response.bytes} bytes or more).`,
+                ),
+                isError: true,
+              };
+            let body: unknown;
+            try {
+              body = JSON.parse(response.body);
+            } catch {
+              return {
+                ...text('The body of the last response is not JSON, so a pointer cannot select a part of it.'),
+                isError: true,
+              };
+            }
+            return text(session.vars.redact(formatJsonAt(body, pointer)) as string);
+          },
+        }
+      : {
+          name: 'look',
+          description: 'Observe the current screen.',
+          inputSchema: schema({}),
+          run: () => observe(session, 'look'),
+        },
+    ...(api
+      ? [
+          {
+            name: 'spec',
+            description:
+              'Read one part of the OpenAPI spec that Bugpatrol tests against, by JSON pointer, such as ' +
+              '/components/schemas/Item or /paths/~1items~1{id}/get ("/" in a path is ~1). Use it rather than a ' +
+              'request for the spec document: a response shows only its first 8000 characters, and one over 1 MiB is ' +
+              'not kept. A part over the limit names its keys, so the next pointer can go deeper. No pointer: the top level.',
+            inputSchema: schema({ pointer: string }),
+            async run(input: Record<string, unknown>) {
+              return text(session.vars.redact(formatJsonAt(api.policy.contract.doc, arg(input, 'pointer'))) as string);
+            },
+          },
+        ]
+      : []),
     {
       name: 'tap',
       description: 'Tap one element by its latest ref.',
@@ -1046,7 +1125,7 @@ export function explorerTools(
         const previous = session.lastScreenId;
         const edge = transition(session, id);
         const routineId = `screen-${id}`;
-        await saveRoutine(session, routineId, description, id);
+        const { warning } = await saveRoutine(session, routineId, description, id);
         await session.workspace.upsertScreen({
           id,
           name,
@@ -1085,7 +1164,7 @@ export function explorerTools(
         return {
           ...text(
             session.vars.redact(
-              `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}`,
+              `Recorded ${name}.${found} Known screens: ${names}${errors.length ? `\n${errors.join('\n')}` : ''}${warning ? `\nWarning: ${warning}` : ''}`,
             ) as string,
           ),
           meta: { summary: '', capture, screenId: id },
@@ -1140,9 +1219,9 @@ export function explorerTools(
         const assertions = stepAssertions(session, input.assert);
         if (typeof assertions === 'string') return { ...text(`Not saved: ${assertions}.`), isError: true };
         const description = arg(input, 'description');
-        const { routine, flattenedFrom } = await saveRoutine(session, id, description, undefined, assertions);
+        const { routine, flattenedFrom, warning } = await saveRoutine(session, id, description, undefined, assertions);
         return text(
-          `Saved ${routine.id} (requires ${routine.requires?.join(', ') || 'none'}, ${routine.steps.length} steps${flattenedFrom ? `, flattened from a chain of ${flattenedFrom}` : ''}).`,
+          `Saved ${routine.id} (requires ${routine.requires?.join(', ') || 'none'}, ${routine.steps.length} steps${flattenedFrom ? `, flattened from a chain of ${flattenedFrom}` : ''}).${warning ? ` Warning: ${warning}` : ''}`,
         );
       },
     },
@@ -1166,15 +1245,19 @@ export function explorerTools(
     },
     {
       name: 'report_bug',
-      description:
-        "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
-        'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
-        'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
-        'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
-        'this screen. Without them, a fix of the bug cannot be proven by a replay.',
+      description: api
+        ? 'Report a product bug in the last exchange for judge review. Name how a replay can tell that the bug ' +
+          'shows, with no one looking, in one or more of: shows (text in the response only while the bug is there), ' +
+          'lacks (text that the response should have and lacks), error (part of a network error that you saw). ' +
+          'Bugpatrol checks each against the last exchange. Without them, a fix of the bug cannot be proven by a replay.'
+        : "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+          'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+          'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+          'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+          'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
-          screen_id: string,
+          ...(api ? {} : { screen_id: string }),
           title: string,
           what_is_wrong: string,
           expected: string,
@@ -1186,7 +1269,7 @@ export function explorerTools(
             ? { rule: { type: 'string', enum: API_RULES, description: 'The API rule that the bug breaks.' } }
             : {}),
         },
-        ['screen_id', 'title', 'what_is_wrong', 'expected', 'severity'],
+        [...(api ? [] : ['screen_id']), 'title', 'what_is_wrong', 'expected', 'severity'],
       ),
       async run(input) {
         const title = arg(input, 'title');
@@ -1213,7 +1296,9 @@ export function explorerTools(
         const requested = arg(input, 'screen_id');
         const known = (await session.workspace.readAppMap())?.screens.some((screen) => screen.id === requested);
         const screenId = known ? requested : currentScreenId(session);
-        const fallback = known ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
+        // An API has no screens, so a missing screen_id is no fallback worth naming.
+        const fallback =
+          known || api ? '' : ` Used current screen as fallback for ${requested || 'missing screen_id'}.`;
         const candidate: Candidate = {
           id: `can_${shortHash(`${session.sessionId}:${title}:${randomUUID()}`)}`,
           sessionId: session.sessionId,
@@ -1224,7 +1309,15 @@ export function explorerTools(
             reportFingerprint(session, testedCase(session), rule) ??
             fingerprint({ screenId: screenId ?? 'unknown', ruleId: 'explorer', domNodeSignature: title.toLowerCase() }),
           summary: session.vars.redact(title) as string,
-          detail: session.vars.redact(`${arg(input, 'what_is_wrong')}\nExpected: ${arg(input, 'expected')}`) as string,
+          detail: session.vars.redact(
+            [
+              arg(input, 'what_is_wrong'),
+              `Expected: ${arg(input, 'expected')}`,
+              ...(api ? [declaredStatuses(session, api)] : []),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          ) as string,
           severity: input.severity as Candidate['severity'],
           evidence: {
             capture,

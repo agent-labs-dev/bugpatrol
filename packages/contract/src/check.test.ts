@@ -3,7 +3,7 @@ import type { AssertionResult } from '@bugpatrol/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ContractResponse, checkContract, checkSchema, expectedContract } from './check.js';
 import { buildContract, type Contract } from './contract.js';
-import { loadSpec } from './load.js';
+import { loadSpec, type OpenApiDoc } from './load.js';
 
 // One test for each judge rule of the calibration sheet that code can check.
 let fixture: FixtureApi;
@@ -157,5 +157,35 @@ describe('expectedContract', () => {
       expect.stringMatching(/^- 422: application\/json #\/components\/schemas\/Error = /),
       '- 401 (connect.errors): {"type":"object"}',
     ]);
+  });
+});
+
+describe('checkContract on a 5xx', () => {
+  it.each([
+    // A declared 503 reports a dependency that the API lacks: the contract allows it.
+    { name: 'a declared 503', responses: ['200', '503'], errors: [], status: 503, verdict: 'ok' },
+    { name: 'a 503 in connect.errors', responses: ['200'], errors: [503], status: 503, verdict: 'ok' },
+    { name: 'a 503 under 5XX', responses: ['200', '5XX'], errors: [], status: 503, verdict: 'ok' },
+    // `default` names no status, so it does not make a 503 expected.
+    {
+      name: 'a 503 under default only',
+      responses: ['200', 'default'],
+      errors: [],
+      status: 503,
+      verdict: 'failed: 503',
+    },
+    { name: 'an undeclared 503', responses: ['200'], errors: [], status: 503, verdict: 'failed: 503' },
+    // A declared 500 is still a crash.
+    { name: 'a declared 500', responses: ['200', '500'], errors: [], status: 500, verdict: 'failed: 500' },
+  ])('no-5xx on $name is $verdict', ({ responses, errors, status, verdict }) => {
+    const doc = {
+      openapi: '3.1.0',
+      paths: {
+        '/thing': { get: { responses: Object.fromEntries(responses.map((code) => [code, { description: code }])) } },
+      },
+    } as unknown as OpenApiDoc;
+    const on = buildContract(doc, { errors: { statuses: errors } });
+    const results = checkContract(on.match('GET', '/thing')!, { status, headers: {}, text: '' }, on);
+    expect(verdicts(results)['no-5xx']).toBe(verdict);
   });
 });

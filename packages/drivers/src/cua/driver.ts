@@ -4,6 +4,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { locatorFor, stepFor } from '../dom.js';
 import { nativeSnapshot } from '../maestro.js';
+import type { WriteLog } from '../readonly.js';
 import type { ActResult, ControlEvent, Driver, DriverAction, Observation, UiElement } from '../types.js';
 import { Control } from './control.js';
 import { isolatedTransport } from './isolation.js';
@@ -43,6 +44,8 @@ export type CuaOptions = {
   viewport: { width: number; height: number };
   viewer: { enabled: boolean; port: number; allowTakeover: boolean };
   redact: (value: string) => string;
+  /** The log of the app's read-only proxies. */
+  writes?: WriteLog;
 };
 
 /** Drives only the application launched inside this run's private X server and bus. */
@@ -79,6 +82,10 @@ export class CuaDriver implements Driver {
   }
 
   constructor(private readonly options: CuaOptions) {}
+
+  get writes() {
+    return this.options.writes;
+  }
 
   private async call(name: string, args: Record<string, unknown>) {
     if (!this.client) throw new Error('Cua driver is not connected');
@@ -215,6 +222,7 @@ export class CuaDriver implements Driver {
       ],
       volatileRegions: [],
       consoleErrors: [],
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
   }

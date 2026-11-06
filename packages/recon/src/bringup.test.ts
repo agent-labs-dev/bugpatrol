@@ -14,3 +14,19 @@ it('discovers existing CI startup commands in the ESM package', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it("prefers the repo's own dev commands, also in an app folder, over a compose stack", () => {
+  const root = mkdtempSync(join(tmpdir(), 'bh-bringup-'));
+  try {
+    writeFileSync(join(root, 'docker-compose.yml'), 'services:\n  web:\n    ports: ["80:80"]\n');
+    mkdirSync(join(root, 'frontend'));
+    writeFileSync(join(root, 'frontend/package.json'), JSON.stringify({ scripts: { dev: 'next dev' } }));
+    writeFileSync(join(root, 'frontend/pnpm-lock.yaml'), '');
+    expect(detectBringUp(root).map(({ command, cwd }) => ({ command, cwd }))).toEqual([
+      { command: 'pnpm --dir frontend run dev', cwd: 'frontend' },
+      { command: 'docker compose up', cwd: undefined },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

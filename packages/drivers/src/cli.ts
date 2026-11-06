@@ -8,6 +8,8 @@ import type { ScreenSnapshot } from '@bugpatrol/invariants';
 import { CastRecorder, Terminal, terminalPng } from './cast.js';
 import { sessionKeyBytes } from './keys.js';
 import { nativeSnapshot } from './maestro.js';
+import type { WriteLog } from './readonly.js';
+import { redactTerminal } from './secret-spans.js';
 import type { ActResult, Driver, DriverAction, Observation } from './types.js';
 
 /** The output of a command is read as text, not drawn, so its lines are as wide as the command prints them. */
@@ -79,7 +81,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * the terminal, which a process it left behind can hold open.
  */
 const PTY = `
-import fcntl, json, os, pty, select, signal, struct, sys, termios, time
+import ctypes, fcntl, json, os, pty, select, signal, struct, sys, termios, time
 cols, rows = int(sys.argv[1]), int(sys.argv[2])
 lines = b''
 while b'\\n' not in lines:
@@ -94,6 +96,29 @@ spec = json.loads(first)
 os.set_inheritable(3, False)
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+# Linux: a daemon that leaves the process group, as a tmux server does, is
+# reparented here when its parent exits, so stop() still finds it.
+try:
+    ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+except Exception:
+    pass
+def descendants():
+    parents = {}
+    for entry in os.listdir('/proc') if os.path.isdir('/proc') else []:
+        if entry.isdigit():
+            try:
+                with open('/proc/%s/stat' % entry) as stat:
+                    parents[int(entry)] = int(stat.read().rsplit(')', 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                pass
+    found, todo = set(), [os.getpid()]
+    while todo:
+        parent = todo.pop()
+        for child, ppid in parents.items():
+            if ppid == parent and child not in found:
+                found.add(child)
+                todo.append(child)
+    return found
 wake, woken = os.pipe()
 os.set_blocking(woken, False)
 signal.set_wakeup_fd(woken)
@@ -107,6 +132,18 @@ def stop(*_):
         os.killpg(pid, signal.SIGKILL)
     except OSError:
         pass
+    # The command itself is reaped where its exit status is read.
+    for _ in range(50):
+        left = descendants() - {pid}
+        if not left:
+            break
+        for child in left:
+            try:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, os.WNOHANG)
+            except OSError:
+                pass
+        time.sleep(0.01)
 signal.signal(signal.SIGTERM, stop)
 os.write(3, b'%d\\n' % pid)
 inputs = [fd, 0, 3, wake]
@@ -191,6 +228,8 @@ export type CliDriverOptions = {
   env?: Record<string, string>;
   /** A program that stays open, started on connect, so the first look is at it. */
   command?: string;
+  /** Read-only mode: the log of the proxies that the app's backend traffic goes through. */
+  writes?: WriteLog;
 };
 
 /** A program that stays open across steps, such as a full screen terminal UI. */
@@ -225,7 +264,7 @@ const prompt = (command: string) => `\u001b[1;32m$\u001b[0m ${command}\r\n`;
  * the program shows now. A recording is an asciicast of both.
  *
  * The output of a `run` is redacted line by line, so a secret that arrives
- * in two pieces is still found. A session's screen text and the cells of a
+ * in two pieces is still found, and its control sequences are kept whole. A session's screen text and the cells of a
  * secret on its screenshot are both redacted with the rows read as one text,
  * so a secret the app wrapped onto the next row is found, and the recording
  * is redacted as one stream when it stops.
@@ -245,6 +284,10 @@ export class CliDriver implements Driver {
   private appEnv: Record<string, string> = {};
   private readonly cast: CastRecorder;
   private readonly redact: (value: string) => string;
+
+  get writes() {
+    return this.options.writes;
+  }
 
   constructor(private readonly options: CliDriverOptions) {
     this.redact = options.redact ?? ((value) => value);
@@ -363,7 +406,7 @@ export class CliDriver implements Driver {
     await this.showView('shell');
     const command = this.redact(action.command);
     this.show(prompt(command), false);
-    this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows) };
+    this.last = { command, output: new Terminal(OUTPUT_COLS, this.rows, true) };
     const step = { kind: 'run' as const, command: action.command, ...(action.input ? { input: action.input } : {}) };
     const helper = this.spawnHelper(action.command, false);
     this.running = helper;
@@ -375,7 +418,7 @@ export class CliDriver implements Driver {
       partial += chunk;
       const end = partial.lastIndexOf('\n') + 1;
       if (!end) return;
-      this.show(this.redact(partial.slice(0, end)));
+      this.show(redactTerminal(partial.slice(0, end), this.redact));
       partial = partial.slice(end);
     });
     child.stderr?.on('data', (chunk) => {
@@ -397,7 +440,7 @@ export class CliDriver implements Driver {
     const code = await helper.closed;
     clearTimeout(timer);
     this.running = undefined;
-    this.show(this.redact(partial));
+    this.show(redactTerminal(partial, this.redact));
     if (timedOut) {
       this.show('\r\n\u001b[33m[stopped by Bugpatrol]\u001b[0m\r\n', false);
       return {
@@ -556,28 +599,32 @@ export class CliDriver implements Driver {
     const screen = session?.screen ?? this.screen;
     await screen.flush();
     await this.last?.output.flush();
+    // The shell screen holds only redacted text; a session's screen holds what the program drew.
+    const cells = screen.styleRuns(session ? this.redact : undefined);
     const terminal: Observation['terminal'] = session
       ? {
           command: session.command,
           ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }),
           output: session.screen.screenTextRedacted(this.redact),
           screen: true,
+          cells,
         }
       : this.last && {
           command: this.last.command,
           ...(this.last.exitCode === undefined ? {} : { exitCode: this.last.exitCode }),
           output: this.last.output.text(),
+          cells,
         };
     return {
       platform: 'cli',
       location: 'terminal',
       ...(terminal ? { title: terminal.command, terminal } : {}),
-      // The shell screen holds only redacted text; a session's screen holds what the program drew.
       capture: { kind: 'image', png: terminalPng(screen, session ? this.redact : undefined) },
       viewport: { width: screen.cols * 8, height: screen.rows * 16, scale: 1 },
       elements: [],
       volatileRegions: [],
       consoleErrors: [],
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
   }

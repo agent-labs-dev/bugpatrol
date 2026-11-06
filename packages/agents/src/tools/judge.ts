@@ -1,4 +1,4 @@
-import { appendFile, copyFile, readFile } from 'node:fs/promises';
+import { appendFile, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   awaitsJudge,
@@ -12,6 +12,7 @@ import {
   type TriageFile,
 } from '@bugpatrol/core';
 import { evidenceParts } from '../evidence.js';
+import { portabilityWarning } from '../routine-paths.js';
 import type { AgentSession } from '../session.js';
 import type { Tool, ToolResult } from '../types.js';
 import { lessonTools } from './memory.js';
@@ -38,19 +39,7 @@ function issueTitle(value: string): string {
 }
 
 async function decisions(session: AgentSession, sessionId: string): Promise<Set<string>> {
-  try {
-    const lines = await readFile(paths.sessionDecisions(session.root, sessionId), 'utf8');
-    return new Set(
-      lines
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => (JSON.parse(line) as { candidateId: string }).candidateId),
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw error;
-  }
+  return new Set((await session.workspace.readDecisions(sessionId)).map((line) => line.candidateId));
 }
 
 /**
@@ -80,6 +69,8 @@ async function saveRepro(
     updatedAt: now,
   };
   await session.workspace.saveRoutine(routine);
+  const warning = portabilityWarning(routine, session.root);
+  if (warning) session.emit({ kind: 'error', summary: warning });
   return routine.id;
 }
 
@@ -87,7 +78,11 @@ async function saveRepro(
 export async function pendingCandidates(session: AgentSession, sessionIds: string[]): Promise<Candidate[]> {
   const issues = await session.workspace.listIssues();
   const filed = issues.flatMap((item) => item.candidateIds);
-  const triaged = Object.keys((await session.workspace.readTriage()).fingerprints);
+  // A fingerprint filed to a fixed issue passes again, so a later sighting can reopen it as a regression.
+  const fixed = new Set(issues.filter((item) => item.status === 'fixed').map((item) => item.id));
+  const triaged = Object.entries((await session.workspace.readTriage()).fingerprints)
+    .filter(([, entry]) => !(entry.decision === 'filed' && entry.issueId && fixed.has(entry.issueId)))
+    .map(([fingerprint]) => fingerprint);
   const pending: Candidate[] = [];
   for (const id of sessionIds) {
     // A candidate of another profile belongs to another app: its repro would land in the wrong folder.
@@ -113,6 +108,19 @@ function triageEntries(
     entries[candidate.fingerprint] = { decision, issueId, reason, at };
   }
   return entries;
+}
+
+/** The pending candidates outside `chosen` that share a fingerprint with one in it: a decision on it decides them. */
+function sameFingerprint(pending: Candidate[], chosen: Candidate[]): Candidate[] {
+  const prints = new Set(chosen.filter((item) => item.source !== 'pixel-diff').map((item) => item.fingerprint));
+  return pending.filter((item) => !chosen.includes(item) && prints.has(item.fingerprint));
+}
+
+/** The sentence that names the candidates a decision took along, so none leaves the list unseen. */
+function joined(siblings: Candidate[], verb: string): string {
+  if (!siblings.length) return '';
+  const names = siblings.map((item) => `${item.id} (${item.summary})`).join(', ');
+  return ` With the same fingerprint, ${names} ${verb}. If one is a different problem, say so in finish.`;
 }
 
 /** Judge tools make every acceptance or dismissal auditable. */
@@ -146,7 +154,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
     {
       name: 'view_candidate',
       description:
-        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, or for an API the HTTP exchange.',
+        'Inspect a candidate and its evidence before deciding: the screenshot, baseline, and diff, with a terminal the complete output and the colours of each cell, or for an API the HTTP exchange.',
       inputSchema: schema({ id: string }, ['id']),
       async run(input) {
         const candidate = (await pendingCandidates(session, sessionIds)).find((item) => item.id === input.id);
@@ -213,11 +221,17 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             isError: true,
           };
         }
-        const ids = input.candidate_ids as string[];
-        const candidates = (await pendingCandidates(session, sessionIds)).filter((item) => ids.includes(item.id));
-        if (candidates.length !== ids.length || !ids.length) {
+        const requested = input.candidate_ids as string[];
+        const pending = await pendingCandidates(session, sessionIds);
+        const chosen = pending.filter((item) => requested.includes(item.id));
+        if (chosen.length !== requested.length || !requested.length) {
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
+        // Filing decides a fingerprint, so a pending candidate with the same one joins the issue
+        // by name, rather than drop out of the pending list with no issue holding it.
+        const siblings = sameFingerprint(pending, chosen);
+        const candidates = [...chosen, ...siblings];
+        const ids = candidates.map((item) => item.id);
         const first = candidates[0]!;
         const now = new Date().toISOString();
         // A named issue wins; otherwise the same fingerprint means the same issue.
@@ -272,7 +286,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
         const verb =
           existing?.status === 'fixed' ? 'Regression:' : merged ? `Added to (x${issue.occurrences})` : 'Filed';
         session.emit({ kind: 'issue', summary: `${verb} ${issue.title}` });
-        return response(`${verb} ${issue.id}: ${issue.title}`);
+        return response(`${verb} ${issue.id}: ${issue.title}${joined(siblings, 'joins the issue')}`);
       },
     },
     {
@@ -288,29 +302,34 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
       ),
       async run(input) {
         const ids = input.candidate_ids as string[];
-        const candidates = (await pendingCandidates(session, sessionIds)).filter((item) => ids.includes(item.id));
+        const pending = await pendingCandidates(session, sessionIds);
+        const candidates = pending.filter((item) => ids.includes(item.id));
         if (candidates.length !== ids.length || !ids.length) {
           return { ...response('Unknown or decided candidate id'), isError: true };
         }
+        const siblings = sameFingerprint(pending, candidates);
         for (const candidate of candidates) {
           const { capture } = candidate.evidence;
           if (input.update_baseline && candidate.screenId && capture.kind === 'image') {
             await copyFile(
               resolve(session.root, capture.screenshot),
-              paths.agentBaseline(session.root, candidate.screenId),
+              paths.agentBaseline(session.root, candidate.screenId, session.workspace.profile),
             );
             const snapshot = join(
-              paths.session(session.root, candidate.sessionId),
+              paths.session(session.root, candidate.sessionId, session.workspace.profile),
               `${candidate.screenId}.snapshot.json`,
             );
             try {
-              await copyFile(snapshot, paths.agentBaselineSnapshot(session.root, candidate.screenId));
+              await copyFile(
+                snapshot,
+                paths.agentBaselineSnapshot(session.root, candidate.screenId, session.workspace.profile),
+              );
             } catch {
               // Explorer-only reports may not have a structural snapshot.
             }
           }
           await appendFile(
-            paths.sessionDecisions(session.root, candidate.sessionId),
+            paths.sessionDecisions(session.root, candidate.sessionId, session.workspace.profile),
             `${JSON.stringify({
               candidateId: candidate.id,
               decision: 'dismiss',
@@ -332,7 +351,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
               },
             ]);
           }
-        return response(`Dismissed ${candidates.length} candidate(s).`);
+        return response(`Dismissed ${candidates.length} candidate(s).${joined(siblings, 'is dismissed with them')}`);
       },
     },
     {

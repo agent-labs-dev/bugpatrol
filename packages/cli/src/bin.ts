@@ -14,8 +14,9 @@ import {
 import { startDashboard } from '@bugpatrol/dashboard';
 import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
-import { doctorExitCode, runChecks } from './commands/doctor.js';
+import { doctorExitCode, readDoctorConfig, runChecks } from './commands/doctor.js';
 import { runEndpointsCommand } from './commands/endpoints.js';
+import { runFindingsCommand } from './commands/findings.js';
 import { runInit } from './commands/init.js';
 import { runIssueCommand } from './commands/issue.js';
 import { runMemoryCommand } from './commands/memory.js';
@@ -78,8 +79,7 @@ try {
     }
 
     case 'doctor': {
-      const config = optionalConfig();
-      const checks = runChecks(root, config);
+      const checks = await runChecks(root, readDoctorConfig(root, selected.configFile));
       for (const check of checks) {
         process.stdout.write(`${check.ok ? 'ok  ' : check.fatal ? 'FAIL' : 'warn'}  ${check.name}: ${check.detail}\n`);
       }
@@ -154,7 +154,12 @@ try {
     }
 
     case 'memory': {
-      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`));
+      await runMemoryCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
+      break;
+    }
+
+    case 'findings': {
+      await runFindingsCommand(args, root, (line) => process.stdout.write(`${line}\n`), optionalConfig()?.profile);
       break;
     }
 
@@ -222,7 +227,6 @@ try {
     case 'recon':
     case 'model':
     case 'baseline':
-    case 'findings':
     case 'intent':
     case 'report':
     case 'export':

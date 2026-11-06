@@ -6,6 +6,7 @@ import { addUsage, formatUsage, type RoleRuntime, type TokenUsage, usageFrom } f
 import { serveTools } from '../mcp-server.js';
 import type { EventSink, RoleOutcome, RoleTask, Runtime } from '../types.js';
 import { firstLine } from './model.js';
+import { opencodeCommand } from './opencode.js';
 import { commandProgram, isOpencode } from './program.js';
 
 type CliUse = Extract<RoleRuntime, { runtime: 'cli' }>;
@@ -231,9 +232,14 @@ export class CliRuntime implements Runtime {
         mcpUrl: mcp.url,
         workdir,
       };
-      const command = this.use.command.replace(/\{(prompt|mcp|mcpUrl|workdir)\}/g, (_, name: string) => {
-        return quote(replacements[name as keyof typeof replacements]);
-      });
+      const pinned = this.flavor === 'opencode' ? opencodeCommand(this.use.command, process.env) : undefined;
+      if (pinned?.note) emit({ kind: 'thought', summary: pinned.note });
+      const command = (pinned?.command ?? this.use.command).replace(
+        /\{(prompt|mcp|mcpUrl|workdir)\}/g,
+        (_, name: string) => {
+          return quote(replacements[name as keyof typeof replacements]);
+        },
+      );
       const child = spawn('/bin/sh', ['-c', command], {
         cwd: workdir,
         detached: true,

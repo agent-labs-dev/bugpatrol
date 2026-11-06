@@ -18,7 +18,11 @@ export type RequestPolicy = {
   check(method: HttpMethod, url: string): PolicyVerdict;
 };
 
-type PolicyConnect = Pick<AppConfig['connect'], 'methods' | 'deny' | 'disposable'> & { url: string };
+/** `readOnly`: `app.readOnly` is on, so only reads go out, whatever the target. */
+type PolicyConnect = Pick<AppConfig['connect'], 'methods' | 'deny' | 'disposable'> & {
+  url: string;
+  readOnly?: boolean;
+};
 
 const READS: readonly HttpMethod[] = ['GET', 'HEAD', 'OPTIONS'];
 
@@ -34,7 +38,7 @@ const SKIPPED: Record<SkipReason, string> = {
  * read.
  */
 export function requestPolicy(contract: Contract, connect: PolicyConnect): RequestPolicy {
-  const writesAllowed = connect.disposable || isLoopback(connect.url);
+  const writesAllowed = !connect.readOnly && (connect.disposable || isLoopback(connect.url));
   const allowedMethods = HTTP_METHODS.filter(
     (method) => connect.methods.includes(method) && (writesAllowed || READS.includes(method)),
   );
@@ -60,7 +64,9 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
         if (!writesAllowed && !READS.includes(method))
           return {
             ok: false,
-            reason: 'the target is read-only: writes need a loopback url or app.connect.disposable',
+            reason: connect.readOnly
+              ? 'app.readOnly is on: only GET, HEAD and OPTIONS go out'
+              : 'the target is read-only: writes need a loopback url or app.connect.disposable',
             readOnly: true,
           };
         return { ok: false, reason: `app.connect.methods does not have ${method}` };

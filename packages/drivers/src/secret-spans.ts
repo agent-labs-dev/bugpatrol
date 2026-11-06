@@ -71,3 +71,49 @@ export function secretSpans(text: string, redact: (value: string) => string): Se
   blanked += text.slice(from);
   return redact(blanked) === blanked ? spans : undefined;
 }
+
+/**
+ * Where the control sequences of `text` are: CSI and two-character escapes.
+ * Their parameters are numbers and modes, never text a program shows, so
+ * redaction leaves them whole. An OSC is not one: its payload, such as a
+ * hyperlink target, can hold a secret.
+ */
+export function controlRanges(text: string): [start: number, end: number][] {
+  const ranges: [number, number][] = [];
+  for (const match of text.matchAll(ESCAPE)) {
+    if (match[0][1] !== ']') ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+/**
+ * `text`, terminal output, with each secret replaced and every control
+ * sequence kept as it came. A secret that a program breaks up with escape
+ * codes is found in the text without them; a secret in an OSC payload is
+ * found there. A short secret such as `18` therefore never turns
+ * `ESC[2;18m` into broken output.
+ */
+export function redactTerminal(text: string, redact: (value: string) => string): string {
+  const { plain, at } = withoutEscapes(text);
+  if (redact(text) === text && redact(plain) === plain) return text;
+  let joined = text;
+  const spans = secretSpans(plain, redact);
+  if (spans?.length) {
+    joined = '';
+    let from = 0;
+    for (const span of spans) {
+      // A secret broken up by escape codes loses them with it: they styled the secret.
+      joined += text.slice(from, at[span.start]!) + span.placeholder;
+      from = at[span.end - 1]! + 1;
+    }
+    joined += text.slice(from);
+  }
+  // What is left: secrets in OSC payloads, or all of the text when the spans could not be lined up.
+  let out = '';
+  let from = 0;
+  for (const [start, end] of controlRanges(joined)) {
+    out += redact(joined.slice(from, start)) + joined.slice(start, end);
+    from = end;
+  }
+  return out + redact(joined.slice(from));
+}

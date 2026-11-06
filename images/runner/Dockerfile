@@ -11,7 +11,7 @@
 # INVALIDATES every baseline and forces a re-capture. That is correct behaviour,
 # not a bug -- silently diffing across image versions is what produces a diff
 # storm nobody can explain.
-FROM mcr.microsoft.com/playwright:v1.48.2-jammy
+FROM mcr.microsoft.com/playwright:v1.64.1-jammy
 
 # Fonts are bundled and host fonts are absent, so a glyph can never fall back to
 # whatever happened to be installed on the runner. `failOnFontFallback` turns a

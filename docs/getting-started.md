@@ -11,7 +11,7 @@ The [skills CLI](https://github.com/vercel-labs/skills) installs the skill for C
 
 Bugpatrol needs two things from you: a command that launches your app on this machine, and a way to sign in (a test account, a seed script, or a dev auth bypass). [Before you start](#before-you-start-launch-and-sign-in) tells more. Check the [requirements](#requirements) first.
 
-1. Run `init` in your repo. It detects web, Electron, iOS or Android defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop, API or CLI explicitly:
+1. Run `init` in your repo. It detects web, Electron, iOS, Android, FastAPI and CLI defaults and installed LLMs, then asks which platform and LLM each agent uses. Select desktop explicitly:
 
    ```bash
    npx bugpatrol init
@@ -49,15 +49,15 @@ The fixer and GitHub are off until you turn them on. The sections below show eac
 - Node 22 or later.
 - `git`, and your app in a git repo with an `origin` remote. Each patrol cycle pulls `origin/main`, and the fixer works in git worktrees.
 - An LLM for the agents: an agent CLI (Claude Code, Codex, Kimi CLI, opencode, or pi), or an API key.
-- For web apps: Chromium for Playwright. Install it one time:
+- For web apps: Chromium for Playwright. Install it one time, with the Playwright that Bugpatrol depends on:
 
   ```bash
-  PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium
+  PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y -p bugpatrol@latest playwright install chromium
   ```
 
 - For iOS: Xcode and a booted simulator. For Android: the Android SDK and a running emulator. For both: [Maestro](https://maestro.mobile.dev).
 - For Electron: an app build that opens a CDP port (`--remote-debugging-port`).
-- For GitHub: a logged-in [`gh`](https://cli.github.com) CLI.
+- For GitHub: a [`gh`](https://cli.github.com) CLI that can read and push to the repo.
 
 You do not need to install Bugpatrol. Run each command with `npx bugpatrol`. You can also add it to your project:
 
@@ -85,9 +85,9 @@ Run this command in your repo:
 npx bugpatrol init
 ```
 
-`init` detects web, Electron, iOS or Android defaults and installed LLMs, then asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
+`init` detects web, Electron, iOS, Android, FastAPI and CLI defaults and installed LLMs, then asks you some questions. It puts each detected value on the input line. Push Enter to keep the value, or edit it:
 
-1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads defaults from `package.json`, the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, and the Gradle files. Select desktop, HTTP API or CLI manually, or pass `--platform desktop`, `--platform api` or `--platform cli`.
+1. The kind of app (web, Electron, iOS, Android, desktop, HTTP API or CLI), the command that starts it, and its URL or app ID. `init` reads defaults from `package.json` (also in a `frontend/`, `web/`, `client/`, `site/` or `apps/web/` folder), the Vite config, `.env`, `app.json`, `app.config.ts`, the Xcode project, the Gradle files, `pyproject.toml` and a compose file. It prefers the repo's own `dev` or `start` script to `docker compose up`, which may start production services and load real secrets, and it warns when it picks compose. For a CLI, the build step is the `build` script, never `start` or `dev`: those run the app. When it finds no app, it says so. Select desktop manually, or pass `--platform` with any platform.
 2. The LLM for each agent: the explorer, the judge, and the fixer. An installed agent CLI (Claude Code, Codex, Kimi CLI, or pi) comes first, because it needs no API key. If you have no CLI, `init` recommends an OpenRouter or a Vercel AI Gateway key, and shows where to get one.
 
 `init` puts all the Bugpatrol files in one `.bugpatrol/` folder, and it never overwrites a file:
@@ -100,6 +100,7 @@ npx bugpatrol init
   routines/          # the routines Bugpatrol replays with no model: commit them
   <profile>/         # appmap.json and routines/ of another config, such as cli.yml: commit it
   runs/              # sessions, issues, fixes, and screenshots: init adds it to .gitignore
+    profiles/<profile>/  # the same for another config
 ```
 
 To use the detected values with no questions, add `--yes`. To select the LLM, add `--agent`:
@@ -192,6 +193,8 @@ app:
 ```
 
 Secrets and captured values reach the model only as `{{NAME}}` placeholders. Bugpatrol puts in the real value only when it acts on the app. It hides the value in all logs.
+
+A never-do list is advice to a model, and opening a screen or pressing Escape can still write. When the app uses a backend whose data must not change, turn on [read-only mode](configuration.md#read-only-mode) as well: Bugpatrol then lets only reads reach the backend, and counts each write that it blocked.
 
 ## 4. Check the model keys
 

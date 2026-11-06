@@ -19,8 +19,8 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
-import { captureParts, readExchanges, screenshotOf } from '../evidence.js';
-import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, resolveRepo, uploadImage } from '../github.js';
+import { readExchanges, screenshotOf } from '../evidence.js';
+import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, uploadImage } from '../github.js';
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
@@ -51,7 +51,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
-import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
+import { afterParts, beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { ClaimBudget, claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
@@ -304,7 +304,7 @@ async function withWorktree<T>(
   run: (worktree: string) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
-  const worktree = join(paths.worktrees(root), `review-${ctx.pr.number}-${name}`);
+  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}`);
   const remove = async () => {
     try {
       await lstat(worktree);
@@ -315,7 +315,7 @@ async function withWorktree<T>(
   };
   // A review that was killed leaves its worktree behind.
   await remove();
-  await mkdir(paths.worktrees(root), { recursive: true });
+  await mkdir(paths.worktrees(root, config.profile), { recursive: true });
   await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
   let restore = async () => {};
   try {
@@ -359,6 +359,7 @@ async function withBuild<T>(
           (value) => vars.redact(value) as string,
           worktree,
           app?.contract,
+          app?.writes,
         );
         driver = next;
         await next.connect();
@@ -529,6 +530,7 @@ async function captureBase(
   } catch (error) {
     const reason = `The base build did not run: ${String(error).split('\n')[0]}`;
     ctx.log(reason);
+    review.baseError = new Vars(ctx.config.app.secrets).redact(reason) as string;
     for (const target of targets)
       if (!target.capture.after) {
         target.capture.reached = false;
@@ -570,7 +572,7 @@ async function judgeFindings(
         const candidate = candidates[index];
         if (!candidate) return { ...response('Unknown finding id'), isError: true };
         const head = await beforeParts(root, targets[index]!);
-        const base = await captureParts(root, targets[index]!.capture.after);
+        const base = await afterParts(root, targets[index]!.capture);
         return {
           content: [
             {
@@ -704,6 +706,8 @@ async function judgeFindings(
  * session. It must not file a problem that exists only on this pull request
  * as an issue of the main branch, so the review decides those candidates
  * here. A pre-existing problem stays open for that judge: the base build has it.
+ * An unclear finding is held back as `unverified`: the comparison did not
+ * finish, which disproves nothing.
  */
 async function settleCandidates(ctx: ReviewContext, sessionId: string, findings: ReviewFinding[]): Promise<void> {
   const lines = findings
@@ -711,12 +715,14 @@ async function settleCandidates(ctx: ReviewContext, sessionId: string, findings:
     .map((finding) =>
       JSON.stringify({
         candidateId: finding.candidateId,
-        decision: 'dismiss',
-        reason: `Review of PR #${ctx.pr.number}: ${finding.verdict}`,
+        ...(finding.verdict === 'unclear'
+          ? { decision: 'unverified', reason: `Review of PR #${ctx.pr.number}: not compared with the base build` }
+          : { decision: 'dismiss', reason: `Review of PR #${ctx.pr.number}: ${finding.verdict}` }),
         at: new Date().toISOString(),
       }),
     );
-  if (lines.length) await appendFile(paths.sessionDecisions(ctx.root, sessionId), `${lines.join('\n')}\n`);
+  if (lines.length)
+    await appendFile(paths.sessionDecisions(ctx.root, sessionId, ctx.config.profile), `${lines.join('\n')}\n`);
 }
 
 /**
@@ -940,7 +946,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
     });
     if (claims) {
       review.claims = claims.map((claim) => notYet(claim, 'The review stopped before it tested this claim.'));
-      await rm(paths.reviewDir(ctx.root, pr.number), { recursive: true, force: true });
+      await rm(paths.reviewDir(ctx.root, pr.number, ctx.config.profile), { recursive: true, force: true });
     }
     const platform = ctx.config.app.platform;
     const testable = (claims ?? []).filter((claim) => claim.testable);
@@ -1109,7 +1115,7 @@ async function publishReview(ctx: ReviewContext, gh: Gh, review: PrReview, teste
   ].filter((path): path is string => Boolean(path));
   const exchanges = await readExchanges(root, shown);
   if (ctx.opts.dryRun) {
-    const file = paths.review(root, pr.number).replace(/\.json$/, '.md');
+    const file = paths.review(root, pr.number, config.profile).replace(/\.json$/, '.md');
     const rendered = renderReview(review, (path) => resolve(root, path), inDiff, config.agents.review.name, exchanges);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(
@@ -1233,7 +1239,8 @@ export async function reviewPullRequest(
         'or run `bugpatrol review <pr> --dry-run` to write the review to .bugpatrol/runs/reviews/ only.',
     );
   const gh = opts.gh ?? defaultGh;
-  const ready = await ghReady(gh);
+  const source = resolve(root, config.app.source);
+  const ready = await ghReady(gh, config, source);
   if (!ready.ok) throw new ConfigError(ready.reason.replace('GitHub publish skipped', 'Review stopped'));
   const workspace = new Workspace(root, config.profile);
   const patrol = activePatrolPid((await workspace.readAgents()).patrol);
@@ -1241,9 +1248,8 @@ export async function reviewPullRequest(
     throw new ConfigError(
       `A patrol runs (pid ${patrol}), and it uses the app. Stop the patrol, or review when it waits for a new commit.`,
     );
-  const source = resolve(root, config.app.source);
   const log = opts.onLog ?? (() => {});
-  const { repo } = await resolveRepo(gh, config, source);
+  const { repo } = ready;
   try {
     const pr = await loadPullRequest(gh, repo, source, number, {
       allowFork: Boolean(opts.allowFork),

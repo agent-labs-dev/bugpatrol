@@ -1,6 +1,6 @@
 # Configuration
 
-All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root.
+All settings live in `.bugpatrol/bugpatrol.yml`. Select another repository-owned profile with `bugpatrol explore --config .bugpatrol/api.yml`. Paths remain relative to the project root. Bugpatrol rejects a key that it does not read, such as `readyUrl` in a setup command, and names the key and the supported field, so a typo never turns a setting off.
 
 ## Profiles
 
@@ -11,14 +11,16 @@ A repo can test more than one app config, for example its desktop app with `bugp
 | App map | `.bugpatrol/appmap.json` | `.bugpatrol/cli/appmap.json` |
 | Routines | `.bugpatrol/routines/` | `.bugpatrol/cli/routines/` |
 | Endpoint inventory | `.bugpatrol/endpoints.yml` | `.bugpatrol/cli/endpoints.yml` |
+| Run state: sessions, issues, fixes, lessons, triage, coverage, reviews, worktrees | `.bugpatrol/runs/` | `.bugpatrol/runs/profiles/cli/` |
+| State branch (`agents.patrol.state: branch`) | `bugpatrol-state` | `bugpatrol-state-cli` |
 
-The default config keeps the paths it always had. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folder of that profile: `explore`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, and the dashboard.
+The default config keeps the paths it always had. A profile's run state stays inside the gitignored `.bugpatrol/runs/`. A profile cannot be named `runs` or `routines`. Every command that takes `--config` reads and writes the folders of that profile: `explore`, `judge`, `fix`, `retest`, `publish`, `patrol`, `review`, `promote`, `endpoints`, `sweep`, `issue`, `memory`, `doctor`, `github sync`, `worktrees clean`, and the dashboard. `bugpatrol doctor --config <file>` prints where the profile keeps them. The app source still resolves against the project root.
 
 ### Migrating an existing non-default config
 
 Before profiles existed, a config such as `--config .bugpatrol/api.yml` kept its app map, routines and endpoint inventory in `.bugpatrol/` itself. No file says which config those files belong to, so selecting a config never moves them. When there is no default `bugpatrol.yml` and `.bugpatrol/<profile>/` does not exist yet, a command that uses the config prints a note. If the files are that config's, run `bugpatrol adopt --config .bugpatrol/api.yml` once: it moves `appmap.json`, `endpoints.yml` and the routines in `.bugpatrol/routines/` to `.bugpatrol/api/`, and prints what it moved. Commit that folder. Issues filed before the move name `bugpatrol:routine repro-x` without a profile, so they replay from `.bugpatrol/routines/`.
 
-`.bugpatrol/runs/` stays one folder for all profiles. Sessions, issues and fixes have unique ids, so the dashboard and `bugpatrol issue` see the work of every profile. The memory of lessons is shared too, and so is the review record of a pull request: review a pull request with one profile at a time. The `bugpatrol-state` branch (`agents.patrol.state: branch`) shares the app map and the routines of the default config only.
+Run state is not moved either. Sessions, issues and lessons that a profile recorded in `.bugpatrol/runs/` stay there, where the default config reads them, and the profile starts with empty run state in `.bugpatrol/runs/profiles/<profile>/`.
 
 ## The `.bugpatrol/` folder
 
@@ -31,7 +33,7 @@ Bugpatrol keeps all of its files in one folder at the root of your project:
 | `.bugpatrol/appmap.json` | The screens that the explorer found | Commit it |
 | `.bugpatrol/routines/` | The routines, and the repro routine of each issue. CI and a fresh clone replay them | Commit it |
 | `.bugpatrol/<profile>/` | The app map, routines and endpoint inventory of another config ([Profiles](#profiles)) | Commit it |
-| `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots | `init` adds it to `.gitignore` |
+| `.bugpatrol/runs/` | The local data: sessions, issues, fixes, worktrees, memory, and screenshots. `runs/profiles/<profile>/` holds the same for another config | `init` adds it to `.gitignore` |
 
 The project root is the folder that holds `.bugpatrol/`. All paths in the config (`source`, `cwd`, `instructions`) are relative to the project root. You can run a command from any folder in the project: Bugpatrol finds `.bugpatrol/` in the current folder or in a folder above it.
 
@@ -51,10 +53,11 @@ app:
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
+  # readOnly: true              # only GET, HEAD and OPTIONS reach the backend; see Read-only mode
 
 agents:
   explorer:
-    maxSteps: 150               # one step is one tool call; full coverage needs many
+    maxSteps: 150               # one step is one tool call, a hard cap; full coverage needs many
     budgetUsd: 5                # optional: a cost limit for one session in USD; no limit by default
     use: claude                 # a local agent CLI: claude | codex | kimi | opencode | pi
   judge:
@@ -115,11 +118,12 @@ Each item in `app.setup` and `app.teardown` is one shell command:
 | `run` | The shell command |
 | `cwd` | The folder for the command, relative to the project root |
 | `capture` | A map from a name to a regex. The first group of the match becomes a value, for example `{ CDP_PORT: 'CDP :(\d+)' }` |
+| `public` | Captures that are not secrets, such as a port or a terminal size, for example `[TUI_COLS, TUI_ROWS]` |
 | `background` | `true` keeps the process alive for the session. Use it for a dev server |
 | `readyWhen` | For a background command: Bugpatrol waits until the output matches this regex |
 | `timeoutMs` | The time limit. The default is 10 minutes |
 
-Later commands and `connect` can use a captured value as `${NAME}`. The explorer can use it as `{{NAME}}`. Bugpatrol treats each captured value as a secret.
+Later commands and `connect` can use a captured value as `${NAME}`. The explorer can use it as `{{NAME}}`. Bugpatrol treats each captured value as a secret, and replaces it with `{{NAME}}` wherever it shows in the app's output, except a name in `public`. A short secret such as `18` also matches ordinary numbers, so setup warns about a secret capture shorter than six characters: list it in `public` when it is not a secret. Redaction never changes a terminal's control sequences, so a short value can hide text but not break colours or layout.
 
 ## Secret interpolation
 
@@ -136,6 +140,40 @@ Repository-owned setup and teardown commands and their `cwd` may also expand
 but do not become available to the agent. Review configuration before running an
 untrusted repository: setup commands are executable code. Text redaction does
 not mask screenshots.
+
+## Read-only mode
+
+Set `app.readOnly` when the app talks to a backend whose data must not change, such as a shared or production one. Bugpatrol then lets only GET, HEAD and OPTIONS reach the backend, whatever the explorer does, and the app guide's never-do list is no longer the only thing between a key press and a write. `readOnly: true` is short for `readOnly: {}`.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `proxy` | `{}` | `NAME: upstream URL` pairs. Each one starts a loopback proxy to that backend, as the variable `{{NAME}}` |
+| `websockets` | `block` | `block` refuses every WebSocket. `pass` lets them through, less the frames in `dropFrames` |
+| `dropFrames` | `[]` | Regular expressions. A frame that the app sends on a WebSocket and that matches one is dropped. Needs `websockets: pass` |
+
+How Bugpatrol holds back the writes depends on the platform:
+
+- **Web and Electron**: the driver aborts every request of the browser that is not a read, including form posts and beacons, and applies the WebSocket rules. A web context blocks service workers, whose own requests would bypass the rules. The WebSocket rules do not reach dedicated or shared workers, so while one applies (`websockets: block`, or `dropFrames`), a page that starts a worker gets an error and the worker is logged as a blocked write. When Bugpatrol attaches to an Electron app, it reloads each app page, so that a WebSocket the app opened before is opened again under the rules. A request the app sent before Bugpatrol attached has already left, and its service workers open WebSockets that these rules do not reach, so an Electron app, launched or attached, needs its backend in `proxy`, with the app pointed at it through `{{NAME}}`.
+- **API**: the request policy sends only reads, also to a loopback or `disposable` target.
+- **CLI, desktop, iOS and Android**: the app talks to its backend itself, so Bugpatrol cannot see the requests. Name the backend in `proxy` and point the app at `{{NAME}}`; the config is rejected without a `proxy`. The proxy forwards reads, answers each other method with a 405, and applies the WebSocket rules. It refuses WebSocket compression, so `dropFrames` sees the text of each frame. Traffic that does not go through the proxy is not covered.
+
+Bugpatrol starts the proxies before setup, so setup commands, `connect` and the explorer can all use `{{NAME}}`. An upstream URL can use `${NAME}` for a secret or a variable of Bugpatrol's environment.
+
+```yaml
+app:
+  platform: cli
+  readOnly:
+    proxy:
+      API_URL: https://api.example.com
+    websockets: pass
+    dropFrames: ['"push"']       # the client's sync writes
+  connect:
+    cli:
+      env:
+        MY_APP_API_URL: '{{API_URL}}'
+```
+
+Each blocked write is logged with its method, its URL with the query values hidden, and the time. The explorer sees the writes blocked since its last step, each one is a `write-blocked` event in the session, and the session summary ends with `Read-only mode blocked N write(s).`
 
 ## Connect
 
@@ -209,7 +247,9 @@ app:
 
 A program does not create these folders itself in most cases, so create them first: start it with `mkdir -p "$XDG_CONFIG_HOME" && my-app`, or tell the explorer to in the app guide.
 
-The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you.
+The explorer drives only its own terminal. A command that would start a program outside it, such as `tmux`, `screen` or `setsid`, is refused: a multiplexer's server keeps your environment and sign-ins, so the app would run as you. Each process that a command starts ends with it: when the command exits or times out, when a program that stays open is stopped, and when the session ends. On Linux this covers a daemon that left the process group, as a tmux server does, since it is reparented to Bugpatrol's terminal helper.
+
+Each step saves a screenshot of the terminal, `NNN-<label>.png`, and its text beside it, `NNN-<label>.terminal.txt`: the command and everything it printed (or a session's screen), then the colours of each cell of the screenshot. A command's screenshot shows only its last screenful, so the judge reads the text to see output that scrolled off, and the cell colours to tell close shades apart. Characters that the bundled fonts lack, such as most emoji, draw as an outlined box of their width; the text names them.
 
 ### Connect for an API
 

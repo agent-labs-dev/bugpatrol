@@ -50,6 +50,12 @@ export type ApiFingerprintInput = {
   endpoint: EndpointKey | 'spec';
   case: CaseId | 'spec';
   assertionId: string;
+  /**
+   * The names a request sent, for a bug that only the judge sees: two such
+   * reports on one endpoint and case are distinct findings when their requests
+   * differ in shape. Values are left out, since they change each run.
+   */
+  shape?: string;
 };
 
 const FIELD_SEPARATOR = String.fromCharCode(0);
@@ -65,7 +71,12 @@ const FIELD_SEPARATOR = String.fromCharCode(0);
  */
 export function fingerprint(input: FingerprintInput | ApiFingerprintInput): string {
   if ('endpoint' in input)
-    return shortHash(['api', input.endpoint, input.case, input.assertionId].join(FIELD_SEPARATOR), 16);
+    return shortHash(
+      ['api', input.endpoint, input.case, input.assertionId, ...(input.shape ? [input.shape] : [])].join(
+        FIELD_SEPARATOR,
+      ),
+      16,
+    );
   const parts = [
     input.screenId,
     input.ruleId,

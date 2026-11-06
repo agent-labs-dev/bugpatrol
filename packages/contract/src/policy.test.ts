@@ -10,8 +10,10 @@ beforeAll(async () => {
   contract = buildContract(await loadSpec({ file: fixtureSpecPath }), {});
 });
 
-const policy = (url: string, connect: { methods?: HttpMethod[]; deny?: string[]; disposable?: boolean } = {}) =>
-  requestPolicy(contract, { url, methods: [...HTTP_METHODS], deny: [], disposable: false, ...connect });
+const policy = (
+  url: string,
+  connect: { methods?: HttpMethod[]; deny?: string[]; disposable?: boolean; readOnly?: boolean } = {},
+) => requestPolicy(contract, { url, methods: [...HTTP_METHODS], deny: [], disposable: false, ...connect });
 
 describe('requestPolicy', () => {
   it('127.0.0.2 and [::1] allow writes', () => {
@@ -32,6 +34,16 @@ describe('requestPolicy', () => {
     expect(policy('https://api.nebula-dev.ai', { disposable: true }).check('DELETE', '/items/1').ok).toBe(true);
     // A url with a placeholder that did not resolve is not loopback.
     expect(policy('http://127.0.0.1:${PORT}').writesAllowed).toBe(false);
+  });
+
+  it('app.readOnly sends only reads, also to a loopback or disposable target', () => {
+    for (const connect of [{}, { disposable: true }]) {
+      const guarded = policy('http://127.0.0.1:8000', { ...connect, readOnly: true });
+      expect(guarded.writesAllowed).toBe(false);
+      expect(guarded.allowedMethods).toEqual(['GET', 'HEAD', 'OPTIONS']);
+      expect(guarded.check('POST', '/items')).toMatchObject({ ok: false, readOnly: true, reason: /app.readOnly/ });
+      expect(guarded.check('GET', '/items/1').ok).toBe(true);
+    }
   });
 
   it('deny matches /admin/** on the template', () => {

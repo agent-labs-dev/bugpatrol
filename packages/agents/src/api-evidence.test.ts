@@ -6,10 +6,11 @@ import { buildContract, loadSpec, requestPolicy } from '@bugpatrol/contract';
 import { type EndpointKey, fingerprint, parseConfig, paths } from '@bugpatrol/core';
 import { ApiDriver, Pacer } from '@bugpatrol/drivers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { type CaptureTarget, captureTargets } from './roles/capture.js';
 import { AgentSession } from './session.js';
 import { explorerTools } from './tools/explorer.js';
 import { judgeTools } from './tools/judge.js';
-import type { ToolResult } from './types.js';
+import type { Runtime, ToolResult } from './types.js';
 import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
@@ -148,5 +149,73 @@ describe('api evidence', () => {
     // The contract passes, so only the judge can call it a bug.
     const key = { endpoint: 'GET /health' as EndpointKey, case: 'ok' as const, assertionId: 'judge:explorer' };
     expect(prints).toEqual([fingerprint(key), fingerprint(key)]);
+  });
+
+  it('keys two judge-only reports on one endpoint apart when their requests differ in shape', async () => {
+    const { session, call, workspace } = await explorer();
+    for (const url of ['/health', '/health?verbose=1', '/health?verbose=2']) {
+      await call('request', { method: 'GET', url });
+      await call('report_bug', {
+        title: `Report on ${url}`,
+        what_is_wrong: 'The body is wrong.',
+        expected: 'A right body.',
+        severity: 'minor',
+      });
+    }
+    const prints = (await workspace.readCandidates(session.sessionId)).map((candidate) => candidate.fingerprint);
+    // A query value is data, so the same parameters are the same request.
+    expect(prints[1]).toBe(prints[2]);
+    expect(prints[0]).not.toBe(prints[1]);
+  });
+
+  it('files every pending candidate of a fingerprint into the issue, and says so', async () => {
+    const { session, call, workspace } = await explorer();
+    await call('request', { method: 'GET', url: '/health' });
+    for (const title of ['Health reports the database down', 'GET /health hides a db outage'])
+      await call('report_bug', {
+        title,
+        what_is_wrong: 'GET /health says db is down with status 200.',
+        expected: 'A 503, or db up.',
+        severity: 'major',
+      });
+    const [first, second] = await workspace.readCandidates(session.sessionId);
+    const judge = new AgentSession(root, session.config, new Vars(), 'judge-session', 'judge');
+    const file = judgeTools(judge, [session.sessionId], 'test').find((tool) => tool.name === 'file_issue')!;
+    const filed = await file.run({
+      candidate_ids: [first!.id],
+      title: 'Health hides a database outage',
+      body: 'GET /health says db is down with status 200.',
+      severity: 'major',
+      reason: 'A 200 for a failing dependency.',
+    });
+    const text = filed.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+    expect(text).toContain(second!.id);
+    const [issue] = await workspace.listIssues();
+    expect(issue?.candidateIds).toEqual([first!.id, second!.id]);
+  });
+
+  it('a retest capture with no exchange to save says so, and keeps the note of the blocked flow', async () => {
+    const { session } = await explorer();
+    const targets: CaptureTarget[] = [{ capture: { routineId: 'send' }, steps: [] }];
+    const said: string[] = [];
+    const runtime: Runtime = {
+      label: 'scripted',
+      async run(task) {
+        const call = async (name: string, input: Record<string, unknown>) => {
+          const result = await task.tools.find((tool) => tool.name === name)!.run(input);
+          said.push(result.content.map((part) => (part.type === 'text' ? part.text : '')).join(''));
+          return result;
+        };
+        await call('capture_after', { target: 1, reached: true, note: 'The routine stopped at step 29.' });
+        const finished = await call('finish_retest', { summary: 'Blocked at step 29.' });
+        expect(finished.isError).toBeFalsy();
+        return { stop: 'done', steps: 2, costUsd: 0 };
+      },
+    };
+    await captureTargets(session, runtime, targets, { system: '', prompt: '', replay: { save: false } });
+    expect(said[0]).not.toContain('undefined');
+    expect(said[0]).toContain('No exchange to save for target 1');
+    expect(targets[0]!.capture).toMatchObject({ reached: false, note: 'The routine stopped at step 29.' });
+    expect(targets[0]!.capture.after).toBeUndefined();
   });
 });

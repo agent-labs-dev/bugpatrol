@@ -19,6 +19,18 @@ export class Vars {
     }
   }
 
+  /**
+   * Setup captures that are not secrets (`public`), by name: redaction leaves this value alone, but not a secret
+   * that held the same name before or after it.
+   */
+  private readonly publicValues = new Map<string, string>();
+
+  /** Marks a setup capture as a plain value, not a secret. */
+  setPublic(name: string, value: string): void {
+    this.publicValues.set(name, value);
+    this.set(name, value);
+  }
+
   set(name: string, value: string): void {
     const previous = this.values.get(name);
     if (previous !== undefined && previous !== value && !this.responseNames.has(name))
@@ -110,7 +122,8 @@ export class Vars {
     }
     if (typeof value === 'string') {
       const entries = [...this.entries(), ...this.historicalValues, ...this.configValues.entries()].filter(
-        ([name, secret]) => secret.length > 0 && !this.responseNames.has(name),
+        ([name, secret]) =>
+          secret.length > 0 && !this.responseNames.has(name) && this.publicValues.get(name) !== secret,
       );
       entries.sort((a, b) => b[1].length - a[1].length);
       let result = value;

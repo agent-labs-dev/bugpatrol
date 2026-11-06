@@ -84,6 +84,22 @@ export const PROBE_SOURCE = String.raw`
     return parts.join(' > ');
   }
 
+  // True when the point is outside the visible box of an ancestor that clips
+  // its overflow, and the element is not painted there under anything else.
+  // Covered elements are still in the stack at the point; clipped ones are not.
+  // The stack check also keeps an absolutely placed element whose containing
+  // block sits outside the scroll box, which that box does not clip.
+  function clippedAt(el, x, y) {
+    if (document.elementsFromPoint(x, y).includes(el)) return false;
+    for (let node = el.parentElement; node && node !== document.documentElement; node = node.parentElement) {
+      const cs = getComputedStyle(node);
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+      const box = node.getBoundingClientRect();
+      if (x < box.left || x > box.right || y < box.top || y > box.bottom) return true;
+    }
+    return false;
+  }
+
   function hasText(el) {
     for (const child of el.childNodes) {
       if (child.nodeType === 3 && child.textContent.trim().length > 0) return true;
@@ -126,6 +142,10 @@ export const PROBE_SOURCE = String.raw`
         // Walking up from the hit target means a click landing on a child of the
         // element still counts as reaching it.
         hitSelector = hit && (hit === el || el.contains(hit)) ? selectorFor(el) : hit ? selectorFor(hit) : undefined;
+        // An element scrolled out of its scroll box is not painted at its own
+        // centre at all: the point hits whatever is around the box. That is
+        // reachable by scrolling, not covered, so it is not judged from here.
+        if (hitSelector !== undefined && hitSelector !== selectorFor(el) && clippedAt(el, cx, cy)) hitSelector = undefined;
       }
     }
 

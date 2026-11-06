@@ -5,6 +5,7 @@ import {
   runSweep,
   type SweepPlan,
   type SweepResult,
+  sessionRevision,
   startApp,
   Vars,
   Workspace,
@@ -63,7 +64,11 @@ export async function runSweepCommand(
     const url = connect.url ?? config.run?.url;
     if (!url) throw new ConfigError('bugpatrol sweep needs app.connect.url');
     const contract = await loadContract(root, { ...connect, url }, resolveConfig, config.profile);
-    const policy = requestPolicy(contract, { ...connect, url: resolveConfig(url) });
+    const policy = requestPolicy(contract, {
+      ...connect,
+      url: resolveConfig(url),
+      readOnly: Boolean(config.app.readOnly),
+    });
     // Setup did not run, so the headers keep their placeholders.
     const credentials = apiCredentials(connect, (value) => value);
     const plan = planSweep(sweepCases(contract, { credentials }), policy, await workspace.readCoverage());
@@ -93,7 +98,7 @@ export async function runSweepCommand(
     );
     if (!(driver instanceof ApiDriver)) throw new ConfigError('bugpatrol sweep needs the api driver');
     await driver.connect();
-    const record = await workspace.startSession('explorer');
+    const record = await workspace.startSession('explorer', await sessionRevision(root, config));
     session = new AgentSession(root, config, vars, record.id, 'explorer', driver);
     const credentials = apiCredentials(config.app.connect, (value) => value);
     const cases = sweepCases(driver.policy.contract, { credentials });
@@ -185,6 +190,7 @@ function printResult(
     log(`${label}  ${finding.summary}${note}`);
   }
   for (const item of result.skipped) log(`skipped  ${item.key}: ${item.reason}`);
+  for (const cell of result.cells) if (cell.blocked) log(`blocked  ${cell.endpoint} ${cell.case}: ${cell.blocked}`);
   log(
     `\n${result.requests} request(s), ${result.cells.length} cell(s) written, ${result.remaining} case(s) left for the next run` +
       `${result.stopped ? ` (stopped: ${result.stopped})` : ''}.`,

@@ -7,6 +7,7 @@ import type {
   SessionSignal,
 } from '@bugpatrol/core';
 import type { Driver, Observation } from '@bugpatrol/drivers';
+import { terminalRecord } from './evidence.js';
 import type { EventSink } from './types.js';
 import type { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
@@ -22,6 +23,8 @@ export class AgentSession {
   previousObservation?: Observation;
   /** The last capture file: a PNG, or the exchange JSON of an API. */
   lastCapture?: string;
+  /** The text of the terminal beside the last capture (see `Evidence`), on a CLI app. */
+  lastTerminal?: string;
   lastScreenId?: string;
   lastScreenTrailIndex = 0;
   /** Where the app was when lastScreenId was recorded. */
@@ -29,6 +32,8 @@ export class AgentSession {
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
+  /** Read-only mode: the writes of the app that Bugpatrol blocked in this session. */
+  writesBlocked = 0;
   private spentUsd = 0;
   private runtimeLabel = '';
   private statusQueue: Promise<unknown> = Promise.resolve();
@@ -69,6 +74,7 @@ export class AgentSession {
           this.lastObservation = undefined;
           this.previousObservation = undefined;
           this.lastCapture = undefined;
+          this.lastTerminal = undefined;
           this.lastScreenId = undefined;
           this.lastScreenLocation = undefined;
           this.lastScreenTrailIndex = 0;
@@ -109,7 +115,8 @@ export class AgentSession {
 
   /**
    * Saves what the observation shows: a PNG, or for an API the exchange as
-   * `exchange.json`. An API that has had no request yet has no file.
+   * `exchange.json`. An API that has had no request yet has no file. A
+   * terminal's text goes beside its PNG.
    */
   async capture(observation: Observation, label: string): Promise<string | undefined> {
     const { capture } = observation;
@@ -126,8 +133,25 @@ export class AgentSession {
     if (this.lastObservation !== observation) this.previousObservation = this.lastObservation;
     this.lastObservation = observation;
     this.lastCapture = file;
+    this.lastTerminal =
+      file && observation.terminal
+        ? await this.workspace.saveTerminalText(file, this.vars.redact(terminalRecord(observation.terminal)) as string)
+        : undefined;
+    this.reportBlockedWrites(observation.blockedWrites);
     await this.recordSignals(observation);
     return file;
+  }
+
+  /**
+   * One event for each write that read-only mode blocked. Without `lines`, it
+   * takes those that no observation reported yet, so none goes unreported at
+   * the end of a session.
+   */
+  reportBlockedWrites(lines: string[] = this.driver?.writes?.drain() ?? []): void {
+    for (const line of lines) {
+      this.writesBlocked++;
+      this.emit({ kind: 'write-blocked', summary: `Read-only mode blocked ${line}` });
+    }
   }
 
   /**

@@ -170,14 +170,14 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const outcomes: PublishOutcome[] = [];
   let resolved: Awaited<ReturnType<typeof resolveRepo>> | undefined;
   if (!deps.dryRun) {
-    const ready = await ghReady(gh);
+    const ready = await ghReady(gh, config, resolve(root, config.app.source));
     if (!ready.ok) {
       const record = await workspace.startSession('judge');
       await workspace.endSession(record.id, { summary: ready.reason });
       deps.onLog?.(ready.reason);
       return [];
     }
-    resolved = await resolveRepo(gh, config, resolve(root, config.app.source));
+    resolved = { repo: ready.repo, defaultBranch: ready.defaultBranch };
     const handled = await reuseFiled(
       gh,
       resolved.repo,
@@ -388,7 +388,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
             });
             let url: string;
             if (deps.dryRun) {
-              const dir = paths.publish(root);
+              const dir = paths.publish(root, config.profile);
               await mkdir(dir, { recursive: true });
               url = join(dir, `${item.issue.id}.md`);
               await writeFile(url, body);
@@ -403,7 +403,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
                 fix: item.fix,
                 issue: item.issue,
                 commitMessage: title,
-                memoryRoot: root,
+                memory: workspace,
               });
               url = opened.url;
               item.fix.pr = {

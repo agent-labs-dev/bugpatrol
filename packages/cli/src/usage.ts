@@ -1,9 +1,14 @@
 export const USAGE = `bugpatrol - a continuously-running QA engineer for your repo
 
+Global options
+  --config <file>                         use this config file, a profile such as .bugpatrol/cli.yml, before or
+                                          after the command: bugpatrol --config .bugpatrol/cli.yml review 12.
+                                          Paths stay relative to the project root. Default: .bugpatrol/bugpatrol.yml
+
 Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
-  bugpatrol doctor                        verify env: pinned image, fonts, browser, network, disk
+  bugpatrol doctor                        check the config, Node, the agents, and what the platform needs
   bugpatrol adopt --config <file>         move the shared app map and routines into that config's folder
 
 Recon
@@ -33,7 +38,9 @@ Agents
   bugpatrol replay <routine-id>
   bugpatrol endpoints [--spec URL|file] [--json]   the endpoints of the api contract
   bugpatrol sweep [--json] [--max-requests N] [--dry-run]   test each api endpoint × case, no model
-  bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
+  bugpatrol issue list | show <id> | reopen <id>
+  bugpatrol issue dismiss <id> --reason "..." [--by name]
+  bugpatrol issue fixed <id> --reason "..." [--commit sha] [--by name]
   bugpatrol memory list [--role r] | add --role r "text" [--scope s]
   bugpatrol memory remove <id> | retire <id> --reason "..."
 
@@ -44,9 +51,7 @@ Baselines
   bugpatrol baseline accept --clean       bulk-accept everything non-blocking
 
 Triage
-  bugpatrol findings list [--route issue|question]
-  bugpatrol findings explain <id>
-  bugpatrol findings accept <id> --reason "intentional"
+  bugpatrol findings list [--session <id>]   the findings of the last session, and what became of each
   bugpatrol intent list|export|prune
 
 Dashboard
@@ -86,13 +91,16 @@ export const COMMAND_HELP: Record<string, string> = {
   explore: `bugpatrol explore [--goal "..."] [--steps N]
   Run setup, let the explorer use the app and report problems, then run teardown.
   The reports are candidates. Run \`bugpatrol judge\` to file the real bugs as issues.
-  --goal "..."    what to test, for example "Test the checkout flow"
+  --goal "..."    what to test, for example "Test the checkout flow". On an api app,
+                  the endpoints the goal names come first, and the summary names
+                  the ones the run did not reach
   --steps N       the step limit (default: agents.explorer.maxSteps)
 `,
   judge: `bugpatrol judge [--session <id>]...
   File the real bugs from the explorer's candidates as issues, and dismiss the rest.
   With no --session, the judge reads the recent explorer sessions that have candidates.
-  It skips the candidates that it already decided.
+  It skips the candidates that it already decided, and names each session that it
+  skips because it was recorded at another commit of the source.
   --session <id>  judge this session only. You can give the flag more than one time.
 `,
   fix: `bugpatrol fix [--issue <id>]...
@@ -159,6 +167,9 @@ export const COMMAND_HELP: Record<string, string> = {
   The fixer and GitHub steps run only when you turn them on.
   Explore and judge run only when the commit changed since the last full cycle. The fixes, retests,
   publish, and CI checks run in each cycle.
+  Each cycle checks out the latest agents.patrol.pull commit (default origin/main) as a detached HEAD.
+  When the patrol stops, it puts the checkout back on the branch it started from.
+  Set agents.patrol.pull: false to test the checkout as it is.
   --once          run one cycle, then stop
   --force         explore and judge in the first cycle also when the commit did not change
   --state <s>     local | branch: share the state on the bugpatrol-state branch (default: agents.patrol.state)
@@ -183,8 +194,19 @@ export const COMMAND_HELP: Record<string, string> = {
   github: `bugpatrol github sync
   Read the state of each PR and issue from GitHub. A closed PR becomes a lesson. An issue closed as not planned becomes a dismissal.
 `,
-  issue: `bugpatrol issue list | dismiss <id> --reason "..." [--by name] | reopen <id>
-  List the issues, worst first, or change the state of one issue.
+  findings: `bugpatrol findings list [--session <id>]
+  List the findings (candidates) of the last explore or sweep session that has any, or of one session,
+  with what became of each: filed as an issue, dismissed, ignored, or waiting for the judge.
+  --session <id>  the findings of this session
+`,
+  issue: `bugpatrol issue list | show <id> | dismiss <id> | fixed <id> | reopen <id>
+  List the issues, worst first, show one, or change the state of one issue.
+  list                                       the issues, worst first
+  show <id>                                  the body, the judge's reason, and the evidence paths
+  dismiss <id> --reason "..." [--by name]    close it as not a bug; its findings do not come back
+  fixed <id> --reason "..." [--commit sha] [--by name]
+                                             close it as fixed, for example by hand; a later sighting reopens it as a regression
+  reopen <id>                                open a closed issue again
 `,
   memory: `bugpatrol memory list [--role r] | add --role r "text" [--scope s] | remove <id> | retire <id> --reason "..."
   Look at and change the lessons that the agents learned.
@@ -192,12 +214,19 @@ export const COMMAND_HELP: Record<string, string> = {
   dashboard: `bugpatrol dashboard [--port N]
   Serve the dashboard on http://127.0.0.1:4311. It updates live, and it does not stop by itself.
 `,
-  doctor: `bugpatrol doctor
-  Check the config, Node, the browser, and the environment.
+  doctor: `bugpatrol doctor [--config <file>]
+  Check that this machine can run the selected config: the config file, Node 22, the LLM of each
+  agent, and gh when agents.github is on. Then what the platform needs: Chromium for Playwright for
+  web, and that the app URL answers when no setup command starts it (web and api); python3 for cli;
+  Linux and the launch commands for desktop. A config with a run block also gets the gate checks:
+  the pinned runner image and the AppModel. Exits 2 when a required check fails.
 `,
 };
 
+const GLOBAL =
+  '  --config <file>  read this config file, a profile such as .bugpatrol/cli.yml, in place of .bugpatrol/bugpatrol.yml\n';
+
 export function commandHelp(command: string): string | undefined {
   const help = COMMAND_HELP[command];
-  return help && `${help}\nDocs: ${DOCS}\n`;
+  return help && `${help}${GLOBAL}\nDocs: ${DOCS}\n`;
 }

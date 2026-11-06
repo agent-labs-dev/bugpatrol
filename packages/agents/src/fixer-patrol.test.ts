@@ -1005,7 +1005,7 @@ describe('patrol', () => {
     },
   );
 
-  it('the judge also reads a finding that waits from an earlier session', async () => {
+  it('the judge leaves out an earlier finding when neither revision is known, and says so', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-patrol-'));
     try {
       const workspace = new Workspace(root);
@@ -1023,10 +1023,12 @@ describe('patrol', () => {
       });
       await workspace.endSession(earlier.id, { summary: 'Sweep' });
       const prompts: string[] = [];
+      const logs: string[] = [];
       await runPatrol({
         root,
         config,
         once: true,
+        onLog: (line) => logs.push(line),
         createDriver: () => new FakeDriver({ home: { elements: [] } }),
         createRuntime: () => ({
           label: 'scripted',
@@ -1036,9 +1038,60 @@ describe('patrol', () => {
           },
         }),
       });
-      expect(prompts).toEqual([expect.stringContaining('Earlier sweep failure')]);
+      // No git here: two unknown revisions are not the same revision.
+      expect(prompts.join('\n')).not.toContain('Earlier sweep failure');
+      expect(logs).toContainEqual(expect.stringMatching(new RegExp(`Did not judge 1 candidate.*${earlier.id}`)));
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('the judge leaves out a waiting finding recorded at another revision of the source, and says so', async () => {
+    const f = await repoFixture();
+    try {
+      const head = (await git(f.source, 'rev-parse', 'HEAD')).stdout.trim();
+      const waiting = async (revision: string | undefined, summary: string) => {
+        const earlier = await f.workspace.startSession('explorer', revision);
+        await f.workspace.appendCandidate(earlier.id, {
+          id: `can_${summary.length}`,
+          sessionId: earlier.id,
+          source: 'explorer',
+          fingerprint: `fp-${summary}`,
+          summary,
+          severity: 'minor',
+          evidence: { capture: { kind: 'image', screenshot: 'reported.png' }, steps: [] },
+          route: { to: 'judge', reason: 'Explorer reported a visible bug' },
+          createdAt: new Date().toISOString(),
+        });
+        await f.workspace.endSession(earlier.id, { summary: 'Stopped' });
+        return earlier.id;
+      };
+      const stale = await waiting('0000000000000000000000000000000000000000', 'Fixed since');
+      await waiting(undefined, 'Revision not known');
+      await waiting(head, 'Still at this revision');
+      const prompts: string[] = [];
+      const logs: string[] = [];
+      await runPatrol({
+        root: f.root,
+        config: parseConfig({ ...config, app: { source: 'source', connect: { url: 'fake://home' } } }),
+        once: true,
+        onLog: (line) => logs.push(line),
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run(task) {
+            if (task.role === 'judge') prompts.push(task.prompt);
+            return { stop: 'done', steps: 1, costUsd: 0, summary: 'Done' };
+          },
+        }),
+      });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('Still at this revision');
+      expect(prompts[0]).not.toContain('Fixed since');
+      expect(prompts[0]).not.toContain('Revision not known');
+      expect(logs).toContainEqual(expect.stringMatching(new RegExp(`Did not judge 2 candidate.*${stale}`)));
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
     }
   });
 
@@ -1145,6 +1198,41 @@ describe('patrol pull', () => {
       );
       expect((await git(f.source, 'rev-parse', f.branch)).stdout.trim()).toBe(before);
       expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('fixed\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('puts the checked-out branch back after a --once cycle, and says so', async () => {
+    const f = await remoteFixture();
+    try {
+      await git(f.source, 'checkout', '-q', '-b', 'feature');
+      const logs: string[] = [];
+      let tested: string | undefined;
+      const config = parseConfig({
+        ...f.config,
+        agents: { ...f.config.agents, memory: { enabled: false }, judge: { enabled: false } },
+      });
+      await runPatrol({
+        root: f.root,
+        config,
+        once: true,
+        onLog: (message) => logs.push(message),
+        createDriver: () => new FakeDriver({ home: { elements: [] } }),
+        createRuntime: () => ({
+          label: 'scripted',
+          async run() {
+            tested = await readFile(join(f.source, 'app.txt'), 'utf8');
+            return { stop: 'done', steps: 0, costUsd: 0 };
+          },
+        }),
+      });
+      // The cycle tested the pulled commit, then the checkout went back to the branch.
+      expect(tested).toBe('fixed\n');
+      expect((await git(f.source, 'branch', '--show-current')).stdout.trim()).toBe('feature');
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('broken\n');
+      expect(logs[0]).toMatch(/^Pulled origin\/\S+ at \w+, a detached HEAD: the checkout was on branch feature\.$/);
+      expect(logs.at(-1)).toMatch(/^Put the checkout back on branch feature\. The cycle tested \w+\.$/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

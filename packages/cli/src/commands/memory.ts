@@ -7,9 +7,14 @@ const flag = (args: string[], name: string) => {
   return at < 0 ? undefined : args[at + 1];
 };
 
-export async function runMemoryCommand(args: string[], root: string, log: (line: string) => void): Promise<void> {
+export async function runMemoryCommand(
+  args: string[],
+  root: string,
+  log: (line: string) => void,
+  profile?: string,
+): Promise<void> {
   const [action = 'list', id, ...rest] = args;
-  const workspace = new Workspace(root);
+  const workspace = new Workspace(root, profile);
   if (action === 'list') {
     const role = flag(args.slice(1), '--role');
     if (role && !roles.has(role as LessonRole)) throw new ConfigError(`Unknown memory role: ${role}`);

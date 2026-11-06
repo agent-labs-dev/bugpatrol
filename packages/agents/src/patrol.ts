@@ -16,7 +16,7 @@ import { recheckMerged, runFixCycle } from './roles/retest.js';
 import { cleanWorktrees } from './roles/worktrees.js';
 import { createRuntime } from './runtime/index.js';
 import { AgentSession } from './session.js';
-import { pullState, pushState, STATE_BRANCH } from './state-branch.js';
+import { pullState, pushState, stateBranch } from './state-branch.js';
 import { runSweep } from './sweep.js';
 import { pendingCandidates } from './tools/judge.js';
 import type { RoleOutcome } from './types.js';
@@ -64,13 +64,56 @@ export async function pullSource(
       return false;
     }
     await git(source, 'fetch', '-q', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
+    const from = await checkoutOf(source);
     await git(source, 'checkout', '-q', '--detach', `${remote}/${branch}`);
-    onLog?.(`Pulled ${target} at ${await git(source, 'rev-parse', '--short', 'HEAD')}.`);
+    const at = await git(source, 'rev-parse', '--short', 'HEAD');
+    onLog?.(
+      from?.branch
+        ? `Pulled ${target} at ${at}, a detached HEAD: the checkout was on branch ${from.branch}.`
+        : `Pulled ${target} at ${at}.`,
+    );
     return true;
   } catch (error) {
     const reason = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
     onLog?.(`Did not pull ${target}: ${reason}. The cycle uses the current checkout.`);
     return false;
+  }
+}
+
+/** Where a checkout is: its commit, and its branch unless HEAD is detached. */
+type Checkout = { commit: string; branch?: string };
+
+async function checkoutOf(source: string): Promise<Checkout | undefined> {
+  try {
+    const commit = await git(source, 'rev-parse', 'HEAD');
+    const branch = await git(source, 'symbolic-ref', '--short', '-q', 'HEAD').catch(() => '');
+    return { commit, ...(branch && { branch }) };
+  } catch {
+    return undefined;
+  }
+}
+
+const describeCheckout = (at: Checkout) => (at.branch ? `branch ${at.branch}` : `commit ${at.commit.slice(0, 7)}`);
+
+/**
+ * Puts the source checkout back where it was when the patrol started, after
+ * pullSource moved it, so a one-off cycle in the checkout where someone works
+ * does not leave their branch behind a detached HEAD. A checkout that git
+ * refuses, for example over a local change, stays as it is, and the log says
+ * how to go back.
+ */
+async function restoreSource(source: string, from: Checkout, onLog?: (message: string) => void): Promise<void> {
+  const now = await checkoutOf(source);
+  if (!now || (now.commit === from.commit && now.branch === from.branch)) return;
+  const tested = now.commit.slice(0, 7);
+  try {
+    await git(source, 'checkout', '-q', ...(from.branch ? [from.branch] : ['--detach', from.commit]));
+    onLog?.(`Put the checkout back on ${describeCheckout(from)}. The cycle tested ${tested}.`);
+  } catch (error) {
+    const reason = (error as { stderr?: string }).stderr?.trim() || (error as Error).message;
+    onLog?.(
+      `Left HEAD detached at ${tested}; it was on ${describeCheckout(from)}. Run \`git checkout ${from.branch ?? from.commit}\` in ${source} to go back. Git said: ${reason}`,
+    );
   }
 }
 
@@ -83,6 +126,14 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The revision that a session outside a patrol tests: the source commit. An
+ * external backend's revision is its deploy, which only a patrol probes.
+ */
+export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | undefined> {
+  return externalBackend(config.app) ? undefined : sourceCommit(root, config);
 }
 
 function alive(pid: number): boolean {
@@ -172,6 +223,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
   // with --once tests only new commits. --force tests the first cycle anyway.
   let tested = options.force ? undefined : previous?.commit;
   const shared = config.agents.patrol.state === 'branch';
+  const source = resolve(root, config.app.source);
+  const startedAt = config.agents.patrol.pull ? await checkoutOf(source) : undefined;
+  const branch = stateBranch(config.profile);
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
@@ -187,8 +241,8 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       await pullSource(root, config, options.onLog);
       if (shared) {
         try {
-          const { changed } = await pullState(root, STATE_BRANCH);
-          options.onLog?.(`Pulled the state from ${STATE_BRANCH}: ${changed} file(s) changed.`);
+          const { changed } = await pullState(root, branch, config.profile);
+          options.onLog?.(`Pulled the state from ${branch}: ${changed} file(s) changed.`);
           // Another writer may have tested a newer commit. --force still tests the first cycle.
           if (!(options.force && cycle === 1)) tested = (await workspace.readAgents()).patrol?.commit ?? tested;
         } catch (error) {
@@ -240,13 +294,14 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             (value) => vars.redact(value) as string,
             resolve(root, config.app.source),
             app.contract,
+            app.writes,
           );
           await driver.connect();
           let explorerId: string | undefined;
           // L14: an explorer that runs out of time still has candidates, so the judge runs before the cycle fails.
           let timedOut: RoleOutcome | undefined;
           if (config.agents.explorer.enabled && !interrupted) {
-            const record = await workspace.startSession('explorer');
+            const record = await workspace.startSession('explorer', commit);
             explorerId = record.id;
             const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, options.onLog);
             activeSession = session;
@@ -287,10 +342,25 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
             const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, options.onLog);
             activeSession = session;
             // The judge reads every finding that waits, also from an earlier
-            // session (a sweep alone, a cycle that stopped), not only this one.
+            // session (a sweep alone, a cycle that stopped), not only this one,
+            // when that session tested this revision: a finding recorded at
+            // another one may be fixed in this one.
             const earlier: string[] = [];
-            for (const { id } of await workspace.listSessions(Infinity))
-              if (id !== explorerId && (await pendingCandidates(session, [id])).length) earlier.push(id);
+            const stale: { id: string; candidates: number }[] = [];
+            for (const { id, revision } of await workspace.listSessions(Infinity)) {
+              if (id === explorerId) continue;
+              const waiting = (await pendingCandidates(session, [id])).length;
+              if (!waiting) continue;
+              // Two unknown revisions are not one revision: a dirty or untracked source has none.
+              if (commit && revision === commit) earlier.push(id);
+              else stale.push({ id, candidates: waiting });
+            }
+            if (stale.length)
+              options.onLog?.(
+                `Did not judge ${stale.reduce((sum, item) => sum + item.candidates, 0)} candidate(s) of ` +
+                  `${stale.length} earlier session(s) recorded at another revision than ${commit?.slice(0, 7) ?? 'this unknown one'}: ` +
+                  `${stale.map((item) => item.id).join(', ')}. Judge one with \`bugpatrol judge --session <id>\`.`,
+              );
             unfinished(
               'Judge',
               await runJudge(session, runtime(config.agents.judge.use), { sessionIds: [explorerId, ...earlier] }),
@@ -363,11 +433,9 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
       if (shared) {
         try {
-          const { commit: pushed } = await pushState(root, STATE_BRANCH);
+          const { commit: pushed } = await pushState(root, branch, config.profile);
           options.onLog?.(
-            pushed
-              ? `Pushed the state to ${STATE_BRANCH} at ${pushed.slice(0, 7)}.`
-              : 'The shared state did not change.',
+            pushed ? `Pushed the state to ${branch} at ${pushed.slice(0, 7)}.` : 'The shared state did not change.',
           );
         } catch (error) {
           problems.push(`Cycle ${cycle}: did not push the state: ${String(error)}`);
@@ -380,6 +448,7 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
     }
   } finally {
+    if (startedAt) await restoreSource(source, startedAt, options.onLog);
     // No cycle follows, so the dashboard must not show a next patrol.
     await workspace.setPatrol({ state: 'stopped', nextAt: undefined });
     process.off('SIGINT', onSignal);

@@ -51,6 +51,29 @@ such as no credentials, a bad body, a missing id, the data of another user,
 and a second delete. Bugpatrol checks each response against the spec: the
 status, the content type, and the body schema.
 
+The request that must succeed passes only on a 2xx or 3xx that the operation
+declares, or on any 2xx when it declares none. A declared error status is
+not a success. A status that the spec declares also fills its own
+`declared:<code>` column of the matrix, which checks only the content type
+and the body of that status.
+
+Some responses show that a case could not test what it is for. The case is
+then blocked, with the reason, and it gives no finding:
+
+- A 401 to the configured credentials: the endpoint needs another scheme, for
+  example a session cookie, so the credentials are not accepted for it.
+- A 503 that the spec or `connect.errors` declares: the API lacks a dependency,
+  for example an optional OAuth provider. A declared 503 also passes
+  `contract:no-5xx`. A declared 500 does not.
+
+A path parameter takes a known id from the spec example, a credential
+header, the list on its collection, or the create on its collection, in that
+order, for each method on the path. A DELETE that deletes a resource uses only
+an id that the sweep created; its missing-id case can use a listed id. A
+list that returns no id blocks the case as `no known id`. A body field with
+the name of a path parameter takes the value of that parameter, so an upsert
+such as `PUT /secrets/{name}` sends the same name in its path and its body.
+
 For a missing id, Bugpatrol changes a known id and keeps its shape: the
 prefix, the length, and the character classes. Without a known id, the made-up
 id can have a wrong format, so a declared 400 or 422 also passes.
@@ -64,10 +87,17 @@ with all users, so the judge decides. A run stops at
 
 The patrol runs the sweep first in each explorer session of an api app. Then
 the explorer tests the endpoints with a model. It starts with the endpoints
-that have no coverage, and with the failures that did not repeat. The judge
+that have no coverage, and with the failures that did not repeat. With
+`--goal`, the endpoints that the goal names come first: the ones under a path
+of the goal, such as `/v1/runs/*`, or else the ones whose path has a word of
+the goal. When the run ends with some of them never requested, its summary
+says `Goal not met` and names them, so a run that spent its steps elsewhere
+does not read as a clean result. The judge
 reads the candidates of both, and it files one issue for each failure.
 The issue key is the endpoint, the case, and the failed check, so the same
-failure in a later run adds to its issue.
+failure in a later run adds to its issue. A report that no contract check
+confirms is also keyed on the query parameter names and JSON body keys of its
+request, so two different problems on one endpoint stay apart.
 
 ### The request policy
 
@@ -75,6 +105,7 @@ All requests go through one request policy:
 
 - Writes go out only to a loopback URL (`127.0.0.0/8`, `[::1]`, `localhost`),
   or when `disposable: true`. Any other target gets only GET, HEAD, and OPTIONS.
+  With `app.readOnly` on, every target gets only these.
 - `methods` makes the allowed methods fewer. It never adds a method.
 - Bugpatrol never requests an endpoint in `deny`, or an operation that the spec
   marks with `x-bugpatrol-skip`. A deny glob matches a path template, with an
@@ -117,7 +148,9 @@ header. For example, `X-Workspace-Id` fills `{workspace_id}`.
 Write each token as a `${NAME}` placeholder. The name must be in `app.secrets`,
 or a setup step must capture it. A setup step can get a short-lived token, for
 example with `capture`. Bugpatrol redacts each credential from the evidence,
-the logs, and the issues.
+the logs, and the issues. An exchange still names each credential header it
+sent, as `authorization: [redacted]`, so a reader sees that a request carried
+credentials.
 
 ### Deploys
 
@@ -163,7 +196,8 @@ spec skips, with the reason, and the cases that no run tested yet.
 
 The evidence of an API is text, not a screenshot
 ([ADR 0008](adr/0008-api-evidence-is-text.md)). Each request gives an HTTP
-exchange: the request line, the headers that the step set, the status, the
+exchange: the request line, the headers that the request sent (the value of a
+credential header shows as `[redacted]`), the status, the
 allowed response headers, the body, and the latency. For a
 `text/event-stream` response, the driver keeps a bounded text prefix and
 parses its events into the exchange. It stops after the byte, time, or event
@@ -179,6 +213,12 @@ request. Then use `{{RESPONSE_ITEM_ID}}` in the next URLs and bodies. Each
 replay gets a new value. A capture holds an identifier, not a secret: it
 cannot replace a setup variable or a credential. Bugpatrol never guesses that
 a literal value is an id.
+
+A model sees the first 8000 characters of a body. To read further, the
+explorer's `look` takes a JSON pointer into the last response body, such as
+`/result/0`, and its `spec` tool reads one part of the OpenAPI spec, such as
+`/components/schemas/Item`, however large the spec document is. A part over
+the limit names its keys, so the next pointer can go deeper.
 
 ## Run a disposable stack
 

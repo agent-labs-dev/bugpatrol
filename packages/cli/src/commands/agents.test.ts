@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { parseAgentFlags, preflight } from './agents.js';
+import { parseAgentFlags, preflight, staleSessions } from './agents.js';
 
 describe('preflight', () => {
   const bin = mkdtempSync(join(tmpdir(), 'bugpatrol-bin-'));
@@ -84,5 +84,13 @@ describe('agent command flags', () => {
     expect(() => parseAgentFlags('retest', ['--issue', 'x', '--pr', '1', '--branch', 'b'])).toThrow(/one of/);
     expect(() => parseAgentFlags('retest', ['--issue', 'x', '--pr', 'abc'])).toThrow(/pull request number or URL/);
     expect(() => parseAgentFlags('retest', ['--issue', 'x', '--allow-fork'])).toThrow(/need --worktree/);
+  });
+});
+
+describe('judge session selection', () => {
+  it('judges by default only a session recorded at the same known revision', () => {
+    const sessions = [{ id: 'same', revision: 'abc' }, { id: 'other', revision: 'def' }, { id: 'unknown' }];
+    expect(staleSessions(sessions, 'abc').map((item) => item.id)).toEqual(['other', 'unknown']);
+    expect(staleSessions(sessions, undefined).map((item) => item.id)).toEqual(['same', 'other', 'unknown']);
   });
 });

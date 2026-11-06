@@ -127,6 +127,17 @@ describe('API driver against the fixture API', () => {
     expect(formatHttpExchange(write!)).not.toContain('fixture-token');
   });
 
+  it('shows the configured credential headers that were sent, with their values redacted', async () => {
+    await driver.act({ kind: 'request', method: 'GET', url: '/items' });
+    expect((await exchange())?.request.headers).toEqual({
+      authorization: '[redacted]',
+      'x-workspace-id': '[redacted]',
+    });
+    expect(formatHttpExchange((await exchange())!)).toContain('authorization: [redacted]');
+    await driver.act({ kind: 'request', method: 'GET', url: '/items', as: 'none' });
+    expect((await exchange())?.request.headers).toEqual({});
+  });
+
   it('sends each credential set, and none for as: none', async () => {
     const owners = async (as: 'self' | 'other' | 'none') => {
       await driver.act({ kind: 'request', method: 'GET', url: '/items', as });
@@ -283,7 +294,12 @@ describe('API driver against the fixture API', () => {
       headers: { api_key: 'planted-header-key', 'X-Session': 'planted-session' },
     });
     const evidence = (await exchange())!;
-    expect(evidence.request.headers).toEqual({ api_key: '[redacted]', 'x-session': '[redacted]' });
+    expect(evidence.request.headers).toEqual({
+      authorization: '[redacted]',
+      'x-workspace-id': '[redacted]',
+      api_key: '[redacted]',
+      'x-session': '[redacted]',
+    });
     const text = formatHttpExchange(evidence);
     expect(text).toContain('"api_key": "[redacted]"');
     for (const secret of ['planted-header-key', 'planted-body-key', 'planted-session'])

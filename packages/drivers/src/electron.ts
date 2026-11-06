@@ -1,6 +1,7 @@
 import { isLoopback } from '@bugpatrol/contract';
 import { InfrastructureError } from '@bugpatrol/core';
 import { chromium, type Page } from 'playwright';
+import { guardBrowser, type ReadOnlyOptions } from './readonly.js';
 import { WebDriver } from './web.js';
 
 type AppPageCandidate = { url: string; visible: boolean; focused: boolean };
@@ -64,8 +65,9 @@ export class ElectronDriver extends WebDriver {
     private readonly target: ElectronTarget,
     allowedOrigins: string[] = [],
     private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
+    readOnly?: ReadOnlyOptions,
   ) {
-    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins });
+    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly });
   }
 
   override async connect(): Promise<void> {
@@ -81,7 +83,17 @@ export class ElectronDriver extends WebDriver {
     if (!this.context) {
       throw new Error('Electron CDP connection has no context');
     }
+    // Before any page is chosen, so no request of the app slips past.
+    const { readOnly } = this.options;
+    if (readOnly) await guardBrowser(this.context, readOnly);
     this.page = await this.choosePage();
+    // WebSocket routes apply from a page's next load, and a socket opened before connect is not
+    // held back at all, so each app page loads again.
+    if (readOnly && (readOnly.websockets === 'block' || readOnly.dropFrames.length)) {
+      for (const page of this.context.pages()) {
+        if (URL.canParse(page.url()) && !browserOwnedProtocols.has(new URL(page.url()).protocol)) await page.reload();
+      }
+    }
     this.home = new URL(this.page.url());
     for (const page of this.context.pages()) {
       this.watch(page);

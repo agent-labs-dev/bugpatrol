@@ -1,10 +1,26 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ConfigError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
+import { guardBrowser, type ReadOnlyOptions } from './readonly.js';
 import { sampleFile } from './samples.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
 import { encodeFrames, type Frame, hasFfmpeg } from './video.js';
+
+/**
+ * Why the web driver cannot launch its browser: Playwright looks for its own
+ * Chromium build, so the install command names the pinned Playwright version.
+ */
+export function chromiumProblem(): string | undefined {
+  const executable = chromium.executablePath();
+  if (existsSync(executable)) return undefined;
+  // Not createRequire: the npm bundle declares that name in its banner.
+  const manifest = fileURLToPath(import.meta.resolve('playwright/package.json'));
+  const { version } = JSON.parse(readFileSync(manifest, 'utf8')) as { version: string };
+  return `Chromium for Playwright ${version} is not installed (no ${executable}). Run: PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@${version} install chromium`;
+}
 
 export type WebOptions = {
   url: string;
@@ -12,6 +28,8 @@ export type WebOptions = {
   headless?: boolean;
   /** Origins besides the app's own that the explorer may be on, e.g. a sign-in provider. */
   allowedOrigins?: string[];
+  /** Only reads reach the backend: other requests are aborted and logged. */
+  readOnly?: ReadOnlyOptions;
 };
 
 /**
@@ -56,15 +74,23 @@ export class WebDriver implements Driver {
 
   constructor(protected readonly options: WebOptions) {}
 
+  get writes() {
+    return this.options.readOnly?.log;
+  }
+
   async connect(): Promise<void> {
     const headless = this.options.headless ?? true;
     // A headless browser draws nothing a patrol needs a GPU for, and on some
     // hosts the GPU process fails to start and every new page then hangs.
     this.browser = await chromium.launch({ headless, args: headless ? ['--disable-gpu'] : [] });
+    const { readOnly } = this.options;
     this.context = await this.browser.newContext({
       viewport: this.options.viewport,
       reducedMotion: 'reduce',
+      // A service worker's own requests bypass the routes that hold back writes.
+      ...(readOnly ? { serviceWorkers: 'block' as const } : {}),
     });
+    if (readOnly) await guardBrowser(this.context, readOnly);
     this.context.on('page', (page) => this.watch(page));
     this.page = await this.context.newPage();
     this.watch(this.page);
@@ -195,6 +221,7 @@ export class WebDriver implements Driver {
       networkErrors: (this.failures.get(page) ?? []).splice(0),
       dialogs: (this.dialogs.get(page) ?? []).splice(0),
       leftApp: this.leftApp.splice(0),
+      blockedWrites: this.writes?.drain() ?? [],
       at: new Date().toISOString(),
     };
     this.lastObservation = observation;
@@ -253,9 +280,14 @@ export class WebDriver implements Driver {
     if (target) {
       const resolved = await resolveTarget(page, target, this.lastObservation);
       result = { degraded: resolved.degraded, element: resolved.element };
+      // The wheel scrolls whatever is under the pointer, so put the pointer over the target first.
+      let point = resolved.point;
       if (resolved.locator) {
         await resolved.locator.scrollIntoViewIfNeeded();
+        const box = await resolved.locator.boundingBox();
+        if (box) point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
       }
+      if (point) await page.mouse.move(point.x, point.y);
     }
     const distance = 550;
     const x = action.direction === 'left' ? -distance : action.direction === 'right' ? distance : 0;

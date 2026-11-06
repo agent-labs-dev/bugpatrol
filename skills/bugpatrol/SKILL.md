@@ -122,8 +122,8 @@ Do not use a person's own account without their permission. Do not make test use
 
 1. Run `node --version`. Bugpatrol needs Node 22 or later.
 2. Run `git remote -v` in the app repo. Bugpatrol needs `git`, and an `origin` remote: each patrol cycle pulls `origin/main`. If the default branch is not `main`, set `agents.patrol.pull` (for example `origin/master`).
-3. If the user wants GitHub PRs and issues: run `gh auth status`. If `gh` is missing, tell the user to install it from https://cli.github.com. If `gh` is not logged in, tell the user to run `gh auth login`.
-4. For web: run `PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium`. Use this exact version, because the bundle pins Playwright 1.48.2. Keep `PLAYWRIGHT_SKIP_BROWSER_GC=1`: without it, Playwright deletes the browsers of the repo's own Playwright version.
+3. If the user wants GitHub PRs and issues: run `gh repo view` in the app repo. If `gh` is missing, tell the user to install it from https://cli.github.com. If the read fails with `HTTP 401` or a login prompt, tell the user to run `gh auth login`. A failing `gh auth status` alone is not a problem: a proxy or a GitHub App can give gh access without a personal login.
+4. For web: run `PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y -p bugpatrol@latest playwright install chromium`. This runs the Playwright that Bugpatrol depends on, so the browser matches its version. Keep `PLAYWRIGHT_SKIP_BROWSER_GC=1`: without it, Playwright deletes the browsers of the repo's own Playwright version.
 5. For iOS or Android: run `maestro --version`. If Maestro is missing, tell the user to install it from https://maestro.mobile.dev. Make sure that a simulator is booted (`xcrun simctl list devices booted`) or an emulator runs (`adb devices`).
 6. For Electron: make sure that the app starts with `--remote-debugging-port=<port>`, and that the start command prints the port.
 7. Run `npx bugpatrol@latest --version`. This confirms that the package runs.
@@ -343,7 +343,7 @@ Run each command in the project. Bugpatrol finds `.bugpatrol/` in the current fo
    npx bugpatrol@latest judge
    ```
 
-   The judge reads the recent explorer sessions that have candidates, and it skips the candidates that it already decided. Its first line names the sessions and the number of new candidates. To judge one session only, add `--session <id>`.
+   The judge reads the recent explorer sessions that have candidates, and it skips the candidates that it already decided. Its first line names the sessions and the number of new candidates. It skips, and names, a session recorded at another commit of the source. To judge one session only, add `--session <id>`.
 
 5. Show the issues:
 
@@ -409,7 +409,7 @@ Turn on GitHub only when the user agrees, because it writes to the team's repo. 
 - It makes the `bugpatrol` label, and it pushes the orphan branch `bugpatrol-assets` with the report screenshots.
 - It pushes one branch for each fix: `bugpatrol/fix-<issue>`.
 
-It needs a logged-in `gh` CLI with push access to the repo. Check with `gh auth status`, or with `npx bugpatrol@latest doctor`.
+It needs a `gh` CLI with push access to the repo. Check with `gh repo view <owner>/<repo>`, or with `npx bugpatrol@latest doctor`.
 
 ```yaml
 agents:
@@ -550,7 +550,7 @@ Each `session.json` also has `tokens` and `tokensByModel`. The Overview page sho
 | --- | --- |
 | `Web driver requires app.connect.url or run.url` | Set `app.connect.url` |
 | Setup times out | Correct the `readyWhen` regex, or increase `timeoutMs` |
-| Playwright cannot find Chromium | Run `PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y playwright@1.48.2 install chromium` |
+| Playwright cannot find Chromium | Run `PLAYWRIGHT_SKIP_BROWSER_GC=1 npx -y -p bugpatrol@latest playwright install chromium` |
 | The explorer stays on the sign-in screen | Write clearer sign-in steps in `.bugpatrol/instructions.md`, and check that the secrets are set |
 | Electron does not connect | Make sure that the app opens a CDP port, and that `capture` reads the port from the output |
 | Mobile does not connect | Boot a simulator or start an emulator, check `maestro --version`, and check `connect.appId` |

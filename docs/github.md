@@ -5,15 +5,17 @@ Bugpatrol can publish its results to your GitHub repo:
 - A **pull request** for each fix that the fixer wrote.
 - A **GitHub issue** for each bug at `issueMinSeverity` or worse that has no fix.
 
-It uses the [`gh`](https://cli.github.com) CLI, with your own login. GitHub is off until you turn it on.
+It uses the [`gh`](https://cli.github.com) CLI, with whatever credentials gh has: your own login, a token, or a proxy or GitHub App behind a `gh` wrapper. GitHub is off until you turn it on.
 
 ## 1. Check gh
 
 ```bash
-gh auth status
+gh repo view <owner>/<repo>
 ```
 
-The account must be able to push branches, and open PRs and issues, in the repo. The default `gh auth login` scopes (`repo`) are enough.
+Bugpatrol checks gh the same way: it reads the repo, and stops with gh's own message when the read fails. It does not need `gh auth status` to pass.
+
+The credentials must be able to push branches, and open PRs and issues, in the repo. The default `gh auth login` scopes (`repo`) are enough.
 
 `bugpatrol doctor` also checks gh when GitHub is on.
 
@@ -155,10 +157,10 @@ npx bugpatrol review 123 --dry-run      # write the review to a local file, and 
    | --- | --- | --- |
    | Introduced | The pull request build shows the problem, and the base build does not | A line in the PR comment. On the changed line that causes it, a comment with both screenshots and the steps. When the judge finds no such line in the diff, the PR comment holds the screenshots and the steps |
    | Already on the base branch | The base build shows the problem too | A row of the folded "Other findings" table. A later `bugpatrol judge` can file it as a normal issue |
-   | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A row of "Other findings" |
+   | Could not compare | The flow did not reach the same screen on the base build, and the diff does not show the cause | A row of "Other findings". The dashboard shows the finding as not compared, never as dismissed, and a later `bugpatrol judge` does not file it |
    | Not a bug | The difference is what the pull request intends, or the explorer made a mistake | A row of "Other findings" |
 
-5. Bugpatrol keeps one comment on the pull request and edits it on each push. The comment starts with the number of problems that the pull request introduces and the two commits that it compared. Then come a hint for the next run when one would help (for example, raise `agents.explorer.maxSteps` when the explorer used all its steps), the problems, the claims as a table, what the explorer tested and did not reach, one line each, and the other findings.
+5. Bugpatrol keeps one comment on the pull request and edits it on each push. The comment starts with the number of problems that the pull request introduces and the two commits that it compared. With no problem introduced, a review where some report could not be compared says **Comparison incomplete**, or **Base unavailable** with the error when the base build did not run, never **No problem introduced**. Then come a hint for the next run when one would help (for example, raise `agents.explorer.maxSteps` when the explorer used all its steps), the problems, the claims as a table, what the explorer tested and did not reach, one line each, and the other findings.
 6. The comments on changed lines go in a pull request review with the event `COMMENT`. It never approves and never requests changes, so it does not block the merge. `review` sets no check, unless you turn on [blocking](#block-a-merge-on-a-disproved-claim). GitHub never deletes a submitted review, so a new test of the pull request replaces the body of each older review with one line, deletes its line comments, and hides it as outdated. A comment that a person answered stays.
 
 `.bugpatrol/runs/reviews/pr-<number>.json` holds the last review of each pull request. When you run `review` again on the same commit, Bugpatrol tests nothing: it edits the PR comment, or posts it when the pull request has none. Use `--force` to test the same commit again.
@@ -243,6 +245,44 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
+### Explore and judge on a schedule
+
+To find bugs on a schedule without fixes, pull requests or GitHub issues, run `explore` and `judge` from a workflow. The issues stay in the run folder, and the workflow keeps it as an artifact with the screenshots. Add the API key of your LLM provider as a secret:
+
+```yaml
+# .github/workflows/bugpatrol-explore.yml
+name: Bugpatrol explore
+on:
+  schedule: [{ cron: '0 6 * * 1-5' }]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: |
+          npm install --prefix "$RUNNER_TEMP/bugpatrol" --no-audit --no-fund bugpatrol@latest
+          echo "$RUNNER_TEMP/bugpatrol/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: playwright install --with-deps chromium   # web and Electron apps only
+      - run: bugpatrol explore --steps 40
+      - run: bugpatrol judge
+      - run: bugpatrol findings list && bugpatrol issue list
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bugpatrol-runs
+          path: .bugpatrol/runs/
+```
+
+For a profile, add `--config .bugpatrol/<name>.yml` to each `bugpatrol` command, and upload `.bugpatrol/runs/profiles/<name>/`. To keep the issues and lessons from one run to the next, use the patrol with its state branch instead ([Patrol on a schedule](#patrol-on-a-schedule)).
+
 ### The claim check
 
 ```bash
@@ -285,7 +325,7 @@ Bugpatrol redacts the secrets of `app.secrets` from the output line by line, bef
 
 With `app.platform: api`, each step of a claim routine is one HTTP request, sent for real to the API of each build. When the explorer saves the flow of a claim, it can add exact checks on the last response: its status code, texts that the body must have, and texts that it must not have. They work like the checks of a command line app. They decide the verdict with no judge, the evidence is `assertion`, and the review shows a table of each check on both builds. A failed status check names the status that the build gave, for example `Failed, the status is 200`.
 
-Each replay records its requests and responses as an asciicast v2 file, `<build>.cast`, and the review shows its GIF for each build, drawn the same way as for a command line app, so it needs no `ffmpeg`. The terminal is 100 by 30, wide enough for indented JSON, so the GIF is 800 px wide. The recording shows the method, path, and body of each request, then the status, content type, and body of the response. A request that got no response shows why, for example a timeout. Request headers stay out of the recording, since they carry the credentials. Bugpatrol writes `[redacted]` for each JSON value whose key ends in `token`, `password`, `secret`, `authorization` or `cookie`, and replaces the value of each secret of `app.secrets` with its `{{NAME}}`, before the recording sees the text.
+Each replay records its requests and responses as an asciicast v2 file, `<build>.cast`, and the review shows its GIF for each build, drawn the same way as for a command line app, so it needs no `ffmpeg`. The terminal is 100 by 30, wide enough for indented JSON, so the GIF is 800 px wide. The recording shows the method, path, and body of each request, then the status, content type, and body of the response. A request that got no response shows why, for example a timeout. Request headers show by name, and the value of each credential header is `[redacted]`. Bugpatrol writes `[redacted]` for each JSON value whose key ends in `token`, `password`, `secret`, `authorization` or `cookie`, and replaces the value of each secret of `app.secrets` with its `{{NAME}}`, before the recording sees the text.
 
 ### Claims that a behavior stays the same
 
@@ -367,7 +407,7 @@ With `block` off, `review` sets no check and exits 0 when it only comments. The 
 | --- | --- |
 | `GitHub is off` | Set `agents.github.enabled: true`, or use `publish --dry-run` |
 | `the gh CLI is not installed` | Install it from https://cli.github.com |
-| `gh is not logged in` | Run `gh auth login` |
+| `gh cannot read <repo>` | The rest of the message is gh's own. For `HTTP 401` or a login prompt, run `gh auth login`. For `HTTP 404`, check `agents.github.repo` and that the credentials can see the repo |
 | `PR #<n> comes from a fork` | A review runs the code of the pull request. Read the diff, then add `--allow-fork` |
 | `A patrol runs (pid <n>)` | Stop the patrol, or run `review` when the patrol waits for a new commit |
 | `Nothing to publish` | No item matches the table in [What Bugpatrol publishes](#what-bugpatrol-publishes). Run `bugpatrol issue list`, and check the severities and the fixes |

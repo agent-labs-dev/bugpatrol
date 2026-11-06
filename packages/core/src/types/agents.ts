@@ -341,8 +341,13 @@ export type Issue = {
   fixRejected?: { pr: number; url: string; at: string };
   publishSkipped?: { reason: string; at: string };
   fixId?: string;
-  /** Set when a human closed the issue. A human decision overrides the judge. */
-  closedBy?: { by: string; reason: string; at: string };
+  /** Set when a human or Bugpatrol closed the issue. A human decision overrides the judge. */
+  closedBy?: {
+    by: string;
+    reason: string;
+    at: string /** The commit that fixed it, when one is known. */;
+    commit?: string;
+  };
   regression?: { at: string; fromStatus: 'fixed' };
   notSeen?: number;
 };
@@ -373,6 +378,8 @@ export type RetestCapture = {
   routineId?: string;
   before?: string;
   after?: string;
+  /** The terminal text beside `after`, on a CLI app. */
+  afterTerminal?: string;
   note?: string;
   reached?: boolean;
 };
@@ -689,6 +696,8 @@ export type PrReview = {
   /** The check run of the claim check. Absent when blocking is off. */
   check?: ClaimCheckRun;
   findings: ReviewFinding[];
+  /** Why the base build did not run, so no finding was compared with it. */
+  baseError?: string;
   /** The review on GitHub. */
   posted?: { url: string; at: string };
   error?: string;
@@ -710,6 +719,8 @@ export type AgentEventKind =
   | 'fix'
   | 'lesson'
   | 'usage'
+  /** Read-only mode kept a write of the app from its backend. */
+  | 'write-blocked'
   | 'error';
 
 /** One line of `sessions/<id>/events.jsonl`. Every value is already redacted. */
@@ -772,6 +783,13 @@ export type SessionSummary = {
   profile?: string;
   /** The process that runs the session, so a crash does not look like a session in progress. */
   pid?: number;
+  /**
+   * The revision of the app that the session tested: the source commit, or
+   * the deployed commit of an external backend. Absent when it is not known,
+   * such as with uncommitted changes. The judge of a patrol reads a finding
+   * of an earlier session only when it was recorded at the revision it tests.
+   */
+  revision?: string;
   startedAt: string;
   endedAt?: string;
   status: 'running' | 'finished' | 'failed';
@@ -785,6 +803,8 @@ export type SessionSummary = {
   screensFound: string[];
   candidates: number;
   issues: string[];
+  /** Read-only mode: the writes of the app that Bugpatrol kept from its backend in this session. */
+  writesBlocked?: number;
 };
 
 /** `deploy.json`. The last answer of `app.connect.version`: the live commit, or why it is not known. */

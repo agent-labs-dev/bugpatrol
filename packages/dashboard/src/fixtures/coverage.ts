@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import {
   type AgentEvent,
   type Candidate,
@@ -15,7 +15,6 @@ import {
 } from '@bugpatrol/core';
 
 const SESSION_ID = 'ses_sweep';
-const SESSION = `.bugpatrol/runs/sessions/${SESSION_ID}`;
 
 /**
  * `[endpoint, case, status, failed, body]`, or a blocked reason in place of the
@@ -94,9 +93,10 @@ function failureWords(failed: string[], status: number): string {
  * spec skips `POST /notify`. Each failed case is a candidate: the judge filed
  * one as an issue, and the others wait for the judge.
  */
-export function writeCoverageFixture(root: string): void {
+export function writeCoverageFixture(root: string, profile?: string): void {
   const now = Date.now();
-  mkdirSync(join(root, SESSION), { recursive: true });
+  const session = relative(root, paths.session(root, SESSION_ID, profile));
+  mkdirSync(join(root, session), { recursive: true });
   const cells: Record<string, CoverageCell> = {};
   const candidates: Candidate[] = [];
   for (const [index, [endpoint, id, result, failed = [], own]] of RESULTS.entries()) {
@@ -121,7 +121,7 @@ export function writeCoverageFixture(root: string): void {
       latencyMs: 3 + index,
       at,
     };
-    const file = `${SESSION}/${String(index + 1).padStart(3, '0')}-sweep-${id}.exchange.json`;
+    const file = `${session}/${String(index + 1).padStart(3, '0')}-sweep-${id}.exchange.json`;
     writeFileSync(join(root, file), JSON.stringify(exchange, null, 2));
     cells[`${endpoint} ${id}`] = { ...cell, status: result, exchange: file };
     if (failed.length)
@@ -153,12 +153,12 @@ export function writeCoverageFixture(root: string): void {
     },
     cursor: { specDigest: '37818a38a26d9594', next: ['GET /export ok', 'GET /export no-auth'] },
   };
-  writeFileSync(paths.coverage(root), JSON.stringify(coverage, null, 2));
-  writeSweepSession(root, now, candidates);
+  writeFileSync(paths.coverage(root, profile), JSON.stringify(coverage, null, 2));
+  writeSweepSession(root, now, candidates, profile);
 }
 
-function writeSweepSession(root: string, now: number, candidates: Candidate[]): void {
-  const dir = join(root, SESSION);
+function writeSweepSession(root: string, now: number, candidates: Candidate[], profile?: string): void {
+  const dir = paths.session(root, SESSION_ID, profile);
   const filed = candidates.find((candidate) => candidate.summary.startsWith('DELETE /items/{id} repeat-delete'))!;
   const repeat = candidates.filter((candidate) => candidate.blocking).length;
   const session: SessionSummary = {
@@ -206,6 +206,6 @@ function writeSweepSession(root: string, now: number, candidates: Candidate[]): 
     firstSeenAt: filed.createdAt,
     lastSeenAt: filed.createdAt,
   };
-  mkdirSync(paths.issues(root), { recursive: true });
-  writeFileSync(paths.issue(root, issue.id), JSON.stringify(issue, null, 2));
+  mkdirSync(paths.issues(root, profile), { recursive: true });
+  writeFileSync(paths.issue(root, issue.id, profile), JSON.stringify(issue, null, 2));
 }
