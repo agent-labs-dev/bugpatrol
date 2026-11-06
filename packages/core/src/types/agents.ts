@@ -378,6 +378,8 @@ export type RetestCapture = {
   routineId?: string;
   before?: string;
   after?: string;
+  /** The terminal text beside `after`, on a CLI app. */
+  afterTerminal?: string;
   note?: string;
   reached?: boolean;
 };

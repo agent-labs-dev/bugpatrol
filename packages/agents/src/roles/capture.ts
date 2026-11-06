@@ -28,6 +28,13 @@ export async function beforeParts(root: string, target: CaptureTarget): Promise<
   return target.reported ? evidenceParts(root, target.reported) : captureParts(root, target.capture.before);
 }
 
+/** What a model sees of a target as the explorer captured it now. */
+export async function afterParts(root: string, capture: RetestCapture): Promise<ToolContent[]> {
+  return capture.after && capture.afterTerminal
+    ? evidenceParts(root, { kind: 'image', screenshot: capture.after, terminal: capture.afterTerminal })
+    : captureParts(root, capture.after);
+}
+
 export function targetLines(targets: CaptureTarget[]): string {
   return targets
     .map(
@@ -136,6 +143,7 @@ export async function captureTargets(
         await driver.settle();
         const observation = await driver.observe();
         target.capture.after = await session.capture(observation, `retest-after-${input.target}`);
+        target.capture.afterTerminal = session.lastTerminal;
         target.capture.note = String(input.note ?? '');
         captured.add(target);
         // An API with no answered request has no exchange, and a flow with no capture reached nothing.
@@ -192,6 +200,7 @@ export async function captureTargets(
       targets[0].capture.reached = false;
       try {
         targets[0].capture.after = await session.capture(await driver.observe(), 'retest-after-1');
+        targets[0].capture.afterTerminal = session.lastTerminal;
       } catch {
         /* no screen */
       }

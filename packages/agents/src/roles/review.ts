@@ -19,7 +19,7 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { type Capabilities, detectCapabilities } from '../capabilities.js';
-import { captureParts, readExchanges, screenshotOf } from '../evidence.js';
+import { readExchanges, screenshotOf } from '../evidence.js';
 import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, uploadImage } from '../github.js';
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -51,7 +51,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 import { pickBenches, runBenches } from './benches.js';
-import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
+import { afterParts, beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { ClaimBudget, claimJudge } from './claim-judge.js';
 import { type ClaimFlow, checkClaims, claimCheckRun, claimTools, replayDisproofs, reproClaims } from './claims.js';
 import { stopOnCancellation } from './explorer.js';
@@ -572,7 +572,7 @@ async function judgeFindings(
         const candidate = candidates[index];
         if (!candidate) return { ...response('Unknown finding id'), isError: true };
         const head = await beforeParts(root, targets[index]!);
-        const base = await captureParts(root, targets[index]!.capture.after);
+        const base = await afterParts(root, targets[index]!.capture);
         return {
           content: [
             {

@@ -16,7 +16,7 @@ import {
 } from '@bugpatrol/core';
 import { type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
 import { externalBackend } from '../deploy.js';
-import { captureParts, screenshotOf } from '../evidence.js';
+import { screenshotOf } from '../evidence.js';
 import { closeOnGitHub } from '../github.js';
 import { readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
@@ -27,7 +27,7 @@ import { lessonTools } from '../tools/memory.js';
 import type { RoleOutcome, Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
-import { beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
+import { afterParts, beforeParts, type CaptureTarget, captureTargets, targetLines } from './capture.js';
 import { linkEnvFiles, runFixer } from './fixer.js';
 import { overlayBugpatrol } from './overlay.js';
 import { reflectOnSession } from './reflect.js';
@@ -259,7 +259,7 @@ export async function retestFix(
               type: 'text',
               text: `Screen ${index + 1}: ${shot.screenId ?? '(unknown)'} — reached: ${shot.reached === true} — explorer: ${shot.note ?? ''}`,
             });
-            content.push(...(await beforeParts(root, target)), ...(await captureParts(root, shot.after)));
+            content.push(...(await beforeParts(root, target)), ...(await afterParts(root, shot)));
           }
           return { content };
         },

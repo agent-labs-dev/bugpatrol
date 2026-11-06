@@ -281,7 +281,9 @@ async function runSteps(
       if (version !== driver.controlVersion)
         throw new Error('Human takeover interrupted replay; look again and start a new path');
       if (assert && step.assert?.length) {
-        const results = checkAssertions(step.assert, await driver.observe(), {
+        const observation = await driver.observe();
+        session.reportBlockedWrites(observation.blockedWrites);
+        const results = checkAssertions(step.assert, observation, {
           raw: driver.lastRaw?.(),
           contract: assert.contract,
         });
