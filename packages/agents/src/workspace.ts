@@ -17,6 +17,7 @@ import {
   type Lesson,
   type LessonRole,
   type LogRecord,
+  layout,
   type MemoryFile,
   type PrReview,
   paths,
@@ -28,6 +29,8 @@ import {
   shortHash,
   type TriageFile,
   usageOf,
+  withCapture,
+  withMovedRetests,
 } from '@bugpatrol/core';
 import type { EventSink } from './types.js';
 import type { Vars } from './vars.js';
@@ -89,6 +92,10 @@ export class Workspace {
     readonly root: string,
     readonly profile?: string,
   ) {}
+
+  private current<T extends Issue | Candidate>(record: T): T {
+    return withCapture(record, layout(this.root).dir);
+  }
 
   async readMemory(): Promise<MemoryFile> {
     return (await readJson<MemoryFile>(paths.memory(this.root, this.profile))) ?? { version: 1, lessons: [] };
@@ -240,11 +247,12 @@ export class Workspace {
   saveRoutine(value: Routine): Promise<void> {
     return atomic(paths.routine(this.root, value.id, this.profile), value);
   }
-  listIssues(): Promise<Issue[]> {
-    return listJson(paths.issues(this.root, this.profile));
+  async listIssues(): Promise<Issue[]> {
+    return (await listJson<Issue>(paths.issues(this.root, this.profile))).map((issue) => this.current(issue));
   }
-  readIssue(id: string): Promise<Issue | undefined> {
-    return readJson(paths.issue(this.root, id, this.profile));
+  async readIssue(id: string): Promise<Issue | undefined> {
+    const issue = await readJson<Issue>(paths.issue(this.root, id, this.profile));
+    return issue && this.current(issue);
   }
   saveIssue(value: Issue): Promise<void> {
     return atomic(paths.issue(this.root, value.id, this.profile), value);
@@ -252,11 +260,13 @@ export class Workspace {
   async findIssueByFingerprint(fingerprint: string): Promise<Issue | undefined> {
     return (await this.listIssues()).find((issue) => issue.fingerprint === fingerprint);
   }
-  listFixes(): Promise<FixProposal[]> {
-    return listJson(paths.fixes(this.root, this.profile));
+  async listFixes(): Promise<FixProposal[]> {
+    const dir = layout(this.root).dir;
+    return (await listJson<FixProposal>(paths.fixes(this.root, this.profile))).map((fix) => withMovedRetests(fix, dir));
   }
-  readFix(id: string): Promise<FixProposal | undefined> {
-    return readJson(paths.fix(this.root, id, this.profile));
+  async readFix(id: string): Promise<FixProposal | undefined> {
+    const fix = await readJson<FixProposal>(paths.fix(this.root, id, this.profile));
+    return fix && withMovedRetests(fix, layout(this.root).dir);
   }
   saveFix(value: FixProposal): Promise<void> {
     return atomic(paths.fix(this.root, value.id, this.profile), value);
@@ -392,7 +402,7 @@ export class Workspace {
       const lines = (
         await readFile(join(paths.session(this.root, sessionId, this.profile), 'candidates.jsonl'), 'utf8')
       ).trim();
-      return lines ? lines.split('\n').map((line) => JSON.parse(line) as Candidate) : [];
+      return lines ? lines.split('\n').map((line) => this.current(JSON.parse(line) as Candidate)) : [];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];

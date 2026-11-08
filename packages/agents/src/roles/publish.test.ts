@@ -235,6 +235,80 @@ describe('runPublisher', () => {
     expect(report).not.toContain('## Screenshots');
     expect(calls).toEqual([]);
   });
+  it('reviews and drafts an issue stored before evidence.capture existed', async () => {
+    const f = await fixture();
+    const { capture: _capture, ...evidence } = f.issue.evidence;
+    await f.workspace.saveIssue({
+      ...f.issue,
+      evidence: { ...evidence, screenshot: '.bughunters/runs/shot.png' } as unknown as Issue['evidence'],
+    });
+    await mkdir(join(f.root, '.bugpatrol', 'runs'), { recursive: true });
+    await writeFile(join(f.root, '.bugpatrol', 'runs', 'shot.png'), 'png');
+    let viewed: Awaited<ReturnType<Tool['run']>> | undefined;
+    const reviewing: Runtime = {
+      label: 'fake',
+      async run(task) {
+        viewed = await task.tools.find((tool) => tool.name === 'view_item')!.run({ issue_id: 'iss_1' });
+        await task.tools
+          .find((tool) => tool.name === 'publish')!
+          .run({ issue_id: 'iss_1', title: 'Broken screen', summary: 'The screen broke.' });
+        return { stop: 'done', steps: 2, costUsd: 0 };
+      },
+    };
+    const [outcome] = await runPublisher(f.root, f.config, { createRuntime: () => reviewing, dryRun: true });
+    expect(viewed?.content.map((part) => part.type)).toEqual(['text', 'image']);
+    expect(await readFile(outcome!.url!, 'utf8')).toContain('.bugpatrol/runs/shot.png');
+  });
+  it('reviews and drafts a verified fix whose retests were stored before the rename', async () => {
+    const f = await fixture('major', 'fix-proposed');
+    const { capture: _capture, ...evidence } = f.issue.evidence;
+    await f.workspace.saveIssue({
+      ...f.issue,
+      evidence: { ...evidence, screenshot: '.bughunters/runs/issue.png' } as unknown as Issue['evidence'],
+    });
+    await f.workspace.saveFix({
+      version: 1,
+      id: 'fix_1',
+      issueId: 'iss_1',
+      status: 'verified',
+      runtime: 'fake',
+      repo: '',
+      worktree: '',
+      branch: 'fix',
+      startedAt: 'now',
+      retests: [
+        {
+          attempt: 1,
+          outcome: 'fixed',
+          reason: 'The screen works after the fix.',
+          before: '.bughunters/runs/before.png',
+          after: '.bughunters/runs/after.png',
+          at: 'now',
+        },
+      ],
+    });
+    await mkdir(join(f.root, '.bugpatrol', 'runs'), { recursive: true });
+    for (const name of ['issue', 'before', 'after']) {
+      await writeFile(join(f.root, '.bugpatrol', 'runs', `${name}.png`), name);
+    }
+    let viewed: Awaited<ReturnType<Tool['run']>> | undefined;
+    const reviewing: Runtime = {
+      label: 'fake',
+      async run(task) {
+        viewed = await task.tools.find((tool) => tool.name === 'view_item')!.run({ issue_id: 'iss_1' });
+        await task.tools
+          .find((tool) => tool.name === 'publish')!
+          .run({ issue_id: 'iss_1', type: 'fix', title: 'repair the screen', summary: 'The screen now works.' });
+        return { stop: 'done', steps: 2, costUsd: 0 };
+      },
+    };
+    const [outcome] = await runPublisher(f.root, f.config, { createRuntime: () => reviewing, dryRun: true });
+    expect(viewed?.content.map((part) => part.type)).toEqual(['text', 'image', 'image']);
+    const report = await readFile(outcome!.url!, 'utf8');
+    expect(report).toContain('.bugpatrol/runs/before.png');
+    expect(report).toContain('.bugpatrol/runs/after.png');
+    expect(report).not.toContain('.bughunters/');
+  });
   it('writes a dry-run report without any gh calls', async () => {
     const f = await fixture();
     const calls: string[][] = [];
