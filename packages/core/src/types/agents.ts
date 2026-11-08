@@ -1,3 +1,4 @@
+import { LEGACY_DIR } from '../paths.js';
 import type { Endpoint } from './endpoint.js';
 import type { Evidence } from './evidence.js';
 import type { Severity } from './finding.js';
@@ -305,6 +306,35 @@ export type IssueEvidence = {
   bug?: BugCheck;
   console?: string[];
 };
+
+/** The evidence of a file written before `capture` existed: the image fields sat on the evidence itself. */
+type StoredEvidence = Omit<IssueEvidence, 'capture'> & {
+  capture?: Evidence;
+  screenshot?: string;
+  baseline?: string;
+  diff?: string;
+};
+
+/**
+ * An issue or candidate as it was read from disk, with `capture` always set,
+ * so that no reader has to know the older file format. A record with no
+ * screenshot gets an empty path, which every reader of a capture skips. A
+ * record from before the rename names its files under the old folder, so
+ * they follow `dir`, the folder that the repo keeps its data in now.
+ */
+export function withCapture<T extends { evidence: IssueEvidence }>(record: T, dir: string): T {
+  const stored = record.evidence as StoredEvidence | undefined;
+  if (!stored || stored.capture) return record;
+  const moved = (path: string) => (path.startsWith(`${LEGACY_DIR}/`) ? dir + path.slice(LEGACY_DIR.length) : path);
+  const { screenshot = '', baseline, diff, ...evidence } = stored;
+  const capture: Evidence = {
+    kind: 'image',
+    screenshot: moved(screenshot),
+    ...(baseline ? { baseline: moved(baseline) } : {}),
+    ...(diff ? { diff: moved(diff) } : {}),
+  };
+  return { ...record, evidence: { ...evidence, capture } };
+}
 
 /**
  * `waits-for-deploy`: the fix merged, and the backend that Bugpatrol tests

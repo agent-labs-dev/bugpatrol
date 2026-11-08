@@ -235,6 +235,30 @@ describe('runPublisher', () => {
     expect(report).not.toContain('## Screenshots');
     expect(calls).toEqual([]);
   });
+  it('reviews and drafts an issue stored before evidence.capture existed', async () => {
+    const f = await fixture();
+    const { capture: _capture, ...evidence } = f.issue.evidence;
+    await f.workspace.saveIssue({
+      ...f.issue,
+      evidence: { ...evidence, screenshot: '.bughunters/runs/shot.png' } as unknown as Issue['evidence'],
+    });
+    await mkdir(join(f.root, '.bugpatrol', 'runs'), { recursive: true });
+    await writeFile(join(f.root, '.bugpatrol', 'runs', 'shot.png'), 'png');
+    let viewed: Awaited<ReturnType<Tool['run']>> | undefined;
+    const reviewing: Runtime = {
+      label: 'fake',
+      async run(task) {
+        viewed = await task.tools.find((tool) => tool.name === 'view_item')!.run({ issue_id: 'iss_1' });
+        await task.tools
+          .find((tool) => tool.name === 'publish')!
+          .run({ issue_id: 'iss_1', title: 'Broken screen', summary: 'The screen broke.' });
+        return { stop: 'done', steps: 2, costUsd: 0 };
+      },
+    };
+    const [outcome] = await runPublisher(f.root, f.config, { createRuntime: () => reviewing, dryRun: true });
+    expect(viewed?.content.map((part) => part.type)).toEqual(['text', 'image']);
+    expect(await readFile(outcome!.url!, 'utf8')).toContain('.bugpatrol/runs/shot.png');
+  });
   it('writes a dry-run report without any gh calls', async () => {
     const f = await fixture();
     const calls: string[][] = [];
