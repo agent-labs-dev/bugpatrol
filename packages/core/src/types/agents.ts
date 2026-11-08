@@ -325,7 +325,7 @@ type StoredEvidence = Omit<IssueEvidence, 'capture'> & {
 export function withCapture<T extends { evidence: IssueEvidence }>(record: T, dir: string): T {
   const stored = record.evidence as StoredEvidence | undefined;
   if (!stored || stored.capture) return record;
-  const moved = (path: string) => (path.startsWith(`${LEGACY_DIR}/`) ? dir + path.slice(LEGACY_DIR.length) : path);
+  const moved = (path: string) => movedPath(path, dir);
   const { screenshot = '', baseline, diff, ...evidence } = stored;
   const capture: Evidence = {
     kind: 'image',
@@ -334,6 +334,32 @@ export function withCapture<T extends { evidence: IssueEvidence }>(record: T, di
     ...(diff ? { diff: moved(diff) } : {}),
   };
   return { ...record, evidence: { ...evidence, capture } };
+}
+
+/** A workspace-relative path under the old folder, moved to `dir`. Any other path is unchanged. */
+function movedPath(path: string, dir: string): string {
+  return path.startsWith(`${LEGACY_DIR}/`) ? dir + path.slice(LEGACY_DIR.length) : path;
+}
+
+/**
+ * A fix as it was read from disk. A retest from before the rename names its
+ * captures under the old folder, so they follow `dir`, the folder that the
+ * repo keeps its data in now, like the evidence of its issue.
+ */
+export function withMovedRetests(fix: FixProposal, dir: string): FixProposal {
+  if (!fix.retests?.length || dir === LEGACY_DIR) return fix;
+  const moved = <T extends { before?: string; after?: string }>(item: T): T => ({
+    ...item,
+    ...(item.before ? { before: movedPath(item.before, dir) } : {}),
+    ...(item.after ? { after: movedPath(item.after, dir) } : {}),
+  });
+  return {
+    ...fix,
+    retests: fix.retests.map((retest) => ({
+      ...moved(retest),
+      ...(retest.captures ? { captures: retest.captures.map(moved) } : {}),
+    })),
+  };
 }
 
 /**

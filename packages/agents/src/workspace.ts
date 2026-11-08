@@ -30,6 +30,7 @@ import {
   type TriageFile,
   usageOf,
   withCapture,
+  withMovedRetests,
 } from '@bugpatrol/core';
 import type { EventSink } from './types.js';
 import type { Vars } from './vars.js';
@@ -259,11 +260,13 @@ export class Workspace {
   async findIssueByFingerprint(fingerprint: string): Promise<Issue | undefined> {
     return (await this.listIssues()).find((issue) => issue.fingerprint === fingerprint);
   }
-  listFixes(): Promise<FixProposal[]> {
-    return listJson(paths.fixes(this.root, this.profile));
+  async listFixes(): Promise<FixProposal[]> {
+    const dir = layout(this.root).dir;
+    return (await listJson<FixProposal>(paths.fixes(this.root, this.profile))).map((fix) => withMovedRetests(fix, dir));
   }
-  readFix(id: string): Promise<FixProposal | undefined> {
-    return readJson(paths.fix(this.root, id, this.profile));
+  async readFix(id: string): Promise<FixProposal | undefined> {
+    const fix = await readJson<FixProposal>(paths.fix(this.root, id, this.profile));
+    return fix && withMovedRetests(fix, layout(this.root).dir);
   }
   saveFix(value: FixProposal): Promise<void> {
     return atomic(paths.fix(this.root, value.id, this.profile), value);
