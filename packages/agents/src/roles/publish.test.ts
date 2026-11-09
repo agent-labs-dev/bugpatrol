@@ -134,6 +134,44 @@ describe('runPublisher', () => {
     expect(await runPublisher(f.root, f.config, { gh: fakeGh(calls), createRuntime })).toEqual([]);
     expect(calls.length).toBe(count);
   });
+  it('refuses to skip a verified fix as a duplicate of its own issue, and opens the PR', async () => {
+    const f = await fixture();
+    await f.workspace.saveIssue({
+      ...f.issue,
+      status: 'fix-proposed',
+      github: { url: 'https://github.com/o/r/issues/12', number: 12, at: 'now' },
+    });
+    await f.workspace.saveFix({
+      version: 1,
+      id: 'fix_1',
+      issueId: f.issue.id,
+      status: 'verified',
+      runtime: 'fake',
+      repo: f.root,
+      branch: 'bugpatrol/fix',
+      worktree: f.root,
+      startedAt: 'now',
+      commit: 'abc',
+    });
+    let refused: boolean | undefined;
+    const skipFirst: Runtime = {
+      label: 'fake',
+      async run(task) {
+        const skip = task.tools.find((tool) => tool.name === 'skip')!;
+        refused = (await skip.run({ issue_id: 'iss_1', reason: 'Duplicate of #12' })).isError;
+        return runtime.run(task, () => {});
+      },
+    };
+    const outcomes = await runPublisher(f.root, f.config, {
+      gh: fakeGh([]),
+      createRuntime: () => skipFirst,
+      dryRun: true,
+    });
+    expect(refused).toBe(true);
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(['pr']);
+    expect((await f.workspace.readIssue(f.issue.id))?.publishSkipped).toBeUndefined();
+  });
+
   it('does not publish a fix that the retest did not verify', async () => {
     for (const outcome of ['unclear', 'not-fixed'] as const) {
       const f = await fixture();

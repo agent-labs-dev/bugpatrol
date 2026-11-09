@@ -53,6 +53,10 @@ const rank = { cosmetic: 0, minor: 1, major: 2, critical: 3 };
 function publishable(fix: FixProposal): boolean {
   return fix.status === 'verified' || (fix.status === 'proposed' && !judgedRetests(fix.retests).length);
 }
+/** A PR item's linked GitHub issue is its own report: never a duplicate, and the PR closes it. */
+const ownIssue = (item: Item) => (item.kind === 'pr' ? item.issue.github?.number : undefined);
+const ownIssueNote = (item: Item) =>
+  ownIssue(item) ? `This item's own GitHub issue is #${ownIssue(item)}. It is not a duplicate; this PR closes it.` : '';
 const result = (text: string, isError = false) => ({ content: [{ type: 'text' as const, text }], isError });
 const schema = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: 'object',
@@ -259,9 +263,8 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
         async run() {
           const list = items
             .filter((item) => !done.has(item.issue.id))
-            .map(
-              (item) =>
-                `${item.issue.id} [${item.kind}, ${item.issue.severity}, fix: ${item.fix?.status ?? 'none'}, retest: ${item.fix?.retests?.at(-1)?.outcome ?? 'none'}]: ${item.issue.title}`,
+            .map((item) =>
+              `${item.issue.id} [${item.kind}, ${item.issue.severity}, fix: ${item.fix?.status ?? 'none'}, retest: ${item.fix?.retests?.at(-1)?.outcome ?? 'none'}]: ${item.issue.title} ${ownIssueNote(item)}`.trimEnd(),
             )
             .join('\n');
           const style = recentTitles.length
@@ -281,7 +284,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
           if (!item) return result('Unknown or already handled issue.', true);
           const candidates = await candidatesFor(workspace, item.issue);
           const last = item.fix?.retests?.at(-1);
-          const text = `${item.issue.title}\n${item.issue.body}\nJudgement: ${item.issue.judgement.reason}\nFix: ${item.fix?.summary ?? '(none)'}\nDiff: ${item.fix?.diffStat ?? '(none)'}\nRetest: ${last?.outcome ?? 'none'} — ${last?.reason ?? ''}`;
+          const text = `${item.issue.title}\n${item.issue.body}\nJudgement: ${item.issue.judgement.reason}\nFix: ${item.fix?.summary ?? '(none)'}\nDiff: ${item.fix?.diffStat ?? '(none)'}\nRetest: ${last?.outcome ?? 'none'} — ${last?.reason ?? ''}\n${ownIssueNote(item)}`;
           const before = [...pathsFor({ ...item, fix: undefined }, candidates)].slice(0, 4);
           const after = (last?.captures?.length ? last.captures.map((shot) => shot.after) : [last?.after])
             .filter((path): path is string => Boolean(path))
@@ -450,6 +453,9 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
           if (!item) return result('Unknown or already handled issue.', true);
           const reason = String(input.reason ?? '').trim();
           if (!reason) return result('A reason is required.', true);
+          const own = ownIssue(item);
+          if (own && new RegExp(`#${own}\\b`).test(reason))
+            return result(`${ownIssueNote(item)} Publish it instead of skipping.`, true);
           const latest = await workspace.readIssue(item.issue.id);
           if (!latest || latest.status === 'dismissed' || latest.publishSkipped)
             return result('This item was dismissed or already handled.', true);

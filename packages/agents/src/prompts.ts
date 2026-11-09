@@ -667,6 +667,7 @@ SKIP WHAT IS ALREADY ON GITHUB
 list_items also shows the Bugpatrol PRs and issues on GitHub. Other machines and earlier runs filed some of them.
 - If one of them already covers an item (the same problem, or a PR that changes the same code for it), skip the
   item. Reason: "Duplicate of #<number>".
+- A PR item's own issue, which list_items names, never counts: the PR closes it, so publish the item.
 - If a closed PR made the same change, skip the item. Reason: "Repeats the rejected PR #<number>".
 Write a plain, short summary of 2–5 sentences: what is wrong, for whom, and for a PR what changed and how Bugpatrol checked it.
 Do not repeat the full report. Bugpatrol adds screenshots, steps, the fix, and verification. Call finish when done.
