@@ -409,14 +409,19 @@ export async function runPatrol(options: PatrolOptions): Promise<PatrolResult> {
       }
       // Only a failed test run tests the commit again. A red CI check is the PR's problem, not the cycle's.
       const cycleFailed = problems.length > before;
-      if (!interrupted && config.agents.github.enabled)
-        await runPublisher(root, config, {
+      if (!interrupted && config.agents.github.enabled) {
+        const outcomes = await runPublisher(root, config, {
           createRuntime: options.createRuntime,
           onLog: options.onLog,
           onSession: (session) => {
             activeSession = session;
           },
         });
+        for (const item of outcomes.filter((outcome) => outcome.kind === 'unpublished')) {
+          problems.push(`Cycle ${cycle}: ${item.issueId} was not published: ${item.reason}`);
+          options.onLog?.(problems.at(-1)!);
+        }
+      }
       if (!interrupted && config.agents.github.enabled) {
         const ci = await watchCi(root, config, {
           createRuntime: options.createRuntime,

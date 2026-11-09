@@ -70,6 +70,43 @@ function fakeGh(calls: string[][]): Gh {
   };
 }
 
+async function verifiedFixInGit(f: Awaited<ReturnType<typeof fixture>>) {
+  const source = join(f.root, 'source');
+  await mkdir(source);
+  const fix: FixProposal = {
+    version: 1,
+    id: 'fix_1',
+    issueId: f.issue.id,
+    status: 'verified',
+    runtime: 'fake',
+    repo: source,
+    worktree: source,
+    branch: 'fix',
+    startedAt: 'now',
+    summary: 'Fixed',
+  };
+  await f.workspace.saveFix(fix);
+  // A fake Git directory lets git status and push run without touching GitHub.
+  const { execFileSync } = await import('node:child_process');
+  const remote = join(f.root, 'remote.git');
+  execFileSync('git', ['init', '--bare', remote]);
+  execFileSync('git', ['init', source]);
+  execFileSync('git', ['-C', source, 'config', 'user.email', 'test@example.com']);
+  execFileSync('git', ['-C', source, 'config', 'user.name', 'Test']);
+  execFileSync('git', ['-C', source, 'config', 'commit.gpgsign', 'false']);
+  await writeFile(join(source, 'app.txt'), 'app');
+  execFileSync('git', ['-C', source, 'add', 'app.txt']);
+  execFileSync('git', ['-C', source, 'commit', '-m', 'initial']);
+  execFileSync('git', ['-C', source, 'remote', 'add', 'origin', remote]);
+  execFileSync('git', ['-C', source, 'checkout', '-b', 'fix']);
+  await writeFile(join(source, 'app.txt'), 'fixed');
+  execFileSync('git', ['-C', source, 'add', 'app.txt']);
+  execFileSync('git', ['-C', source, 'commit', '-m', 'fix: screen']);
+  fix.commit = execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  await f.workspace.saveFix(fix);
+  return fix;
+}
+
 describe('runPublisher', () => {
   it('does not publish a rejected fix or its issue', async () => {
     const f = await fixture();
@@ -90,39 +127,7 @@ describe('runPublisher', () => {
   });
   it('publishes a verified fix once as a PR', async () => {
     const f = await fixture();
-    const source = join(f.root, 'source');
-    await mkdir(source);
-    const fix: FixProposal = {
-      version: 1,
-      id: 'fix_1',
-      issueId: f.issue.id,
-      status: 'verified',
-      runtime: 'fake',
-      repo: source,
-      worktree: source,
-      branch: 'fix',
-      startedAt: 'now',
-      summary: 'Fixed',
-    };
-    await f.workspace.saveFix(fix);
-    // A fake Git directory lets git status and push run without touching GitHub.
-    const { execFileSync } = await import('node:child_process');
-    const remote = join(f.root, 'remote.git');
-    execFileSync('git', ['init', '--bare', remote]);
-    execFileSync('git', ['init', source]);
-    execFileSync('git', ['-C', source, 'config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['-C', source, 'config', 'user.name', 'Test']);
-    execFileSync('git', ['-C', source, 'config', 'commit.gpgsign', 'false']);
-    await writeFile(join(source, 'app.txt'), 'app');
-    execFileSync('git', ['-C', source, 'add', 'app.txt']);
-    execFileSync('git', ['-C', source, 'commit', '-m', 'initial']);
-    execFileSync('git', ['-C', source, 'remote', 'add', 'origin', remote]);
-    execFileSync('git', ['-C', source, 'checkout', '-b', 'fix']);
-    await writeFile(join(source, 'app.txt'), 'fixed');
-    execFileSync('git', ['-C', source, 'add', 'app.txt']);
-    execFileSync('git', ['-C', source, 'commit', '-m', 'fix: screen']);
-    fix.commit = execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    await f.workspace.saveFix(fix);
+    const fix = await verifiedFixInGit(f);
     const calls: string[][] = [];
     expect(await runPublisher(f.root, f.config, { gh: fakeGh(calls), createRuntime })).toMatchObject([
       { kind: 'pr', issueId: 'iss_1', url: 'https://github.com/o/r/pull/4' },
@@ -170,6 +175,135 @@ describe('runPublisher', () => {
     expect(refused).toBe(true);
     expect(outcomes.map((outcome) => outcome.kind)).toEqual(['pr']);
     expect((await f.workspace.readIssue(f.issue.id))?.publishSkipped).toBeUndefined();
+  });
+
+  describe('stored skips', () => {
+    const OWN = { url: 'https://github.com/o/r/issues/12', number: 12, at: 'now' };
+    const verified: FixProposal = {
+      version: 1,
+      id: 'fix_1',
+      issueId: 'iss_1',
+      status: 'verified',
+      runtime: 'fake',
+      repo: '',
+      branch: 'fix',
+      worktree: '',
+      startedAt: 'now',
+      commit: 'abc',
+    };
+    const ghWithIssue =
+      (view: string | Error): Gh =>
+      async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view') {
+          if (view instanceof Error) throw view;
+          return view;
+        }
+        return fakeGh([])(args);
+      };
+
+    it('publishes a verified fix whose stored skip cited its own issue, and clears the skip', async () => {
+      const f = await fixture('major', 'fix-proposed');
+      await verifiedFixInGit(f);
+      const skip = { reason: 'Duplicate of #12', at: 'then' };
+      await f.workspace.saveIssue({ ...f.issue, status: 'fix-proposed', github: OWN, publishSkipped: skip });
+      const open = ghWithIssue('{"state":"OPEN","closedByPullRequestsReferences":[]}');
+      const outcomes = await runPublisher(f.root, f.config, { gh: open, createRuntime });
+      expect(outcomes).toMatchObject([{ kind: 'pr', url: 'https://github.com/o/r/pull/4' }]);
+      expect((await f.workspace.readIssue(f.issue.id))?.publishSkipped).toBeUndefined();
+    });
+    it('lets the judge skip the fix again for another reason', async () => {
+      const f = await fixture('major', 'fix-proposed');
+      await f.workspace.saveFix(verified);
+      const skip = { reason: 'Duplicate of #12', at: 'then' };
+      await f.workspace.saveIssue({ ...f.issue, status: 'fix-proposed', github: OWN, publishSkipped: skip });
+      const skipping: Runtime = {
+        label: 'fake',
+        async run(task) {
+          await task.tools
+            .find((tool) => tool.name === 'skip')!
+            .run({ issue_id: 'iss_1', reason: 'Not a product bug' });
+          return { stop: 'done', steps: 1, costUsd: 0 };
+        },
+      };
+      const outcomes = await runPublisher(f.root, f.config, {
+        gh: ghWithIssue('{"state":"OPEN"}'),
+        createRuntime: () => skipping,
+      });
+      expect(outcomes).toMatchObject([{ kind: 'skipped' }]);
+      expect((await f.workspace.readIssue(f.issue.id))?.publishSkipped?.reason).toBe('Not a product bug');
+    });
+    it.each([
+      ['a skip for another reason', 'Not a product bug', '{"state":"OPEN"}'],
+      ['a closed own issue', 'Duplicate of #12', '{"state":"CLOSED","closedByPullRequestsReferences":[]}'],
+      [
+        'an open PR that closes it',
+        'Duplicate of #12',
+        '{"state":"OPEN","closedByPullRequestsReferences":[{"number":9}]}',
+      ],
+      ['a failed lookup', 'Duplicate of #12', new Error('HTTP 502')],
+    ])('keeps the item skipped for %s', async (_case, reason, view) => {
+      const f = await fixture('major', 'fix-proposed');
+      await f.workspace.saveFix(verified);
+      const skip = { reason, at: 'then' };
+      await f.workspace.saveIssue({ ...f.issue, status: 'fix-proposed', github: OWN, publishSkipped: skip });
+      let ran = false;
+      const unexpected: Runtime = {
+        label: 'fake',
+        async run() {
+          ran = true;
+          return { stop: 'done', steps: 0, costUsd: 0 };
+        },
+      };
+      expect(await runPublisher(f.root, f.config, { gh: ghWithIssue(view), createRuntime: () => unexpected })).toEqual(
+        [],
+      );
+      expect(ran).toBe(false);
+      expect((await f.workspace.readIssue(f.issue.id))?.publishSkipped).toEqual(skip);
+    });
+  });
+  describe('a run that leaves an item unhandled', () => {
+    const ending = (stop: 'done' | 'budget', use?: (tools: Tool[]) => Promise<unknown>): Runtime => ({
+      label: 'fake',
+      async run(task) {
+        await use?.(task.tools);
+        return { stop, steps: 1, costUsd: 0 };
+      },
+    });
+    it.each([
+      ['finish without publishing', ending('done'), 'finished without publishing or skipping'],
+      ['stop on its budget', ending('budget'), 'stopped early (budget)'],
+      [
+        'lose a publish to a tool error',
+        ending('done', (tools) =>
+          tools
+            .find((tool) => tool.name === 'publish')!
+            .run({ issue_id: 'iss_1', title: 'Broken', summary: 'It broke.' }),
+        ),
+        'Its publish failed: Error: HTTP 401',
+      ],
+      [
+        'throw',
+        {
+          label: 'fake',
+          async run() {
+            throw new Error('runtime crashed');
+          },
+        } satisfies Runtime,
+        'failed: Error: runtime crashed',
+      ],
+    ])('reports the item when the publisher would %s', async (_case, publisher, reason) => {
+      const f = await fixture();
+      const gh: Gh = async (args) => {
+        if (args[0] === 'issue' && args[1] === 'create') throw new Error('HTTP 401');
+        return fakeGh([])(args);
+      };
+      const outcomes = await runPublisher(f.root, f.config, { gh, createRuntime: () => publisher });
+      expect(outcomes).toMatchObject([
+        { issueId: 'iss_1', kind: 'unpublished', reason: expect.stringContaining(reason) },
+      ]);
+      const [session] = await f.workspace.listSessions();
+      expect(session).toMatchObject({ status: 'failed', summary: expect.stringContaining('1 left unpublished') });
+    });
   });
 
   it('does not publish a fix that the retest did not verify', async () => {
