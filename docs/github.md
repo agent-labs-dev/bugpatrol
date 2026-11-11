@@ -89,6 +89,10 @@ Each issue has a repro routine in `.bugpatrol/routines/repro-<hash>.json`. The j
 
 The judge reads each item before it publishes it. It can skip an item that is clearly not a product bug, and it gives the reason. The judge also sees the Bugpatrol PRs and issues on GitHub, from every machine that runs a patrol on the repo. It skips an item that one of them already covers.
 
+A skip stays saved, and later runs respect it. There is one exception: a skip of a verified fix that cites the item's own issue was a false duplicate, so the judge reviews the fix again. That skip stands when the issue is already closed, or when an open PR will close it. To publish an item after any other skip, run `bugpatrol issue reopen <id>`.
+
+If a run ends and an item was neither published nor skipped, `publish` lists the item as `unpublished` with the reason and exits 1. In a patrol, the item is a problem of the cycle.
+
 ### What Bugpatrol changes in the repo
 
 - It makes the labels in `labels`, if they do not exist.
@@ -410,6 +414,7 @@ With `block` off, `review` sets no check and exits 0 when it only comments. The 
 | `gh cannot read <repo>` | The rest of the message is gh's own. For `HTTP 401` or a login prompt, run `gh auth login`. For `HTTP 404`, check `agents.github.repo` and that the credentials can see the repo |
 | `PR #<n> comes from a fork` | A review runs the code of the pull request. Read the diff, then add `--allow-fork` |
 | `A patrol runs (pid <n>)` | Stop the patrol, or run `review` when the patrol waits for a new commit |
+| `unpublished` | The publisher stopped or finished before it published or skipped the item. The line gives the reason. Fix the cause and run `publish` again |
 | `Nothing to publish` | No item matches the table in [What Bugpatrol publishes](#what-bugpatrol-publishes). Run `bugpatrol issue list`, and check the severities and the fixes |
 | The commit hook rejected a commit | The fixer gets a lesson with the hook error. Fix the hook error in the worktree, or run `bugpatrol fix --issue <id>` again |
 | The images do not show | The repo is private, and the reader is not signed in to GitHub, or has no access |

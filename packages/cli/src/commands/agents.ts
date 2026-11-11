@@ -258,13 +258,19 @@ export async function runAgentCommand(
             ? flags.dryRun
               ? 'issue draft'
               : 'issue'
-            : 'skipped';
+            : item.kind;
       log(`  ${kind.padEnd(11)} ${item.issueId}  ${item.url ?? item.reason ?? ''}`);
     }
     const count = (kind: string) => outcomes.filter((item) => item.kind === kind).length;
     log(
       `${flags.dryRun ? 'Wrote' : 'Opened'} ${count('pr')} PR(s) and ${count('issue')} issue(s); skipped ${count('skipped')}.`,
     );
+    if (count('unpublished')) {
+      log(
+        `${count('unpublished')} item(s) were not published. Run \`bugpatrol publish\` again after you fix the cause.`,
+      );
+      process.exitCode = 1;
+    }
     return;
   }
   if (command === 'review') {
