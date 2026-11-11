@@ -202,7 +202,8 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const fixes = new Map((await workspace.listFixes()).map((fix) => [fix.issueId, fix]));
   const issues = (await workspace.listIssues()).filter((issue) => !deps.issueIds || deps.issueIds.includes(issue.id));
   let items: Item[] = issues.flatMap((issue): Item[] => {
-    if (issue.status === 'dismissed' || issue.fixRejected) return [];
+    // A fixed issue was resolved, possibly by another PR, so neither a PR nor an issue is owed.
+    if (issue.status === 'dismissed' || issue.status === 'fixed' || issue.fixRejected) return [];
     // Bugpatrol opens no PR for an external fix; for publish, the issue has no fix of its own.
     const found = fixes.get(issue.id);
     const fix = found?.external ? undefined : found;
@@ -214,7 +215,6 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
     if (issue.publishSkipped) return [];
     if (
       !issue.github &&
-      !['fixed', 'dismissed'].includes(issue.status) &&
       rank[issue.severity] >= rank[config.agents.github.issueMinSeverity] &&
       (!fix || ['declined', 'failed'].includes(fix.status))
     )

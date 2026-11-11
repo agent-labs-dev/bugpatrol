@@ -139,6 +139,18 @@ describe('runPublisher', () => {
     expect(await runPublisher(f.root, f.config, { gh: fakeGh(calls), createRuntime })).toEqual([]);
     expect(calls.length).toBe(count);
   });
+  it('opens no PR for a verified fix whose issue was fixed another way', async () => {
+    const f = await fixture();
+    await verifiedFixInGit(f);
+    await f.workspace.saveIssue({
+      ...f.issue,
+      status: 'fixed',
+      github: { url: 'https://github.com/o/r/issues/12', number: 12, at: 'now', state: 'closed' },
+    });
+    const calls: string[][] = [];
+    expect(await runPublisher(f.root, f.config, { gh: fakeGh(calls), createRuntime })).toEqual([]);
+    expect(calls).toEqual([]);
+  });
   it('refuses to skip a verified fix as a duplicate of its own issue, and opens the PR', async () => {
     const f = await fixture();
     await f.workspace.saveIssue({
