@@ -34,6 +34,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+      # Runner DNS sometimes loses the Azure apt mirror; see the script.
+      - run: bash scripts/apt-mirror-fallback.sh
       - name: Install the pinned browser build
         run: pnpm --filter @bugpatrol/capture exec playwright install --with-deps chromium
 
@@ -59,4 +61,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build -t bugpatrol-runner:ci -f images/runner/Dockerfile .
+      - run: bash scripts/apt-mirror-fallback.sh
+      # Word splitting is intended: the variable is a list of --add-host flags.
+      - run: docker build $APT_MIRROR_ADD_HOSTS -t bugpatrol-runner:ci -f images/runner/Dockerfile .

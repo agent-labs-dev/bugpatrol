@@ -39,6 +39,8 @@ jobs:
       - run: npm install -g npm@^11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Runner DNS sometimes loses the Azure apt mirror; see the script.
+      - run: bash scripts/apt-mirror-fallback.sh
       # Capture tests need Chromium's real font and layout engine.
       - run: pnpm --filter @bugpatrol/capture exec playwright install --with-deps chromium
       # The recording tests encode real video.
