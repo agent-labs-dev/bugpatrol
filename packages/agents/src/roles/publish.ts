@@ -33,13 +33,7 @@ import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
 import { lessonsFor, Workspace } from '../workspace.js';
 
-/** `unpublished`: the run had the item and ended without publishing or skipping it. */
-export type PublishOutcome = {
-  issueId: string;
-  kind: 'pr' | 'issue' | 'skipped' | 'unpublished';
-  url?: string;
-  reason?: string;
-};
+export type PublishOutcome = { issueId: string; kind: 'pr' | 'issue' | 'skipped'; url?: string; reason?: string };
 type Item = { kind: 'pr' | 'issue'; issue: Issue; fix?: FixProposal };
 type Deps = {
   gh?: Gh;
@@ -63,11 +57,6 @@ function publishable(fix: FixProposal): boolean {
 const ownIssue = (item: Item) => (item.kind === 'pr' ? item.issue.github?.number : undefined);
 const ownIssueNote = (item: Item) =>
   ownIssue(item) ? `This item's own GitHub issue is #${ownIssue(item)}. It is not a duplicate; this PR closes it.` : '';
-const citesOwnIssue = (item: Item, text: string) =>
-  ownIssue(item) !== undefined && new RegExp(`#${ownIssue(item)}\\b`).test(text);
-/** A stored skip that cites the item's own issue was a false duplicate, so it does not hold the item back. */
-const skipHolds = (item: Item, skip: Issue['publishSkipped']) =>
-  skip !== undefined && !citesOwnIssue(item, skip.reason);
 const result = (text: string, isError = false) => ({ content: [{ type: 'text' as const, text }], isError });
 const schema = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: 'object',
@@ -158,43 +147,6 @@ async function reuseFiled(
   return handled;
 }
 
-/**
- * A false skip can outlive its cause: a person may have shipped the fix by hand,
- * in a PR that Bugpatrol does not track. The skip stands when the item's own
- * issue is closed or an open PR will close it. A failed lookup also keeps the
- * skip, and the next run asks again, so a PR is never opened twice.
- */
-async function recheckFalseSkips(
-  gh: Gh,
-  repo: string,
-  items: Item[],
-  onLog?: (message: string) => void,
-): Promise<Item[]> {
-  const kept: Item[] = [];
-  for (const item of items) {
-    const own = ownIssue(item);
-    if (!item.issue.publishSkipped || own === undefined) {
-      kept.push(item);
-      continue;
-    }
-    try {
-      const { state, closedByPullRequestsReferences: prs = [] } = JSON.parse(
-        await gh(['issue', 'view', String(own), '--repo', repo, '--json', 'state,closedByPullRequestsReferences']),
-      ) as { state?: string; closedByPullRequestsReferences?: { number: number }[] };
-      if (state === 'CLOSED' || prs.length) {
-        onLog?.(
-          `${item.issue.id} stays skipped: #${own} is ${prs.length ? `closed by PR #${prs[0]!.number}` : 'closed'}.`,
-        );
-        continue;
-      }
-      kept.push(item);
-    } catch (error) {
-      onLog?.(`GitHub lookup of #${own} failed, so ${item.issue.id} waits for the next run: ${String(error)}`);
-    }
-  }
-  return kept;
-}
-
 export async function runPublisher(root: string, config: BugpatrolConfig, deps: Deps = {}): Promise<PublishOutcome[]> {
   if (!config.agents.github.enabled && !deps.dryRun) return [];
   const workspace = new Workspace(root, config.profile);
@@ -202,16 +154,12 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   const fixes = new Map((await workspace.listFixes()).map((fix) => [fix.issueId, fix]));
   const issues = (await workspace.listIssues()).filter((issue) => !deps.issueIds || deps.issueIds.includes(issue.id));
   let items: Item[] = issues.flatMap((issue): Item[] => {
-    if (issue.status === 'dismissed' || issue.fixRejected) return [];
+    if (issue.status === 'dismissed' || issue.publishSkipped || issue.fixRejected) return [];
     // Bugpatrol opens no PR for an external fix; for publish, the issue has no fix of its own.
     const found = fixes.get(issue.id);
     const fix = found?.external ? undefined : found;
     if (fix?.status === 'rejected') return [];
-    if (fix && !fix.pr && publishable(fix)) {
-      const item: Item = { kind: 'pr', issue, fix };
-      return skipHolds(item, issue.publishSkipped) ? [] : [item];
-    }
-    if (issue.publishSkipped) return [];
+    if (fix && !fix.pr && publishable(fix)) return [{ kind: 'pr' as const, issue, fix }];
     if (
       !issue.github &&
       !['fixed', 'dismissed'].includes(issue.status) &&
@@ -242,12 +190,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
       outcomes,
       deps.onLog,
     );
-    items = await recheckFalseSkips(
-      gh,
-      resolved.repo,
-      items.filter((item) => item.kind === 'pr' || !handled.has(item.issue.id)),
-      deps.onLog,
-    );
+    items = items.filter((item) => item.kind === 'pr' || !handled.has(item.issue.id));
     if (!items.length) return outcomes;
   }
 
@@ -260,8 +203,6 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
   let steps = 0;
   let costUsd = 0;
   let status: 'finished' | 'failed' = 'finished';
-  let ending = 'finished without publishing or skipping it';
-  const publishErrors = new Map<string, string>();
   let assetsReady = false;
   let labelsReady = false;
   const get = (id: string) => items.find((item) => item.issue.id === id && !done.has(id));
@@ -402,7 +343,7 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
             if (
               !latestIssue ||
               latestIssue.status === 'dismissed' ||
-              skipHolds(item, latestIssue.publishSkipped) ||
+              latestIssue.publishSkipped ||
               latestIssue.fixRejected ||
               latestFix?.status === 'rejected' ||
               (item.kind === 'issue' && latestIssue.github) ||
@@ -474,10 +415,6 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
                 at: new Date().toISOString(),
               };
               await workspace.saveFix(item.fix);
-              if (item.issue.publishSkipped) {
-                item.issue.publishSkipped = undefined;
-                await workspace.saveIssue(item.issue);
-              }
             } else {
               const opened = await createIssue(gh, {
                 repo: resolved!.repo,
@@ -503,7 +440,6 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
             return result(url);
           } catch (error) {
             if (item.fix?.commit) await workspace.saveFix(item.fix);
-            publishErrors.set(item.issue.id, String(error));
             return result(String(error), true);
           }
         },
@@ -517,9 +453,11 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
           if (!item) return result('Unknown or already handled issue.', true);
           const reason = String(input.reason ?? '').trim();
           if (!reason) return result('A reason is required.', true);
-          if (citesOwnIssue(item, reason)) return result(`${ownIssueNote(item)} Publish it instead of skipping.`, true);
+          const own = ownIssue(item);
+          if (own && new RegExp(`#${own}\\b`).test(reason))
+            return result(`${ownIssueNote(item)} Publish it instead of skipping.`, true);
           const latest = await workspace.readIssue(item.issue.id);
-          if (!latest || latest.status === 'dismissed' || skipHolds(item, latest.publishSkipped))
+          if (!latest || latest.status === 'dismissed' || latest.publishSkipped)
             return result('This item was dismissed or already handled.', true);
           Object.assign(item.issue, latest);
           item.issue.publishSkipped = { reason: vars.redact(reason) as string, at: new Date().toISOString() };
@@ -561,28 +499,15 @@ export async function runPublisher(root: string, config: BugpatrolConfig, deps: 
     );
     steps = outcome.steps;
     costUsd = outcome.costUsd;
-    if (outcome.stop !== 'done') ending = `stopped early (${outcome.stop})`;
   } catch (error) {
     status = 'failed';
-    ending = `failed: ${String(error)}`;
     session.emit({ kind: 'error', summary: `GitHub publishing failed: ${String(error)}` });
     deps.onLog?.(`GitHub publishing failed: ${String(error)}`);
   } finally {
-    // A cancelled session is a deliberate stop, and the items wait for the next run.
-    const left = session.cancelled ? [] : items.filter((item) => !done.has(item.issue.id));
-    for (const { issue } of left) {
-      const error = publishErrors.get(issue.id);
-      outcomes.push({
-        issueId: issue.id,
-        kind: 'unpublished',
-        reason: vars.redact(`The publisher ${ending}.${error ? ` Its publish failed: ${error}` : ''}`) as string,
-      });
-    }
-    if (left.length) status = 'failed';
     const prs = outcomes.filter((item) => item.kind === 'pr').length;
     const issues = outcomes.filter((item) => item.kind === 'issue').length;
     const skipped = outcomes.filter((item) => item.kind === 'skipped').length;
-    const summary = `${deps.dryRun ? 'Drafted' : 'Published'} ${prs} PR(s) and ${issues} issue(s); skipped ${skipped}${left.length ? `; ${left.length} left unpublished` : ''}`;
+    const summary = `${deps.dryRun ? 'Drafted' : 'Published'} ${prs} PR(s) and ${issues} issue(s); skipped ${skipped}`;
     await workspace.endSession(record.id, { summary, status, steps, costUsd });
     session.emit({ kind: 'session-end', summary });
     await session.idle(costUsd);
