@@ -1,27 +1,37 @@
 #!/usr/bin/env bash
-# GitHub's Ubuntu runners (and the Playwright image built on Azure) fetch apt
-# packages from azure.archive.ubuntu.com. When the runner's resolver cannot find
-# that name, every apt step retries for minutes and fails the job, though
-# nothing in the commit is wrong. The Ubuntu archive serves the same paths under
-# that host name, so point the name at it for this job only.
+# GitHub's Ubuntu runners fetch apt packages from azure.archive.ubuntu.com, and
+# the Playwright image the runner image builds from names the same mirror. When
+# the runner's resolver loses the ubuntu.com names, every apt step retries for
+# minutes and fails the job though nothing in the commit is wrong. So any apt
+# host the runner cannot resolve is looked up through public DNS over HTTPS and
+# pinned in /etc/hosts for this job only.
 #
-# It changes nothing while the mirror resolves. For `docker build`, which does
-# not read the host's /etc/hosts, it exports APT_MIRROR_ADD_HOST for --add-host.
-set -euo pipefail
+# It changes nothing while the names resolve. `docker build` does not read the
+# host's /etc/hosts, so the pins are also exported as APT_MIRROR_ADD_HOSTS, a
+# list of --add-host flags.
+set -uo pipefail
 
-mirror=azure.archive.ubuntu.com
-if getent hosts "$mirror" >/dev/null; then
-  exit 0
-fi
+flags=()
+for host in azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com; do
+  if getent hosts "$host" >/dev/null; then
+    continue
+  fi
+  ip=""
+  # DNS over HTTPS: the runner resolves these providers' own names fine.
+  for doh in https://cloudflare-dns.com/dns-query https://dns.google/resolve; do
+    ip=$(curl -fsS --max-time 10 -H "accept: application/dns-json" "$doh?name=$host&type=A" |
+      jq -r '[.Answer[]? | select(.type == 1) | .data][0] // empty')
+    [ -n "$ip" ] && break
+  done
+  if [ -z "$ip" ]; then
+    echo "::warning::$host does not resolve here or through public DNS; apt steps that need it will fail."
+    continue
+  fi
+  echo "::warning::$host does not resolve on this runner; pinned to $ip from public DNS."
+  echo "$ip $host" | sudo tee -a /etc/hosts >/dev/null
+  flags+=("--add-host=$host:$ip")
+done
 
-ip=$(getent ahostsv4 archive.ubuntu.com | awk 'NR == 1 { print $1 }')
-if [ -z "$ip" ]; then
-  echo "::warning::Neither $mirror nor archive.ubuntu.com resolves; apt steps will fail."
-  exit 0
-fi
-
-echo "::warning::$mirror does not resolve on this runner; using archive.ubuntu.com ($ip)."
-echo "$ip $mirror" | sudo tee -a /etc/hosts >/dev/null
 if [ -n "${GITHUB_ENV:-}" ]; then
-  echo "APT_MIRROR_ADD_HOST=$mirror:$ip" >>"$GITHUB_ENV"
+  echo "APT_MIRROR_ADD_HOSTS=${flags[*]}" >>"$GITHUB_ENV"
 fi

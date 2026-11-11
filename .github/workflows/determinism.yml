@@ -62,6 +62,5 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash scripts/apt-mirror-fallback.sh
-      # The Playwright base image also names the Azure mirror; --add-host only
-      # applies when the script found it unresolvable.
-      - run: docker build ${APT_MIRROR_ADD_HOST:+--add-host "$APT_MIRROR_ADD_HOST"} -t bugpatrol-runner:ci -f images/runner/Dockerfile .
+      # Word splitting is intended: the variable is a list of --add-host flags.
+      - run: docker build $APT_MIRROR_ADD_HOSTS -t bugpatrol-runner:ci -f images/runner/Dockerfile .
