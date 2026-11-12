@@ -23,6 +23,21 @@ const response = (value: string) => ({ content: [{ type: 'text' as const, text: 
  */
 export type CaptureTarget = { capture: RetestCapture; steps: RoutineStep[]; reported?: Evidence };
 
+/** Marks each target whose routine this replay failed, and clears it when one succeeds. */
+function recordSetup(tool: Tool, targets: CaptureTarget[]): Tool {
+  return {
+    ...tool,
+    async run(input) {
+      const result = await tool.run(input);
+      const failure = result.isError
+        ? result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(' ')
+        : undefined;
+      for (const target of targets) if (target.capture.routineId === input.id) target.capture.setupFailed = failure;
+      return result;
+    },
+  };
+}
+
 /** What a model sees of a target as it was reported. */
 export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
   return target.reported ? evidenceParts(root, target.reported) : captureParts(root, target.capture.before);
@@ -78,7 +93,9 @@ export async function captureTargets(
     'switch_window',
     'save_lesson',
   ]);
-  const tools: Tool[] = explorerTools(session, { replay: task.replay }).filter((tool) => allowed.has(tool.name));
+  const tools: Tool[] = explorerTools(session, { replay: task.replay })
+    .filter((tool) => allowed.has(tool.name))
+    .map((tool) => (tool.name === 'run_routine' ? recordSetup(tool, targets) : tool));
   tools.push(
     {
       name: 'replay_issue_steps',

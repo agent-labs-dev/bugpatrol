@@ -438,6 +438,11 @@ export type RetestCapture = {
   afterTerminal?: string;
   note?: string;
   reached?: boolean;
+  /**
+   * Why the target's routine failed its last replay. The routine builds the
+   * state the issue needs, so until it replays that state may be missing.
+   */
+  setupFailed?: string;
 };
 
 export type Retest = {
