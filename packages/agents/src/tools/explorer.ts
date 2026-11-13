@@ -647,6 +647,75 @@ function declaredStatuses(session: AgentSession, api: ApiDriver): string | undef
 const pendingRequests = (session: AgentSession) =>
   session.trail.slice(session.anchor.index).filter((step) => step.kind === 'request');
 
+type RequestStep = Extract<RoutineStep, { kind: 'request' }>;
+
+/**
+ * The step to record for a request, with each path parameter that holds an id
+ * from an earlier response of this routine as a placeholder, and a capture on
+ * that earlier request. A literal is an id this build made, and a replay on
+ * another build asks for an id that build never made. The response body is the
+ * exchange's, redacted as the driver redacts a capture, so the pointer resolves on replay.
+ */
+function captureEarlierIds(session: AgentSession, contract: Contract, url: string, step: RequestStep): RequestStep {
+  const endpoint = contract.match(step.method, url);
+  const parts = /^([a-z][a-z0-9+.-]*:\/\/[^/?#]*)?([^?#]*)(.*)$/is.exec(step.url);
+  if (!endpoint || !parts) return step;
+  const template = endpoint.template.split('/');
+  const segments = (parts[2] ?? '').split('/');
+  if (template.length !== segments.length) return step;
+  // The first response that holds the id is the one that made it.
+  const earlier = pendingRequests(session) as RequestStep[];
+  const taken = new Set([...session.vars.names(), ...earlier.flatMap((item) => Object.keys(item.capture ?? {}))]);
+  for (const [index, name] of template.entries()) {
+    const param = /^\{([^{}]+)\}$/.exec(name)?.[1];
+    const segment = segments[index]!;
+    if (!param || segment.includes('{{')) continue;
+    let value: string;
+    try {
+      value = decodeURIComponent(segment);
+    } catch {
+      continue;
+    }
+    for (const source of earlier) {
+      const exchange = responses.get(source)?.observation.capture;
+      const body = exchange?.kind === 'http' ? exchange.exchange?.response?.body : undefined;
+      const pointer = body === undefined ? undefined : pointerTo(parseJson(body), value);
+      if (pointer === undefined) continue;
+      let capture = Object.entries(source.capture ?? {}).find(([, at]) => at === pointer)?.[0];
+      if (!capture) {
+        const base = `RESPONSE_${param.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+        capture = base;
+        for (let n = 2; taken.has(capture); n++) capture = `${base}_${n}`;
+        taken.add(capture);
+        source.capture = { ...source.capture, [capture]: pointer };
+        session.vars.capture({ [capture]: value });
+      }
+      segments[index] = `{{${capture}}}`;
+      break;
+    }
+  }
+  return { ...step, url: `${parts[1] ?? ''}${segments.join('/')}${parts[3] ?? ''}` };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The JSON pointer of the first string or number in `value` that reads as `wanted`, in document order. */
+function pointerTo(value: unknown, wanted: string, at = ''): string | undefined {
+  if (typeof value === 'string' || typeof value === 'number') return String(value) === wanted ? at : undefined;
+  if (!value || typeof value !== 'object') return undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const found = pointerTo(item, wanted, `${at}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 /**
  * The assertions of save_routine on the requests since the last anchor. Each
  * one must hold on the response that the explorer saw, so a saved routine
@@ -745,7 +814,7 @@ export function explorerTools(
                   type: 'object',
                   additionalProperties: string,
                   description:
-                    'Map RESPONSE_NAME variables to JSON pointers in the response, e.g. {RESPONSE_THREAD_ID: "/result/id"}. Use explicit {{RESPONSE_NAME}} placeholders in later URLs/bodies; literals remain literal on replay. Credential fields cannot be captured.',
+                    'Map RESPONSE_NAME variables to JSON pointers in the response, e.g. {RESPONSE_THREAD_ID: "/result/id"}. Use explicit {{RESPONSE_NAME}} placeholders in later URLs/bodies. A path parameter that holds a value an earlier response of the routine gave is recorded as a capture of that response; any other literal remains literal on replay. Credential fields cannot be captured.',
                 },
                 case: {
                   type: 'string',
@@ -783,7 +852,11 @@ export function explorerTools(
                 body: parsed.body === undefined ? undefined : session.vars.resolve(parsed.body),
               };
               const length = session.trail.length;
-              const result = await act(session, action, { kind: 'request', ...resolved });
+              const recorded = captureEarlierIds(session, api.policy.contract, action.url, {
+                kind: 'request',
+                ...resolved,
+              });
+              const result = await act(session, action, recorded);
               if (result.isError || session.trail.length === length) return result;
               const named = id ?? (parsed.as === 'other' ? 'other-user' : 'ok');
               responses.set(session.trail.at(-1)!, {

@@ -418,6 +418,25 @@ describe('the api explorer', () => {
     expect(sent.text).toContain('No second credential set is configured');
   });
 
+  it('records an id that an earlier response of the routine gave as a capture, not as a literal', async () => {
+    const f = await apiExplorer();
+    closers.push(f.fixture.close);
+    // Item 1 is seeded: no response of this routine gave it, so it stays literal.
+    await f.run('request', { method: 'GET', url: '/items/1' });
+    const created = await f.run('request', { method: 'POST', url: '/items', body: '{"name":"Gamma"}' });
+    const id = /"id": "(\d+)"/.exec(created.text)![1];
+    await f.run('request', { method: 'GET', url: `/items/${id}` });
+    await f.run('request', { method: 'DELETE', url: `/items/${id}?force=1` });
+    await f.run('save_routine', { id: 'read-created', description: 'Reads and deletes a created item' });
+    const steps = (await f.workspace.readRoutine('read-created'))!.steps as RoutineStep[];
+    expect(steps).toMatchObject([
+      { url: '/items/1' },
+      { method: 'POST', capture: { RESPONSE_ID: '/result/id' } },
+      { url: '/items/{{RESPONSE_ID}}' },
+      { url: '/items/{{RESPONSE_ID}}?force=1' },
+    ]);
+  });
+
   it('save_routine keeps the assertions that hold on each request, and refuses one that does not', async () => {
     const f = await apiExplorer();
     closers.push(f.fixture.close);
