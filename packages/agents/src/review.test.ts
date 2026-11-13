@@ -737,6 +737,55 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('stops a second review of a pull request while one runs, and tears the first one down', async () => {
+    const f = await fixture({ enabled: false });
+    try {
+      const started = join(f.root, 'setup.log');
+      const stopped = join(f.root, 'teardown.log');
+      const go = join(f.root, 'go');
+      // The head build of the first review waits until the second review has been answered.
+      const config = parseConfig({
+        version: 1,
+        app: {
+          source: 'source',
+          connect: { url: 'fake://home' },
+          setup: [
+            {
+              run: `echo "$BUGPATROL_SOURCE" >> ${started}; until [ -e ${go} ]; do sleep 0.05; done`,
+              timeoutMs: 20_000,
+            },
+          ],
+          teardown: [{ run: `echo "$BUGPATROL_SOURCE" >> ${stopped}` }],
+        },
+        agents: { github: { enabled: false } },
+      });
+      const run = () =>
+        reviewPullRequest(f.root, config, 7, {
+          gh: fakeGh().gh,
+          createRuntime: scripted('introduced', 1, 1).createRuntime,
+          createDriver: screens,
+          dryRun: true,
+          force: true,
+        });
+      const first = run();
+      while (!existsSync(started)) await new Promise((done) => setTimeout(done, 20));
+      await expect(run()).rejects.toThrow(`A review of PR #7 runs (pid ${process.pid})`);
+      await writeFile(go, '');
+      await first;
+      const lines = (file: string) => readFileSync(file, 'utf8').trim().split('\n').sort();
+      // A head and a base build, each torn down, and nothing of the review left.
+      expect(new Set(lines(started)).size).toBe(2);
+      expect(lines(stopped)).toEqual(lines(started));
+      expect((await git(f.source, 'worktree', 'list')).split('\n')).toHaveLength(1);
+      expect(await git(f.source, 'for-each-ref', 'refs/bugpatrol')).toBe('');
+      // The lock goes with the review, so the next one runs.
+      await writeFile(started, '');
+      await expect(run()).resolves.toMatchObject({ pr: { number: 7 } });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('takes the claims of the author-written claims section as written', async () => {
     const f = await fixture({ enabled: false }, { claims: true });
     try {

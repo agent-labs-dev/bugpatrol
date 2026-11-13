@@ -136,7 +136,7 @@ export async function sessionRevision(root: string, config: BugpatrolConfig): Pr
   return externalBackend(config.app) ? undefined : sourceCommit(root, config);
 }
 
-function alive(pid: number): boolean {
+export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

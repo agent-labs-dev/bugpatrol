@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { appendFile, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -24,7 +25,7 @@ import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, uploadImage
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
-import { activePatrolPid } from '../patrol.js';
+import { activePatrolPid, alive } from '../patrol.js';
 import {
   explorerBaseSystem,
   explorerClaimsPart,
@@ -211,6 +212,12 @@ export type ReviewContext = {
   log: (message: string) => void;
   /** The limits of the claim check, across its sessions. */
   budget: ClaimBudget;
+  /**
+   * Names what this run owns: its head ref and its worktrees, so two reviews
+   * of one pull request never touch each other's. The app's setup often names
+   * its resources (a compose project) after the worktree path, so they differ too.
+   */
+  run: string;
 };
 
 const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
@@ -219,14 +226,14 @@ const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
 const blocking = (ctx: Pick<ReviewContext, 'config'>) => ctx.config.agents.review.block;
 
 /** Holds the fetched pull request commit for the time of one review. */
-const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
+const headRefOf = (number: number, run: string) => `refs/bugpatrol/pr-${number}-${run}`;
 
 async function loadPullRequest(
   gh: Gh,
   repo: string,
   source: string,
   number: number,
-  opts: { allowFork: boolean; claims: boolean },
+  opts: { allowFork: boolean; claims: boolean; headRef: string },
 ): Promise<PullRequest> {
   const fields = `number,title,body,url,baseRefName,isCrossRepository${opts.claims ? ',closingIssuesReferences' : ''}`;
   const view = JSON.parse(
@@ -245,7 +252,7 @@ async function loadPullRequest(
       `PR #${number} comes from a fork. A review runs its code on this machine, with the secrets of the app. ` +
         'Read the diff first. If you trust it, run the review again with --allow-fork.',
     );
-  const headRef = headRefOf(number);
+  const { headRef } = opts;
   const baseRef = `refs/remotes/origin/${view.baseRefName}`;
   await git(
     source,
@@ -304,7 +311,7 @@ async function withWorktree<T>(
   run: (worktree: string) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
-  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}`);
+  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}-${ctx.run}`);
   const remove = async () => {
     try {
       await lstat(worktree);
@@ -313,8 +320,6 @@ async function withWorktree<T>(
     }
     await git(source, 'worktree', 'remove', '--force', worktree);
   };
-  // A review that was killed leaves its worktree behind.
-  await remove();
   await mkdir(paths.worktrees(root, config.profile), { recursive: true });
   await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
   let restore = async () => {};
@@ -1221,6 +1226,26 @@ async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: 
 }
 
 /**
+ * Holds the review of one pull request for this process until `release`. Two
+ * reviews of a pull request would share its review record and its claim
+ * artifacts, so a second one stops. A lock whose process is gone is stale.
+ */
+async function lockReview(file: string, number: number): Promise<() => Promise<void>> {
+  await mkdir(dirname(file), { recursive: true });
+  for (;;) {
+    try {
+      await writeFile(file, String(process.pid), { flag: 'wx' });
+      return () => rm(file, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    const pid = Number(await readFile(file, 'utf8').catch(() => ''));
+    if (pid && alive(pid)) throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
+    await rm(file, { force: true });
+  }
+}
+
+/**
  * A differential review of one pull request: the explorer tests what the
  * diff can affect on the pull request build, repeats each reported flow on
  * the merge base, and the judge keeps only what the pull request introduces.
@@ -1250,13 +1275,17 @@ export async function reviewPullRequest(
     );
   const log = opts.onLog ?? (() => {});
   const { repo } = ready;
+  const release = await lockReview(`${paths.reviewDir(root, number, config.profile)}.lock`, number);
+  const run = randomBytes(4).toString('hex');
+  const headRef = headRefOf(number, run);
   try {
     const pr = await loadPullRequest(gh, repo, source, number, {
       allowFork: Boolean(opts.allowFork),
       claims: claimCheck({ config, opts }),
+      headRef,
     });
     const budget = new ClaimBudget(config.agents.review);
-    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log, budget };
+    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log, budget, run };
     const last = await workspace.readReview(number);
     let review: PrReview;
     const covered = last && (last.claims || !claimCheck(ctx)) && (last.check || !blocking(ctx));
@@ -1271,6 +1300,10 @@ export async function reviewPullRequest(
     return review;
   } finally {
     // The ref of a pull request that is not there yet deletes as a no-op.
-    await git(source, 'update-ref', '-d', headRefOf(number));
+    try {
+      await git(source, 'update-ref', '-d', headRef);
+    } finally {
+      await release();
+    }
   }
 }
