@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFile, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -25,7 +25,7 @@ import { defaultGh, ensureAssetsBranch, type Gh, ghReady, limitBody, uploadImage
 import { type AppGuide, noGuide, readGuide } from '../guide.js';
 import { startApp } from '../lifecycle.js';
 import { withSessionLogs } from '../logs.js';
-import { activePatrolPid } from '../patrol.js';
+import { activePatrolPid, alive } from '../patrol.js';
 import {
   explorerBaseSystem,
   explorerClaimsPart,
@@ -1226,6 +1226,26 @@ async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: 
 }
 
 /**
+ * Holds the review of one pull request for this process until `release`. Two
+ * reviews of a pull request would share its review record and its claim
+ * artifacts, so a second one stops. A lock whose process is gone is stale.
+ */
+async function lockReview(file: string, number: number): Promise<() => Promise<void>> {
+  await mkdir(dirname(file), { recursive: true });
+  for (;;) {
+    try {
+      await writeFile(file, String(process.pid), { flag: 'wx' });
+      return () => rm(file, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    const pid = Number(await readFile(file, 'utf8').catch(() => ''));
+    if (pid && alive(pid)) throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
+    await rm(file, { force: true });
+  }
+}
+
+/**
  * A differential review of one pull request: the explorer tests what the
  * diff can affect on the pull request build, repeats each reported flow on
  * the merge base, and the judge keeps only what the pull request introduces.
@@ -1255,6 +1275,7 @@ export async function reviewPullRequest(
     );
   const log = opts.onLog ?? (() => {});
   const { repo } = ready;
+  const release = await lockReview(`${paths.reviewDir(root, number, config.profile)}.lock`, number);
   const run = randomBytes(4).toString('hex');
   const headRef = headRefOf(number, run);
   try {
@@ -1279,6 +1300,10 @@ export async function reviewPullRequest(
     return review;
   } finally {
     // The ref of a pull request that is not there yet deletes as a no-op.
-    await git(source, 'update-ref', '-d', headRef);
+    try {
+      await git(source, 'update-ref', '-d', headRef);
+    } finally {
+      await release();
+    }
   }
 }

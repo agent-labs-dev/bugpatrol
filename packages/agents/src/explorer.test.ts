@@ -426,6 +426,8 @@ describe('the api explorer', () => {
     const created = await f.run('request', { method: 'POST', url: '/items', body: '{"name":"Gamma"}' });
     const id = /"id": "(\d+)"/.exec(created.text)![1];
     await f.run('request', { method: 'GET', url: `/items/${id}` });
+    // The name of the item is not an id, so a segment equal to it is not where it came from.
+    await f.run('request', { method: 'GET', url: '/items/Gamma' });
     await f.run('request', { method: 'DELETE', url: `/items/${id}?force=1` });
     await f.run('save_routine', { id: 'read-created', description: 'Reads and deletes a created item' });
     const steps = (await f.workspace.readRoutine('read-created'))!.steps as RoutineStep[];
@@ -433,6 +435,7 @@ describe('the api explorer', () => {
       { url: '/items/1' },
       { method: 'POST', capture: { RESPONSE_ID: '/result/id' } },
       { url: '/items/{{RESPONSE_ID}}' },
+      { url: '/items/Gamma' },
       { url: '/items/{{RESPONSE_ID}}?force=1' },
     ]);
   });

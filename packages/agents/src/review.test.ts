@@ -737,12 +737,13 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
-  it('gives two reviews of one pull request their own builds, and tears each one down', async () => {
+  it('stops a second review of a pull request while one runs, and tears the first one down', async () => {
     const f = await fixture({ enabled: false });
     try {
       const started = join(f.root, 'setup.log');
       const stopped = join(f.root, 'teardown.log');
-      // The head build of the first review waits until the second review starts its own.
+      const go = join(f.root, 'go');
+      // The head build of the first review waits until the second review has been answered.
       const config = parseConfig({
         version: 1,
         app: {
@@ -750,7 +751,7 @@ describe('pull request review', { timeout: 30_000 }, () => {
           connect: { url: 'fake://home' },
           setup: [
             {
-              run: `echo "$BUGPATROL_SOURCE" >> ${started}; until [ "$(wc -l < ${started})" -ge 2 ]; do sleep 0.05; done`,
+              run: `echo "$BUGPATROL_SOURCE" >> ${started}; until [ -e ${go} ]; do sleep 0.05; done`,
               timeoutMs: 20_000,
             },
           ],
@@ -768,13 +769,18 @@ describe('pull request review', { timeout: 30_000 }, () => {
         });
       const first = run();
       while (!existsSync(started)) await new Promise((done) => setTimeout(done, 20));
-      await Promise.all([first, run()]);
+      await expect(run()).rejects.toThrow(`A review of PR #7 runs (pid ${process.pid})`);
+      await writeFile(go, '');
+      await first;
       const lines = (file: string) => readFileSync(file, 'utf8').trim().split('\n').sort();
-      // A head and a base build for each review, each in a worktree of its own, each torn down.
-      expect(new Set(lines(started)).size).toBe(4);
+      // A head and a base build, each torn down, and nothing of the review left.
+      expect(new Set(lines(started)).size).toBe(2);
       expect(lines(stopped)).toEqual(lines(started));
       expect((await git(f.source, 'worktree', 'list')).split('\n')).toHaveLength(1);
       expect(await git(f.source, 'for-each-ref', 'refs/bugpatrol')).toBe('');
+      // The lock goes with the review, so the next one runs.
+      await writeFile(started, '');
+      await expect(run()).resolves.toMatchObject({ pr: { number: 7 } });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

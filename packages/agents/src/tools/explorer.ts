@@ -669,17 +669,12 @@ function captureEarlierIds(session: AgentSession, contract: Contract, url: strin
   for (const [index, name] of template.entries()) {
     const param = /^\{([^{}]+)\}$/.exec(name)?.[1];
     const segment = segments[index]!;
-    if (!param || segment.includes('{{')) continue;
-    let value: string;
-    try {
-      value = decodeURIComponent(segment);
-    } catch {
-      continue;
-    }
+    // A replay puts a captured value into the path as it is, so an escaped segment stays literal.
+    if (!param || segment.includes('{{') || segment.includes('%')) continue;
     for (const source of earlier) {
       const exchange = responses.get(source)?.observation.capture;
       const body = exchange?.kind === 'http' ? exchange.exchange?.response?.body : undefined;
-      const pointer = body === undefined ? undefined : pointerTo(parseJson(body), value);
+      const pointer = body === undefined ? undefined : idPointer(parseJson(body), param, segment);
       if (pointer === undefined) continue;
       let capture = Object.entries(source.capture ?? {}).find(([, at]) => at === pointer)?.[0];
       if (!capture) {
@@ -688,7 +683,7 @@ function captureEarlierIds(session: AgentSession, contract: Contract, url: strin
         for (let n = 2; taken.has(capture); n++) capture = `${base}_${n}`;
         taken.add(capture);
         source.capture = { ...source.capture, [capture]: pointer };
-        session.vars.capture({ [capture]: value });
+        session.vars.capture({ [capture]: segment });
       }
       segments[index] = `{{${capture}}}`;
       break;
@@ -705,12 +700,19 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** The JSON pointer of the first string or number in `value` that reads as `wanted`, in document order. */
-function pointerTo(value: unknown, wanted: string, at = ''): string | undefined {
-  if (typeof value === 'string' || typeof value === 'number') return String(value) === wanted ? at : undefined;
+/**
+ * The JSON pointer of the first id in `value`, in document order, that reads as
+ * `wanted`. An id is a property named as the path parameter, or `id`, as the
+ * sweep reads the id of a create or a list: a status or a name that happens to
+ * equal the segment is not where it came from.
+ */
+function idPointer(value: unknown, param: string, wanted: string, at = ''): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
   for (const [key, item] of Object.entries(value)) {
-    const found = pointerTo(item, wanted, `${at}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`);
+    const pointer = `${at}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`;
+    const scalar = typeof item === 'string' || typeof item === 'number';
+    if (scalar && !Array.isArray(value) && (key === param || key === 'id') && String(item) === wanted) return pointer;
+    const found = idPointer(item, param, wanted, pointer);
     if (found !== undefined) return found;
   }
   return undefined;
@@ -814,7 +816,7 @@ export function explorerTools(
                   type: 'object',
                   additionalProperties: string,
                   description:
-                    'Map RESPONSE_NAME variables to JSON pointers in the response, e.g. {RESPONSE_THREAD_ID: "/result/id"}. Use explicit {{RESPONSE_NAME}} placeholders in later URLs/bodies. A path parameter that holds a value an earlier response of the routine gave is recorded as a capture of that response; any other literal remains literal on replay. Credential fields cannot be captured.',
+                    'Map RESPONSE_NAME variables to JSON pointers in the response, e.g. {RESPONSE_THREAD_ID: "/result/id"}. Use explicit {{RESPONSE_NAME}} placeholders in later URLs/bodies. A path parameter that holds an id an earlier response of the routine gave (a property named as the parameter, or id) is recorded as a capture of that response; any other literal remains literal on replay. Credential fields cannot be captured.',
                 },
                 case: {
                   type: 'string',
