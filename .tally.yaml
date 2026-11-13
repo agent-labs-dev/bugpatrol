@@ -1,0 +1,19 @@
+warnDays: 30
+staleDays: 365
+idleDays: 90
+secretPatterns: []
+ignore: []
+credentialNames: []
+ignorePaths: []
+sources: []
+keys:
+  - id: openrouter-bugpatrol-ci
+    service: openrouter
+    group: ci
+    owner: cjber
+    locations:
+      - github: OPENROUTER_API_KEY
+      - pass: openrouter/bugpatrol-ci
+    expires: 2027-02-11
+    expiresNote: expires_at from the OpenRouter key endpoint, read 2026-11-13
+    limit: $50/day
