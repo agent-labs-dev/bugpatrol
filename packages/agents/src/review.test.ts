@@ -737,6 +737,49 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('gives two reviews of one pull request their own builds, and tears each one down', async () => {
+    const f = await fixture({ enabled: false });
+    try {
+      const started = join(f.root, 'setup.log');
+      const stopped = join(f.root, 'teardown.log');
+      // The head build of the first review waits until the second review starts its own.
+      const config = parseConfig({
+        version: 1,
+        app: {
+          source: 'source',
+          connect: { url: 'fake://home' },
+          setup: [
+            {
+              run: `echo "$BUGPATROL_SOURCE" >> ${started}; until [ "$(wc -l < ${started})" -ge 2 ]; do sleep 0.05; done`,
+              timeoutMs: 20_000,
+            },
+          ],
+          teardown: [{ run: `echo "$BUGPATROL_SOURCE" >> ${stopped}` }],
+        },
+        agents: { github: { enabled: false } },
+      });
+      const run = () =>
+        reviewPullRequest(f.root, config, 7, {
+          gh: fakeGh().gh,
+          createRuntime: scripted('introduced', 1, 1).createRuntime,
+          createDriver: screens,
+          dryRun: true,
+          force: true,
+        });
+      const first = run();
+      while (!existsSync(started)) await new Promise((done) => setTimeout(done, 20));
+      await Promise.all([first, run()]);
+      const lines = (file: string) => readFileSync(file, 'utf8').trim().split('\n').sort();
+      // A head and a base build for each review, each in a worktree of its own, each torn down.
+      expect(new Set(lines(started)).size).toBe(4);
+      expect(lines(stopped)).toEqual(lines(started));
+      expect((await git(f.source, 'worktree', 'list')).split('\n')).toHaveLength(1);
+      expect(await git(f.source, 'for-each-ref', 'refs/bugpatrol')).toBe('');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('takes the claims of the author-written claims section as written', async () => {
     const f = await fixture({ enabled: false }, { claims: true });
     try {

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { appendFile, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -211,6 +212,12 @@ export type ReviewContext = {
   log: (message: string) => void;
   /** The limits of the claim check, across its sessions. */
   budget: ClaimBudget;
+  /**
+   * Names what this run owns: its head ref and its worktrees, so two reviews
+   * of one pull request never touch each other's. The app's setup often names
+   * its resources (a compose project) after the worktree path, so they differ too.
+   */
+  run: string;
 };
 
 const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
@@ -219,14 +226,14 @@ const claimCheck = (ctx: Pick<ReviewContext, 'config' | 'opts'>) =>
 const blocking = (ctx: Pick<ReviewContext, 'config'>) => ctx.config.agents.review.block;
 
 /** Holds the fetched pull request commit for the time of one review. */
-const headRefOf = (number: number) => `refs/bugpatrol/pr-${number}`;
+const headRefOf = (number: number, run: string) => `refs/bugpatrol/pr-${number}-${run}`;
 
 async function loadPullRequest(
   gh: Gh,
   repo: string,
   source: string,
   number: number,
-  opts: { allowFork: boolean; claims: boolean },
+  opts: { allowFork: boolean; claims: boolean; headRef: string },
 ): Promise<PullRequest> {
   const fields = `number,title,body,url,baseRefName,isCrossRepository${opts.claims ? ',closingIssuesReferences' : ''}`;
   const view = JSON.parse(
@@ -245,7 +252,7 @@ async function loadPullRequest(
       `PR #${number} comes from a fork. A review runs its code on this machine, with the secrets of the app. ` +
         'Read the diff first. If you trust it, run the review again with --allow-fork.',
     );
-  const headRef = headRefOf(number);
+  const { headRef } = opts;
   const baseRef = `refs/remotes/origin/${view.baseRefName}`;
   await git(
     source,
@@ -304,7 +311,7 @@ async function withWorktree<T>(
   run: (worktree: string) => Promise<T>,
 ): Promise<T> {
   const { root, source, config } = ctx;
-  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}`);
+  const worktree = join(paths.worktrees(root, config.profile), `review-${ctx.pr.number}-${name}-${ctx.run}`);
   const remove = async () => {
     try {
       await lstat(worktree);
@@ -313,8 +320,6 @@ async function withWorktree<T>(
     }
     await git(source, 'worktree', 'remove', '--force', worktree);
   };
-  // A review that was killed leaves its worktree behind.
-  await remove();
   await mkdir(paths.worktrees(root, config.profile), { recursive: true });
   await git(source, 'worktree', 'add', '-q', '--detach', worktree, commit);
   let restore = async () => {};
@@ -1250,13 +1255,16 @@ export async function reviewPullRequest(
     );
   const log = opts.onLog ?? (() => {});
   const { repo } = ready;
+  const run = randomBytes(4).toString('hex');
+  const headRef = headRefOf(number, run);
   try {
     const pr = await loadPullRequest(gh, repo, source, number, {
       allowFork: Boolean(opts.allowFork),
       claims: claimCheck({ config, opts }),
+      headRef,
     });
     const budget = new ClaimBudget(config.agents.review);
-    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log, budget };
+    const ctx: ReviewContext = { root, source, config, workspace, repo, pr, opts, log, budget, run };
     const last = await workspace.readReview(number);
     let review: PrReview;
     const covered = last && (last.claims || !claimCheck(ctx)) && (last.check || !blocking(ctx));
@@ -1271,6 +1279,6 @@ export async function reviewPullRequest(
     return review;
   } finally {
     // The ref of a pull request that is not there yet deletes as a no-op.
-    await git(source, 'update-ref', '-d', headRefOf(number));
+    await git(source, 'update-ref', '-d', headRef);
   }
 }
