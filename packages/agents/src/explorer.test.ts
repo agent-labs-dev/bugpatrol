@@ -79,6 +79,12 @@ describe('a session that could not test the app', () => {
     expect(wasBlocked(blocked)).toBe(true);
     expect(wasBlocked(await finish({ summary: 'Covered the landing screen.' }))).toBe(false);
   });
+
+  it('includes a model that failed before the first step, but not one that failed later', () => {
+    const failed = (steps: number) => ({ stop: 'error' as const, steps, costUsd: 0, error: 'Model returned 402' });
+    expect(wasBlocked(failed(0))).toBe(true);
+    expect(wasBlocked(failed(12))).toBe(false);
+  });
 });
 
 describe('a command that only shows something', () => {
