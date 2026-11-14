@@ -233,6 +233,14 @@ export async function retestFix(
     retest.reason = retest.note ?? 'The explorer did not reach the issue screen.';
     return retest;
   }
+  // A screen reached without the routine's state can look "not fixed" (or
+  // fixed) for a reason that has nothing to do with the change.
+  const unset = targets.flatMap(({ capture }) => (capture.setupFailed ? [capture.setupFailed] : []));
+  if (unset.length) {
+    retest.outcome = 'unclear';
+    retest.reason = `The retest never had the state the issue needs, because its setup failed: ${unset.join('; ')}`;
+    return retest;
+  }
   const record = await workspace.startSession('judge');
   retest.judgeSessionId = record.id;
   const session = new AgentSession(root, config, vars, record.id, 'judge', undefined, deps.onLog);

@@ -117,6 +117,10 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
         }
       }
       report(`${phase}: ran \`${shell}\` (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+      // What a teardown removed (a test account, a run) is only in its output,
+      // and a teardown that skipped something can still exit 0.
+      const said = output.trim().split('\n').slice(-5).join('\n');
+      if (phase === 'Teardown' && said) report(`Teardown output:\n${said}`);
       for (const name of Object.keys(command.capture)) {
         const length =
           opts.vars.has(name) && !command.public.includes(name) ? opts.vars.resolve(`{{${name}}}`).length : 0;

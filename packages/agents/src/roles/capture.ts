@@ -23,6 +23,32 @@ const response = (value: string) => ({ content: [{ type: 'text' as const, text: 
  */
 export type CaptureTarget = { capture: RetestCapture; steps: RoutineStep[]; reported?: Evidence };
 
+/**
+ * Tracks whether each routine's latest replay failed. A target captured
+ * already keeps the state it was captured in: a later successful replay of a
+ * shared routine does not make an earlier capture valid.
+ */
+function recordSetup(
+  tool: Tool,
+  targets: CaptureTarget[],
+  captured: Set<CaptureTarget>,
+  setup: Map<unknown, string | undefined>,
+): Tool {
+  return {
+    ...tool,
+    async run(input) {
+      const result = await tool.run(input);
+      const failure = result.isError
+        ? result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(' ')
+        : undefined;
+      setup.set(input.id, failure);
+      for (const target of targets)
+        if (target.capture.routineId === input.id && !captured.has(target)) target.capture.setupFailed = failure;
+      return result;
+    },
+  };
+}
+
 /** What a model sees of a target as it was reported. */
 export async function beforeParts(root: string, target: CaptureTarget): Promise<ToolContent[]> {
   return target.reported ? evidenceParts(root, target.reported) : captureParts(root, target.capture.before);
@@ -64,6 +90,8 @@ export async function captureTargets(
   let finishTried = false;
   /** The targets that capture_after ran for, with a file or with nothing to save. */
   const captured = new Set<CaptureTarget>();
+  /** The latest replay result per routine id: a failure message, or undefined once it succeeds. */
+  const setup = new Map<unknown, string | undefined>();
   let finishSummary = '';
   const allowed = new Set([
     'look',
@@ -78,7 +106,9 @@ export async function captureTargets(
     'switch_window',
     'save_lesson',
   ]);
-  const tools: Tool[] = explorerTools(session, { replay: task.replay }).filter((tool) => allowed.has(tool.name));
+  const tools: Tool[] = explorerTools(session, { replay: task.replay })
+    .filter((tool) => allowed.has(tool.name))
+    .map((tool) => (tool.name === 'run_routine' ? recordSetup(tool, targets, captured, setup) : tool));
   tools.push(
     {
       name: 'replay_issue_steps',
@@ -145,6 +175,8 @@ export async function captureTargets(
         target.capture.after = await session.capture(observation, `retest-after-${input.target}`);
         target.capture.afterTerminal = session.lastTerminal;
         target.capture.note = String(input.note ?? '');
+        // The capture shows the state as the routine's latest replay left it.
+        target.capture.setupFailed = target.capture.routineId ? setup.get(target.capture.routineId) : undefined;
         captured.add(target);
         // An API with no answered request has no exchange, and a flow with no capture reached nothing.
         target.capture.reached = input.reached === true && target.capture.after !== undefined;

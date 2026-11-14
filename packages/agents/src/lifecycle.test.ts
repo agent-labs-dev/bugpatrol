@@ -25,6 +25,7 @@ describe('startApp', () => {
       expect(vars.resolve('{{CDP_PORT}}')).toBe('9624');
       await expect(running.stop()).resolves.toBeUndefined();
       expect(emitted.some((line) => line.includes('Teardown: ran'))).toBe(true);
+      expect(emitted).toContain('Teardown output:\ngoodbye');
       expect(emitted.some((line) => line.includes('failed'))).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
