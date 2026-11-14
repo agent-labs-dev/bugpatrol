@@ -87,8 +87,12 @@ function goalGap(session: AgentSession, api: ApiDriver, goal: Endpoint[]): strin
   return `Goal not met: ${missed.length} of the ${goal.length} endpoint(s) that the goal names got no request: ${missed.map((endpoint) => endpoint.key).join(', ')}.`;
 }
 
-/** Whether the explorer finished saying it could not test the app at all. */
+/**
+ * Whether the session tested nothing: the explorer finished saying it could not test the app, or its model
+ * failed before the first step (a rejected key or an exhausted budget answers every call the same way).
+ */
 export function wasBlocked(outcome: RoleOutcome): boolean {
+  if (outcome.stop === 'error') return outcome.steps === 0;
   return outcome.stop === 'done' && (outcome.summary ?? '').startsWith(BLOCKED);
 }
 
