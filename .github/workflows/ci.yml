@@ -28,7 +28,7 @@ jobs:
       # must fail here, not in a release.
       - run: pnpm --filter bugpatrol build
       - run: node packages/bugpatrol/dist/bin.js --version
-      # The landing page in site/, which the Pages workflow deploys from main.
+      # The landing page in site/, which Vercel builds and serves.
       - run: pnpm --filter @bugpatrol/site typecheck
       - run: pnpm --filter @bugpatrol/site build
       # Runner DNS sometimes loses the Azure apt mirror; see the script.
