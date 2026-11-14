@@ -11,6 +11,7 @@ import {
   type Gh,
   ghReady,
   listFiled,
+  resolveRepo,
   syncGitHub,
   uploadImage,
 } from './github.js';
@@ -255,6 +256,24 @@ describe('ghReady', () => {
     };
     const ready = await ghReady(gh, config, '.');
     expect(!ready.ok && ready.reason).toContain('the gh CLI is not installed');
+  });
+});
+
+describe('resolveRepo', () => {
+  const config = parseConfig({
+    version: 1,
+    app: { connect: { url: 'http://localhost' } },
+    agents: { github: { enabled: true } },
+  });
+
+  it('bounds repository discovery and names the stalled command', async () => {
+    const gh: Gh = (_args, opts) =>
+      new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    await expect(resolveRepo(gh, config, '.', 20)).rejects.toThrow(
+      /gh repo view --json nameWithOwner -q \.nameWithOwner` did not answer within 20 ms.*gh auth status/,
+    );
   });
 });
 

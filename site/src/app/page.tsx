@@ -5,7 +5,7 @@ import { SetupTabs } from '@/components/SetupTabs';
 
 const repo = 'https://github.com/agent-labs-dev/bugpatrol';
 const docs = `${repo}/blob/main/docs`;
-const asset = (file: string) => `${process.env.NEXT_PUBLIC_BASE_PATH}/assets/${file}`;
+const asset = (file: string) => `/assets/${file}`;
 
 const agents = [
   {

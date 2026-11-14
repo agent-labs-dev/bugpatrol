@@ -8,14 +8,19 @@ import { type BugpatrolConfig, type FixProposal, fitLesson, type Issue, judgedRe
 import { commitFix } from './roles/fixer.js';
 import { dismissedFingerprints, Workspace } from './workspace.js';
 
-export type Gh = (args: string[], opts?: { cwd?: string; input?: string }) => Promise<string>;
+export type Gh = (args: string[], opts?: { cwd?: string; input?: string; signal?: AbortSignal }) => Promise<string>;
 
 export const defaultGh: Gh = (args, opts) =>
   new Promise((resolve, reject) => {
-    const child = execFile('gh', args, { cwd: opts?.cwd, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(Object.assign(error, { stderr, stdout }));
-      else resolve(stdout.trim());
-    });
+    const child = execFile(
+      'gh',
+      args,
+      { cwd: opts?.cwd, maxBuffer: 16 * 1024 * 1024, signal: opts?.signal },
+      (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { stderr, stdout }));
+        else resolve(stdout.trim());
+      },
+    );
     child.stdin?.end(opts?.input);
   });
 
@@ -56,14 +61,46 @@ export async function resolveRepo(
   gh: Gh,
   config: BugpatrolConfig,
   source: string,
+  discoveryTimeoutMs = REPO_DISCOVERY_TIMEOUT_MS,
 ): Promise<{ repo: string; defaultBranch: string }> {
   const repo =
     config.agents.github.repo ??
-    (await gh(['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: source }));
-  const defaultBranch = await gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'], {
-    cwd: source,
-  });
+    (await discover(
+      gh,
+      ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'],
+      source,
+      discoveryTimeoutMs,
+    ));
+  const defaultBranch = await discover(
+    gh,
+    ['repo', 'view', repo, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'],
+    source,
+    discoveryTimeoutMs,
+  );
   return { repo, defaultBranch };
+}
+
+/** How long gh has to read the repository before its credential lookup counts as stalled. */
+const REPO_DISCOVERY_TIMEOUT_MS = 15_000;
+
+/**
+ * One repository discovery command, bounded. gh can wait on the host's
+ * credential store with no output at all, so the timeout kills the child and
+ * says which command stalled and what to check. Any other failure keeps gh's
+ * own message.
+ */
+async function discover(gh: Gh, args: string[], cwd: string, timeoutMs: number): Promise<string> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    return await gh(args, { cwd, signal });
+  } catch (error) {
+    if (!signal.aborted) throw error;
+    const command = ['gh', ...args].join(' ');
+    throw new Error(
+      `\`${command}\` did not answer within ${timeoutMs} ms, so the host's gh credential lookup may be stalled. ` +
+        'Run `gh auth status` in that folder and try again.',
+    );
+  }
 }
 
 /** The label of the PRs and issues from before the rename to Bugpatrol. */
