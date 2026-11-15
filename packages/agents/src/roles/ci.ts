@@ -216,7 +216,7 @@ async function fixCi(
   deps: CiDeps,
 ): Promise<boolean> {
   if (fix.workspace === 'current') {
-    log('CI fixer skipped: current-folder fixes cannot be edited or published.');
+    deps.onLog?.('CI fixer skipped: current-folder fixes cannot be edited or published.');
     return false;
   }
   const workspace = new Workspace(root, config.profile);
