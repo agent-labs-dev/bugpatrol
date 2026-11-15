@@ -329,6 +329,7 @@ export async function runFixer(
       branch = `${baseBranch}-${n}`;
     }
     const currentFolder = config.workspace === 'current';
+    if (currentFolder) branch = await git(source, 'branch', '--show-current');
     const worktree = currentFolder ? source : join(paths.worktrees(session.root, session.workspace.profile), issue.id);
     if (currentFolder && (await git(source, 'status', '--porcelain')).trim()) {
       session.emit({
