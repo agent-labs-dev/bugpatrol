@@ -1234,36 +1234,32 @@ async function lockReview(file: string, number: number): Promise<() => Promise<v
   await mkdir(dirname(file), { recursive: true });
   const token = randomBytes(8).toString('hex');
   const owner = `${process.pid}:${token}`;
-  for (;;) {
+  const reclaim = `${file}.reclaim`;
+  try {
+    await mkdir(reclaim);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+      throw new ConfigError(
+        `Review lock maintenance is in progress at ${reclaim}; confirm no review is running, then remove it.`,
+      );
+    throw error;
+  }
+  try {
     try {
       await writeFile(file, owner, { flag: 'wx' });
-      return async () => {
-        if ((await readFile(file, 'utf8').catch(() => '')) === owner) await rm(file, { force: true });
-      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
-    const pid = Number((await readFile(file, 'utf8').catch(() => '')).split(':', 1)[0]);
-    if (pid && alive(pid)) throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
-    // Serialize stale-lock reclamation, then re-read the lock. A contender
-    // may have replaced the stale file after our first read; never remove a
-    // newer live lock based on that old observation.
-    const reclaim = `${file}.reclaim`;
-    try {
-      await mkdir(reclaim);
-    } catch (reclaimError) {
-      if ((reclaimError as NodeJS.ErrnoException).code !== 'EEXIST') throw reclaimError;
-      continue;
-    }
-    try {
-      const current = await readFile(file, 'utf8').catch(() => '');
-      const currentPid = Number(current.split(':', 1)[0]);
-      if (currentPid && alive(currentPid))
-        throw new ConfigError(`A review of PR #${number} runs (pid ${currentPid}). Wait for it to finish.`);
+      const pid = Number((await readFile(file, 'utf8').catch(() => '')).split(':', 1)[0]);
+      if (pid && alive(pid))
+        throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
       await rm(file, { force: true });
-    } finally {
-      await rm(reclaim, { recursive: true, force: true });
+      await writeFile(file, owner, { flag: 'wx' });
     }
+    return async () => {
+      if ((await readFile(file, 'utf8').catch(() => '')) === owner) await rm(file, { force: true });
+    };
+  } finally {
+    await rm(reclaim, { recursive: true, force: true });
   }
 }
 
