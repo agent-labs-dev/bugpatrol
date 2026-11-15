@@ -1,4 +1,4 @@
-import { appendFile, copyFile } from 'node:fs/promises';
+import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   awaitsJudge,
@@ -165,10 +165,21 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
           const record = JSON.stringify({ ...candidate, evidence }, null, 2);
           const timeline = (await session.workspace.readEvents(candidate.sessionId))
             .filter((event) => ['tool-result', 'candidate', 'session-end', 'error'].includes(event.kind))
-            .map((event) => `${event.at} ${event.kind}: ${event.summary}`)
-            .join('\n');
+            .map(async (event) => {
+              const capture = event.capture ? ` capture=${event.capture}` : '';
+              let exchange = '';
+              if (event.capture?.endsWith('.exchange.json')) {
+                try {
+                  exchange = `\n${formatHttpExchange(JSON.parse(await readFile(join(session.root, event.capture), 'utf8')))}`;
+                } catch {
+                  exchange = '';
+                }
+              }
+              return `${event.at} ${event.kind}:${capture} ${event.summary}${exchange}`;
+            });
+          const timelineText = (await Promise.all(timeline)).join('\n');
           return response(
-            `${record}\n\n${formatHttpExchange(capture.exchange)}\n\nSESSION TIMELINE\n${timeline || '(none recorded)'}`,
+            `${record}\n\n${formatHttpExchange(capture.exchange)}\n\nSESSION TIMELINE\n${timelineText || '(none recorded)'}`,
           );
         }
         return {
