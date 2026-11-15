@@ -123,6 +123,8 @@ Each item in `app.setup` and `app.teardown` is one shell command:
 | `readyWhen` | For a background command: Bugpatrol waits until the output matches this regex |
 | `timeoutMs` | The time limit. The default is 10 minutes |
 
+Bugpatrol stops background commands itself and runs `app.teardown` on every exit: after a finished run, a failed setup, an error and an interrupt. Anything that setup starts outside its own processes, such as a Docker compose project or a registration with a dev tool, needs a teardown command, or it outlives the run. A pull request review builds the head and the base in worktrees whose path is new for each run (`BUGPATROL_SOURCE`), so a setup that names its resources after that path never reuses the names of an earlier run. A second review of a pull request stops while one runs.
+
 Later commands and `connect` can use a captured value as `${NAME}`. The explorer can use it as `{{NAME}}`. Bugpatrol treats each captured value as a secret, and replaces it with `{{NAME}}` wherever it shows in the app's output, except a name in `public`. A short secret such as `18` also matches ordinary numbers, so setup warns about a secret capture shorter than six characters: list it in `public` when it is not a secret. Redaction never changes a terminal's control sequences, so a short value can hide text but not break colours or layout.
 
 ## Secret interpolation

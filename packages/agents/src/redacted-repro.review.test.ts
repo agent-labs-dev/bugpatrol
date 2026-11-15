@@ -80,6 +80,7 @@ it('reproduces an accepted redacted error check on an unchanged build', async ()
         issues: [],
       },
       budget: new ClaimBudget(config.agents.review),
+      run: 'run',
     };
     const findings = await checkClaims(
       ctx,
