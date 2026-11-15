@@ -53,6 +53,8 @@ function responseCaptures(status: number, body: string, pointers: Record<string,
       if (!found)
         throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve in the ${status} response`);
       const { value } = found;
+      const key = pointer.split('/').at(-1)?.replaceAll('~1', '/').replaceAll('~0', '~') ?? '';
+      if (CREDENTIAL.test(key)) throw new Error(`Response capture ${name} points to a credential field`);
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
       return [name, String(value)];
@@ -271,7 +273,7 @@ export class ApiDriver implements Driver {
       if (Object.keys(pointers).length && received.tooLarge)
         throw new Error('Response captures need the body, and the response was over 1 MiB');
       const captures = Object.keys(pointers).length
-        ? responseCaptures(received.status, redactCredentials(received.text), pointers)
+        ? responseCaptures(received.status, received.text, pointers)
         : undefined;
       this.exchange = exchange;
       this.location = url.href;
