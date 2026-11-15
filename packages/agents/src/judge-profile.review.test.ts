@@ -42,6 +42,7 @@ it('keeps an explorer candidate repro with its originating profile when judging 
     expect(file.inputSchema).toMatchObject({
       required: expect.arrayContaining(['candidate_ids', 'reason', 'title', 'body', 'severity']),
     });
+    expect(file.inputSchema).not.toHaveProperty('anyOf');
     await file.run({
       candidate_ids: [candidate.id],
       title: 'CLI crashes',
