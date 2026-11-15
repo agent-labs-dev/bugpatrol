@@ -14,8 +14,9 @@ asking npm to parse package manifests that another package manager accepts.
 
 Always add `@latest` for an ad hoc install, because package-manager runners can reuse an old copy from
 their cache. An old copy can have different commands and a different config layout. There is one
-exception: if the repo lists `bugpatrol` in `package.json`, run the package-manager runner without
-`@latest`, so that you use the version the repo selected.
+exception: if the repo lists `bugpatrol` in `package.json`, run its installed binary with `pnpm exec
+bugpatrol`, `yarn exec bugpatrol`, or `bunx --no-install bugpatrol` as appropriate, so that you use
+the version the repo selected.
 
 Source and full docs: https://github.com/agent-labs-dev/bugpatrol
 

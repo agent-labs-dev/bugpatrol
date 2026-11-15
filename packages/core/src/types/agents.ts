@@ -522,6 +522,8 @@ export type FixProposal = {
   repo: string;
   branch: string;
   worktree: string;
+  /** The explicit source-checkout mode used by the fixer. */
+  workspace?: 'current';
   worktreeRemovedAt?: string;
   /** `git diff --stat` and the full diff, relative to the base commit. */
   diffStat?: string;

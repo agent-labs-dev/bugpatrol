@@ -329,7 +329,16 @@ export async function runFixer(
       branch = `${baseBranch}-${n}`;
     }
     const currentFolder = config.workspace === 'current';
-    if (currentFolder) branch = await git(source, 'branch', '--show-current');
+    if (currentFolder) {
+      branch = await git(source, 'branch', '--show-current');
+      if (!branch) {
+        session.emit({
+          kind: 'error',
+          summary: 'The fixer current-folder mode requires a named branch; detached HEAD cannot be published.',
+        });
+        continue;
+      }
+    }
     const worktree = currentFolder ? source : join(paths.worktrees(session.root, session.workspace.profile), issue.id);
     if (currentFolder && (await git(source, 'status', '--porcelain')).trim()) {
       session.emit({
@@ -367,7 +376,7 @@ export async function runFixer(
         : earlier.at(-1)?.outcome === 'verify-failed'
           ? 'repair'
           : 'clean';
-    if (existing && start === 'clean') {
+    if (existing && start === 'clean' && !currentFolder) {
       const base = await git(worktree, 'merge-base', 'HEAD', await git(source, 'rev-parse', 'HEAD'));
       await git(worktree, 'reset', '--hard', base);
       await git(worktree, 'clean', '-fd');
@@ -407,6 +416,7 @@ export async function runFixer(
       repo: source,
       branch,
       worktree,
+      ...(currentFolder ? { workspace: 'current' as const } : {}),
       worktreeRemovedAt: undefined,
       ...(oldFix?.worktreeRemovedAt ? { pr: undefined, commit: undefined } : {}),
       startedAt: previous?.startedAt ?? new Date().toISOString(),
