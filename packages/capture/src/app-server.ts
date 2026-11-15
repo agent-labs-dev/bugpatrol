@@ -129,6 +129,7 @@ async function stopProcess(child: ChildProcess): Promise<void> {
   // and the dev server is its child. Signalling only the shell orphans the
   // server and leaves the port held for the next run.
   const groupAlive = () => {
+    if (process.platform === 'win32') return false;
     try {
       process.kill(-child.pid!, 0);
       return true;
@@ -136,16 +137,20 @@ async function stopProcess(child: ChildProcess): Promise<void> {
       return (error as NodeJS.ErrnoException).code !== 'ESRCH';
     }
   };
-  const done = new Promise<void>((resolve) => {
-    if (child.exitCode !== null) resolve();
-    else child.once('exit', () => resolve());
-  });
+  const done = new Promise<void>((resolve) =>
+    child.exitCode !== null ? resolve() : child.once('exit', () => resolve()),
+  );
   try {
     process.kill(-child.pid, 'SIGTERM');
   } catch {
     child.kill('SIGTERM');
   }
-  await Promise.race([done, delay(5000)]);
+  if (process.platform === 'win32') {
+    await Promise.race([done, delay(5000)]);
+    return;
+  }
+  // The shell may exit immediately, but descendants still need the full grace period.
+  for (let waited = 0; groupAlive() && waited < 5000; waited += 50) await delay(50);
   if (groupAlive()) {
     try {
       process.kill(-child.pid, 'SIGKILL');
