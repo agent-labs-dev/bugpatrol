@@ -125,6 +125,8 @@ describe('fixer', () => {
       const [proposal] = await runFixer(current, runtime);
       expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('fixed\n');
       expect(proposal?.worktree).toBe(f.source);
+      expect(proposal?.branch).toBe((await git(f.source, 'branch', '--show-current')).stdout.trim());
+      expect(proposal?.branch).not.toBe('bugpatrol/fix-iss_1');
       await writeFile(join(f.source, 'user.txt'), 'keep\n');
       const dirty = await runFixer(new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer'), runtime);
       expect(dirty).toEqual([]);
