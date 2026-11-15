@@ -128,6 +128,14 @@ async function stopProcess(child: ChildProcess): Promise<void> {
   // Killing the group, not the child: `shell: true` means the pid is a shell,
   // and the dev server is its child. Signalling only the shell orphans the
   // server and leaves the port held for the next run.
+  const groupAlive = () => {
+    try {
+      process.kill(-child.pid!, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  };
   const done = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   try {
     process.kill(-child.pid, 'SIGTERM');
@@ -142,4 +150,8 @@ async function stopProcess(child: ChildProcess): Promise<void> {
       child.kill('SIGKILL');
     }
   }
+  // The shell can exit before a child such as `uv run api` has reaped its own
+  // descendants. Keep the run-owned process group fenced off until it is gone,
+  // otherwise the next patrol can inherit its port and report a false failure.
+  for (let waited = 0; groupAlive() && waited < 5000; waited += 50) await delay(50);
 }
