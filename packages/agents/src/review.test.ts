@@ -786,6 +786,44 @@ describe('pull request review', { timeout: 30_000 }, () => {
     }
   });
 
+  it('serializes stale-lock takeover and fails closed on a maintenance marker', async () => {
+    const f = await fixture({ enabled: false });
+    try {
+      const lock = `${paths.reviewDir(f.root, 7, f.config.profile)}.lock`;
+      await mkdir(join(lock, '..'), { recursive: true });
+      await writeFile(lock, '2147483647');
+      const started = join(f.root, 'stale-started');
+      const go = join(f.root, 'stale-go');
+      const config = parseConfig({
+        version: 1,
+        app: {
+          source: 'source',
+          connect: { url: 'fake://home' },
+          setup: [{ run: `echo started >> ${started}; until [ -e ${go} ]; do sleep 0.05; done`, timeoutMs: 20_000 }],
+        },
+        agents: { github: { enabled: false } },
+      });
+      const run = () =>
+        reviewPullRequest(f.root, config, 7, {
+          gh: fakeGh().gh,
+          createRuntime: scripted('introduced', 0).createRuntime,
+          createDriver: screens,
+          dryRun: true,
+          force: true,
+        });
+      const first = run();
+      while (!existsSync(started)) await new Promise((done) => setTimeout(done, 20));
+      await expect(run()).rejects.toThrow(`A review of PR #7 runs (pid ${process.pid})`);
+      await writeFile(go, '');
+      await first;
+
+      await mkdir(`${lock}.reclaim`);
+      await expect(run()).rejects.toThrow(`Review lock maintenance is in progress at ${lock}.reclaim`);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('takes the claims of the author-written claims section as written', async () => {
     const f = await fixture({ enabled: false }, { claims: true });
     try {
