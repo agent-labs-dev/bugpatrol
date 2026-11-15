@@ -328,12 +328,23 @@ export async function runFixer(
       while (await branchExists(source, `${baseBranch}-${n}`)) n++;
       branch = `${baseBranch}-${n}`;
     }
-    const worktree = join(paths.worktrees(session.root, session.workspace.profile), issue.id);
-    await mkdir(paths.worktrees(session.root, session.workspace.profile), { recursive: true });
+    const currentFolder = config.workspace === 'current';
+    const worktree = currentFolder ? source : join(paths.worktrees(session.root, session.workspace.profile), issue.id);
+    if (currentFolder && (await git(source, 'status', '--porcelain')).trim()) {
+      session.emit({
+        kind: 'error',
+        summary: 'The fixer current-folder mode requires a clean checkout; no files were changed.',
+      });
+      continue;
+    }
+    if (!currentFolder) await mkdir(paths.worktrees(session.root, session.workspace.profile), { recursive: true });
     let existing = false;
     try {
-      await realpath(worktree);
-      existing = true;
+      if (currentFolder) existing = true;
+      else {
+        await realpath(worktree);
+        existing = true;
+      }
     } catch {
       await git(source, 'worktree', 'add', '-b', branch, worktree, 'HEAD');
     }
@@ -360,7 +371,7 @@ export async function runFixer(
       await git(worktree, 'reset', '--hard', base);
       await git(worktree, 'clean', '-fd');
     }
-    await linkEnvFiles(source, worktree);
+    if (!currentFolder) await linkEnvFiles(source, worktree);
     // A new worktree has no dependencies. Install them before the fixer
     // starts, so that it can run the type check and the tests.
     if (!existing && config.retest.prepare) {
