@@ -28,15 +28,21 @@ describe('app server lifecycle', () => {
       determinism: { timezone: 'UTC' },
     } as unknown as BugpatrolConfig;
 
-    const app = await startApp(config, { cwd: process.cwd(), reuseExisting: false });
-    expect(await (await fetch(url)).text()).toBe('ok');
-    await new Promise((resolve) => setTimeout(resolve, 1_200));
-    await app.stop();
-
-    await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
     const replacement = createServer((_, response) => response.end('replacement'));
-    replacement.listen(port, '127.0.0.1');
-    await once(replacement, 'listening');
-    replacement.close();
+    let app: Awaited<ReturnType<typeof startApp>> | undefined;
+    try {
+      app = await startApp(config, { cwd: process.cwd(), reuseExisting: false });
+      expect(await (await fetch(url)).text()).toBe('ok');
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await app.stop();
+      app = undefined;
+
+      await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+      replacement.listen(port, '127.0.0.1');
+      await once(replacement, 'listening');
+    } finally {
+      if (app) await app.stop();
+      if (replacement.listening) await new Promise<void>((resolve) => replacement.close(() => resolve()));
+    }
   }, 20_000);
 });
