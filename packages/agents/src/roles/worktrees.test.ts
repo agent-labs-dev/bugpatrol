@@ -111,6 +111,24 @@ describe('cleanWorktrees', () => {
     expect(existsSync(f.worktree)).toBe(true);
   });
 
+  it('never removes the user source checkout for a current-folder fix', async () => {
+    const f = await fixture('verified');
+    await f.workspace.saveFix({
+      ...f.fix,
+      branch: git(f.repo, 'branch', '--show-current'),
+      worktree: f.repo,
+      pr: { number: 7, url: 'https://github.com/o/r/pull/7', draft: false, state: 'merged' },
+    });
+
+    expect(await cleanWorktrees(f.root, f.config)).toEqual({
+      removed: [],
+      kept: [{ id: f.fix.id, reason: 'outside Bugpatrol worktrees' }],
+    });
+    expect(existsSync(f.repo)).toBe(true);
+    expect(existsSync(join(f.repo, 'app.txt'))).toBe(true);
+    expect((await f.workspace.readFix(f.fix.id))?.worktreeRemovedAt).toBeUndefined();
+  });
+
   it('deletes an unmerged local branch only when the remote has its commit', async () => {
     const f = await fixture('verified');
     await writeFile(join(f.worktree, 'app.txt'), 'fixed\n');
