@@ -106,6 +106,34 @@ describe('fixer', () => {
     }
   });
 
+  it('current mode edits the source checkout and refuses a dirty checkout', async () => {
+    const f = await repoFixture();
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { source: 'source', connect: { url: 'fake://home' } },
+        agents: { fixer: { enabled: true, workspace: 'current', use: { runtime: 'cli', command: 'fake' } } },
+      });
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixed\n');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'Fixed' };
+        },
+      };
+      const current = new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer');
+      const [proposal] = await runFixer(current, runtime);
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('fixed\n');
+      expect(proposal?.worktree).toBe(f.source);
+      await writeFile(join(f.source, 'user.txt'), 'keep\n');
+      const dirty = await runFixer(new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer'), runtime);
+      expect(dirty).toEqual([]);
+      expect(await readFile(join(f.source, 'user.txt'), 'utf8')).toBe('keep\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('marks a proposal failed when the runtime changes nothing', async () => {
     const f = await repoFixture();
     try {
