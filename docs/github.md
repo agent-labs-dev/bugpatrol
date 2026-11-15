@@ -407,6 +407,34 @@ With `block` off, `review` sets no check and exits 0 when it only comments. The 
 
 ## Troubleshooting
 
+### Scheduled explore and judge
+
+Run exploration and judging from a scheduled workflow with a disposable checkout and the same committed
+profile used locally. Keep credentials in repository or environment secrets, and leave publishing off until
+the findings have been reviewed:
+
+```yaml
+name: Bugpatrol explore
+on:
+  schedule: [{ cron: '17 3 * * *' }]
+  workflow_dispatch:
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npx -y bugpatrol@latest doctor --config .bugpatrol/bugpatrol.yml
+      - run: npx -y bugpatrol@latest explore --config .bugpatrol/bugpatrol.yml --steps 30
+        env:
+          BUGPATROL_TOKEN: ${{ secrets.BUGPATROL_TOKEN }}
+      - run: npx -y bugpatrol@latest judge --config .bugpatrol/bugpatrol.yml
+```
+
+Use the repository's package-manager runner when its manifest requires one, as described in the skill.
+Review `.bugpatrol/runs/` as an artifact or run `issue list` in a follow-up job before publishing.
+
 | Message | Action |
 | --- | --- |
 | `GitHub is off` | Set `agents.github.enabled: true`, or use `publish --dry-run` |
