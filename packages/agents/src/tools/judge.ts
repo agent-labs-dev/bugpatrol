@@ -206,7 +206,10 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
             reason: string,
           },
-          ['candidate_ids', 'reason'],
+          // Keep the fields required in the provider-facing schema. Some tool-call providers
+          // discard conditional `anyOf` requirements, and then the judge repeatedly submits only
+          // candidate_ids/reason instead of the data needed to create a new issue.
+          ['candidate_ids', 'reason', 'title', 'body', 'severity'],
         ),
         // A new issue needs the title, body and severity; adding to an open issue passes issue_id
         // instead. State it in the schema, or a model that fills only the required keys omits them.
