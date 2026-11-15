@@ -57,8 +57,14 @@ export function responseCaptures(
       if (!found)
         throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve in the ${status} response`);
       const { value } = found;
-      const key = pointer.split('/').at(-1)?.replaceAll('~1', '/').replaceAll('~0', '~') ?? '';
-      if (CREDENTIAL.test(key)) throw new Error(`Response capture ${name} points to a credential field`);
+      const parts = pointer
+        .split('/')
+        .slice(1)
+        .map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+      const key = parts.at(-1) ?? '';
+      const resourceId = key === 'id' && parts.some((part) => /^(?:browser_)?session$/i.test(part));
+      if (!resourceId && (parts.some((part) => CREDENTIAL.test(part)) || new RegExp(JWT.source).test(String(value))))
+        throw new Error(`Response capture ${name} points to a credential field`);
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
       return [name, String(value)];
