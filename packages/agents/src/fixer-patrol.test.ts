@@ -136,6 +136,35 @@ describe('fixer', () => {
     }
   });
 
+  it('refuses current mode on detached HEAD without changing the checkout', async () => {
+    const f = await repoFixture();
+    try {
+      await git(f.source, 'checkout', '--detach', 'HEAD');
+      const config = parseConfig({
+        version: 1,
+        app: { source: 'source', connect: { url: 'fake://home' } },
+        agents: { fixer: { enabled: true, workspace: 'current', use: { runtime: 'cli', command: 'fake' } } },
+      });
+      let called = false;
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run() {
+          called = true;
+          return { stop: 'done', steps: 0, costUsd: 0 };
+        },
+      };
+      const proposals = await runFixer(
+        new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer'),
+        runtime,
+      );
+      expect(proposals).toEqual([]);
+      expect(called).toBe(false);
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('broken\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('marks a proposal failed when the runtime changes nothing', async () => {
     const f = await repoFixture();
     try {
