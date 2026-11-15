@@ -535,6 +535,11 @@ Judge each HTTP exchange by these rules:
 - A body that contradicts its own status is a bug (LLM judge, does not block).
 - A repeated DELETE must give the same status, unless the spec declares 404 (3c).
 - Latency is not a bug. It shows as information only.
+- A processing snapshot is not evidence of a stalled turn by itself. Before filing a missing-result or
+  stalled-turn issue, inspect the complete explorer session evidence for a later terminal response,
+  success marker, acknowledgment, or idle state for the same request. Reconcile those later events first;
+  if the request eventually completed, report measured latency as information and do not attribute a stall
+  to an intermediate snapshot or prompt.
 - An HTTP rule that the spec does not require is not a bug, for example a missing \`Location\` header.
 - Account enumeration depends on context. The judge gives "unclear".
 

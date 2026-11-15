@@ -685,6 +685,7 @@ describe('api explorer and judge on the fixture, with a scripted model', () => {
     expect(seen.judge).toContain('API RULES');
     expect(seen.judge).toContain('Account enumeration depends on context. The judge gives "unclear".');
     expect(seen.judge).toContain('Latency is not a bug. It shows as information only.');
+    expect(seen.judge).toContain('A processing snapshot is not evidence of a stalled turn by itself.');
 
     const bug3 = issues.find((issue) => issue.title.startsWith('User b learns'))!;
     expect(bug3.evidence.steps).toEqual([expect.objectContaining({ method: 'GET', url: '/items/1', as: 'other' })]);
