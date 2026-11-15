@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFile, lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -1245,14 +1245,24 @@ async function lockReview(file: string, number: number): Promise<() => Promise<v
     }
     const pid = Number((await readFile(file, 'utf8').catch(() => '')).split(':', 1)[0]);
     if (pid && alive(pid)) throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
-    // Rename the stale lock before removing it. Only one contender can win
-    // this rename, so two stale-lock readers cannot both enter the review.
-    const stale = `${file}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
+    // Serialize stale-lock reclamation, then re-read the lock. A contender
+    // may have replaced the stale file after our first read; never remove a
+    // newer live lock based on that old observation.
+    const reclaim = `${file}.reclaim`;
     try {
-      await rename(file, stale);
-      await rm(stale, { force: true });
-    } catch (renameError) {
-      if ((renameError as NodeJS.ErrnoException).code !== 'ENOENT') throw renameError;
+      await mkdir(reclaim);
+    } catch (reclaimError) {
+      if ((reclaimError as NodeJS.ErrnoException).code !== 'EEXIST') throw reclaimError;
+      continue;
+    }
+    try {
+      const current = await readFile(file, 'utf8').catch(() => '');
+      const currentPid = Number(current.split(':', 1)[0]);
+      if (currentPid && alive(currentPid))
+        throw new ConfigError(`A review of PR #${number} runs (pid ${currentPid}). Wait for it to finish.`);
+      await rm(file, { force: true });
+    } finally {
+      await rm(reclaim, { recursive: true, force: true });
     }
   }
 }
