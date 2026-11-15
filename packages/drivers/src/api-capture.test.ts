@@ -62,3 +62,32 @@ describe('API response captures', () => {
     }
   });
 });
+
+it('protects credential ancestors, JWT resource values, and configured secrets', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature';
+  expect(() =>
+    responseCaptures(200, JSON.stringify({ credentials: { browser_session: { id: 'private' } } }), {
+      RESPONSE_SESSION: '/credentials/browser_session/id',
+    }),
+  ).toThrow('credential field');
+  expect(() =>
+    responseCaptures(200, JSON.stringify({ browser_session: { id: jwt } }), {
+      RESPONSE_SESSION: '/browser_session/id',
+    }),
+  ).toThrow('credential field');
+  expect(() =>
+    responseCaptures(
+      200,
+      JSON.stringify({ browser_session: { id: 'configured-secret' } }),
+      {
+        RESPONSE_SESSION: '/browser_session/id',
+      },
+      (value) => value.replaceAll('configured-secret', '[redacted]'),
+    ),
+  ).toThrow('credential field');
+  expect(
+    responseCaptures(200, JSON.stringify({ file: { id: 'file_123' } }), {
+      RESPONSE_FILE: '/file/id',
+    }),
+  ).toEqual({ RESPONSE_FILE: 'file_123' });
+});
