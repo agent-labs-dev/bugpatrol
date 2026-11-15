@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixtureApi, fixtureSpecPath, startFixtureApi } from '@bugpatrol/api-fixture';
@@ -28,7 +29,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function explorer() {
+async function explorer(url = fixture.url) {
   const workspace = new Workspace(root);
   const record = await workspace.startSession('explorer');
   const vars = new Vars();
@@ -36,10 +37,10 @@ async function explorer() {
   const doc = await loadSpec({ file: fixtureSpecPath });
   doc.paths['/auth/login'] = { post: { responses: {} } };
   const driver = new ApiDriver({
-    url: fixture.url,
+    url: url,
     credentials: { self: {} },
     policy: requestPolicy(buildContract(doc, {}), {
-      url: fixture.url,
+      url: url,
       methods: ['GET', 'POST'],
       deny: [],
       disposable: false,
@@ -51,7 +52,7 @@ async function explorer() {
   await driver.connect();
   const session = new AgentSession(
     root,
-    parseConfig({ version: 1, app: { platform: 'api', connect: { url: fixture.url } } }),
+    parseConfig({ version: 1, app: { platform: 'api', connect: { url: url } } }),
     vars,
     record.id,
     'explorer',
@@ -132,6 +133,52 @@ describe('api evidence', () => {
     expect(shown).toContain('Health reports the database down');
     expect(shown).toContain('GET /health\n\nHTTP 200 OK');
     expect(shown).toContain('"db": "down"');
+  });
+
+  it('gives the judge the later terminal exchange for an initially processing task', async () => {
+    let completed = false;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          id: 'task-1',
+          status: completed ? 'completed' : 'processing',
+          receipt: completed ? 'terminal-receipt' : null,
+          token: PLANTED,
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+      const { session, call, workspace } = await explorer(`http://127.0.0.1:${address.port}`);
+      await call('request', { method: 'GET', url: '/tasks/task-1' });
+      await call('report_bug', {
+        screen_id: 'unrecorded',
+        title: 'Task never completes',
+        what_is_wrong: 'The task is processing.',
+        expected: 'The task completes.',
+        severity: 'major',
+        shows: 'processing',
+      });
+      const [candidate] = await workspace.readCandidates(session.sessionId);
+      expect(candidate).toBeDefined();
+      completed = true;
+      const terminal = await call('request', { method: 'GET', url: '/tasks/task-1' });
+      const judge = new AgentSession(root, session.config, new Vars(), 'judge-session', 'judge');
+      const view = judgeTools(judge, [session.sessionId], 'test').find((tool) => tool.name === 'view_candidate')!;
+      const viewed = await view.run({ id: candidate!.id });
+      const shown = viewed.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
+      expect(shown).toContain('"status": "processing"');
+      expect(shown).toContain('"status": "completed"');
+      expect(shown).toContain('terminal-receipt');
+      expect(shown).toContain(terminal.meta!.capture!);
+      expect(shown).not.toContain(PLANTED);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it('keys an api report on the endpoint and the check, not on the title', async () => {
