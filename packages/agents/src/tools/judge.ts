@@ -163,7 +163,13 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
         if (capture.kind === 'http') {
           // The exchange is text, so the model reads it as the server sent it, in the one part.
           const record = JSON.stringify({ ...candidate, evidence }, null, 2);
-          return response(`${record}\n\n${formatHttpExchange(capture.exchange)}`);
+          const timeline = (await session.workspace.readEvents(candidate.sessionId))
+            .filter((event) => ['tool-result', 'candidate', 'session-end', 'error'].includes(event.kind))
+            .map((event) => `${event.at} ${event.kind}: ${event.summary}`)
+            .join('\n');
+          return response(
+            `${record}\n\n${formatHttpExchange(capture.exchange)}\n\nSESSION TIMELINE\n${timeline || '(none recorded)'}`,
+          );
         }
         return {
           content: [
