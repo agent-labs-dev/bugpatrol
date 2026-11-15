@@ -410,26 +410,35 @@ With `block` off, `review` sets no check and exits 0 when it only comments. The 
 ### Scheduled explore and judge
 
 Run exploration and judging from a scheduled workflow with a disposable checkout and the same committed
-profile used locally. Keep credentials in repository or environment secrets, and leave publishing off until
-the findings have been reviewed:
+profile used locally. Install the profile's app dependencies and driver runtime before the doctor step.
+This example uses model runtimes configured for OpenRouter. Keep credentials in repository or environment
+secrets, and leave publishing off until the findings have been reviewed:
 
 ```yaml
 name: Bugpatrol explore
 on:
   schedule: [{ cron: '17 3 * * *' }]
   workflow_dispatch:
+permissions: { contents: read }
 jobs:
   explore:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: 22 }
       - run: npx -y bugpatrol@latest doctor --config .bugpatrol/bugpatrol.yml
       - run: npx -y bugpatrol@latest explore --config .bugpatrol/bugpatrol.yml --steps 30
-        env:
-          BUGPATROL_TOKEN: ${{ secrets.BUGPATROL_TOKEN }}
       - run: npx -y bugpatrol@latest judge --config .bugpatrol/bugpatrol.yml
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: always()
+        with:
+          name: bugpatrol-runs
+          path: .bugpatrol/runs/
 ```
 
 Use the repository's package-manager runner when its manifest requires one, as described in the skill.
