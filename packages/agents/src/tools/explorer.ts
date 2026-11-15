@@ -671,12 +671,17 @@ function captureEarlierIds(session: AgentSession, contract: Contract, url: strin
     const segment = segments[index]!;
     // A replay puts a captured value into the path as it is, so an escaped segment stays literal.
     if (!param || segment.includes('{{') || segment.includes('%')) continue;
-    for (const source of earlier) {
+    for (const [sourceIndex, source] of earlier.entries()) {
       const exchange = responses.get(source)?.observation.capture;
       const body = exchange?.kind === 'http' ? exchange.exchange?.response?.body : undefined;
       const pointer = body === undefined ? undefined : idPointer(parseJson(body), param, segment);
       if (pointer === undefined) continue;
       let capture = Object.entries(source.capture ?? {}).find(([, at]) => at === pointer)?.[0];
+      // A later request may reuse the same capture name and overwrite its
+      // value. Keep a fresh name for this earlier response in that case.
+      if (capture && earlier.slice(sourceIndex + 1).some((later) => capture! in (later.capture ?? {}))) {
+        capture = undefined;
+      }
       if (!capture) {
         const base = `RESPONSE_${param.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
         capture = base;

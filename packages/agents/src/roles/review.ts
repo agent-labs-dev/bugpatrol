@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFile, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -1232,16 +1232,28 @@ async function setCheckRun(ctx: ReviewContext, gh: Gh, review: PrReview, check: 
  */
 async function lockReview(file: string, number: number): Promise<() => Promise<void>> {
   await mkdir(dirname(file), { recursive: true });
+  const token = randomBytes(8).toString('hex');
+  const owner = `${process.pid}:${token}`;
   for (;;) {
     try {
-      await writeFile(file, String(process.pid), { flag: 'wx' });
-      return () => rm(file, { force: true });
+      await writeFile(file, owner, { flag: 'wx' });
+      return async () => {
+        if ((await readFile(file, 'utf8').catch(() => '')) === owner) await rm(file, { force: true });
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    const pid = Number(await readFile(file, 'utf8').catch(() => ''));
+    const pid = Number((await readFile(file, 'utf8').catch(() => '')).split(':', 1)[0]);
     if (pid && alive(pid)) throw new ConfigError(`A review of PR #${number} runs (pid ${pid}). Wait for it to finish.`);
-    await rm(file, { force: true });
+    // Rename the stale lock before removing it. Only one contender can win
+    // this rename, so two stale-lock readers cannot both enter the review.
+    const stale = `${file}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
+    try {
+      await rename(file, stale);
+      await rm(stale, { force: true });
+    } catch (renameError) {
+      if ((renameError as NodeJS.ErrnoException).code !== 'ENOENT') throw renameError;
+    }
   }
 }
 
