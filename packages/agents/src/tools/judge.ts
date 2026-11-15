@@ -195,7 +195,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
       description:
         'File a real user problem with an 80-character title, Markdown body, and one-sentence reason; ' +
         'merge candidates with the same cause. To add candidates to an open or fixed issue, pass its issue_id and a ' +
-        'reason; the title, body and severity are then not needed.',
+        'reason; the title, body and severity fields are still required by the tool contract and are ignored.',
       inputSchema: {
         ...schema(
           {
@@ -206,14 +206,10 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
             reason: string,
           },
-          // Keep the fields required in the provider-facing schema. Some tool-call providers
-          // discard conditional `anyOf` requirements, and then the judge repeatedly submits only
-          // candidate_ids/reason instead of the data needed to create a new issue.
+          // Keep all creation fields required in the provider-facing schema. The recorded smoke
+          // run did not follow the conditional contract, so one unconditional shape is safer.
           ['candidate_ids', 'reason', 'title', 'body', 'severity'],
         ),
-        // A new issue needs the title, body and severity; adding to an open issue passes issue_id
-        // instead. State it in the schema, or a model that fills only the required keys omits them.
-        anyOf: [{ required: ['issue_id'] }, { required: ['title', 'body', 'severity'] }],
       },
       async run(input) {
         if (typeof input.reason !== 'string' || !input.reason.trim()) {
