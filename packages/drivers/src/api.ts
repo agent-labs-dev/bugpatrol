@@ -40,7 +40,11 @@ const CREDENTIAL =
 /** A JSON Web Token, whatever the key that holds it is named. */
 const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
-function responseCaptures(status: number, body: string, pointers: Record<string, string>): Record<string, string> {
+export function responseCaptures(
+  status: number,
+  body: string,
+  pointers: Record<string, string>,
+): Record<string, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
