@@ -37,7 +37,7 @@ export function summarizeLoaderError(cause: unknown): string {
   const text = cause instanceof Error ? cause.message : String(cause);
   const versions = [...new Set(text.match(/GLIBC_[\d.]+/g) ?? [])];
   if (versions.length > 0) return `needs ${versions.join(', ')}, which this system's C library does not provide`;
-  if (/ENOENT/.test(text)) return 'binary not found';
+  if (/ENOENT|could not find the odiff binary/.test(text)) return 'binary not found';
   if (/Exec format/i.test(text)) return 'built for a different CPU architecture';
   return text.split('\n')[0]!.slice(0, 160);
 }
@@ -127,10 +127,14 @@ async function runCompare(req: DiffRequest, masks: DiffRequest['masks'] = []) {
       }),
     });
   } catch (cause) {
-    // odiff ships a prebuilt binary. On a host whose glibc predates the build,
-    // it cannot start at all -- which is a property of the machine, not of the
+    // odiff ships a prebuilt binary in an optional platform package. When that
+    // package was not installed, or the host's glibc predates the build, it
+    // cannot start at all -- which is a property of the machine, not of the
     // images being compared, so it must not surface as a diff.
-    if (cause instanceof Error && /GLIBC|not found|ENOENT|Exec format|cannot execute/i.test(cause.message)) {
+    if (
+      cause instanceof Error &&
+      /GLIBC|not found|could not find the odiff binary|ENOENT|Exec format|cannot execute/i.test(cause.message)
+    ) {
       throw new OdiffUnavailableError(cause);
     }
     throw cause;

@@ -21,6 +21,13 @@ describe('summarizeLoaderError', () => {
 
   it('explains other failure shapes in plain words', () => {
     expect(summarizeLoaderError(new Error('spawn odiff ENOENT'))).toBe('binary not found');
+    expect(
+      summarizeLoaderError(
+        new Error(
+          'odiff-bin: could not find the odiff binary. The "@odiff/linux-x64" package should have been installed automatically as an optional dependency of odiff-bin.',
+        ),
+      ),
+    ).toBe('binary not found');
     expect(summarizeLoaderError(new Error('Exec format error'))).toBe('built for a different CPU architecture');
   });
 
