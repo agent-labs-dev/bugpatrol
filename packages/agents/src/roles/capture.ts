@@ -33,6 +33,7 @@ function recordSetup(
   targets: CaptureTarget[],
   captured: Set<CaptureTarget>,
   setup: Map<unknown, string | undefined>,
+  allowIndependentApiSteps: boolean,
 ): Tool {
   return {
     ...tool,
@@ -44,6 +45,19 @@ function recordSetup(
       setup.set(input.id, failure);
       for (const target of targets)
         if (target.capture.routineId === input.id && !captured.has(target)) target.capture.setupFailed = failure;
+      if (failure && allowIndependentApiSteps) {
+        return {
+          ...result,
+          isError: false,
+          content: [
+            ...result.content,
+            {
+              type: 'text',
+              text: "The prerequisite routine failed. Continue with each target's request steps when they do not use its captured values; mark the target unreached if those steps also fail.",
+            },
+          ],
+        };
+      }
       return result;
     },
   };
@@ -108,7 +122,11 @@ export async function captureTargets(
   ]);
   const tools: Tool[] = explorerTools(session, { replay: task.replay })
     .filter((tool) => allowed.has(tool.name))
-    .map((tool) => (tool.name === 'run_routine' ? recordSetup(tool, targets, captured, setup) : tool));
+    .map((tool) =>
+      tool.name === 'run_routine'
+        ? recordSetup(tool, targets, captured, setup, session.config.app.platform === 'api')
+        : tool,
+    );
   tools.push(
     {
       name: 'replay_issue_steps',

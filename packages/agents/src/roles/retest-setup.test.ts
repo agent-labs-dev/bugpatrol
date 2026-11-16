@@ -150,3 +150,36 @@ it('keeps a capture taken after a failed setup flagged when a later replay of th
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('lets API targets continue after an unrelated setup routine is missing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bugpatrol-api-setup-'));
+  try {
+    const config = parseConfig({ version: 1, app: { platform: 'api', connect: { url: 'fake://home' } } });
+    const driver = new FakeDriver({ home: { elements: [] } });
+    const record = await new Workspace(root).startSession('explorer');
+    const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
+    expect(session.config.app.platform).toBe('api');
+    const targets: CaptureTarget[] = [{ capture: { routineId: 'unrelated-exploration' }, steps: [] }];
+    let setupResultIsError: boolean | undefined;
+    await captureTargets(
+      session,
+      {
+        label: 'scripted',
+        async run(task) {
+          const call = (name: string, input: Record<string, unknown>) =>
+            task.tools.find((tool) => tool.name === name)!.run(input);
+          setupResultIsError = (await call('run_routine', { id: 'unrelated-exploration' })).isError;
+          await call('capture_after', { target: 1, reached: true, note: 'Independent request was attempted' });
+          await call('finish_retest', { summary: 'Captured independent target' });
+          return { stop: 'done', steps: 3, costUsd: 0 };
+        },
+      },
+      targets,
+      { system: '', prompt: '', replay: { windowMs: 200 } },
+    );
+    expect(setupResultIsError).toBe(false);
+    expect(targets[0]!.capture.setupFailed).toContain('Unknown routine');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
