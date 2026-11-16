@@ -21,6 +21,7 @@
     "@bugpatrol/capture": "workspace:*",
     "@bugpatrol/contract": "workspace:*",
     "@bugpatrol/core": "workspace:*",
+    "@bugpatrol/dashboard": "workspace:*",
     "@bugpatrol/decide": "workspace:*",
     "@bugpatrol/diff": "workspace:*",
     "@bugpatrol/drivers": "workspace:*",
@@ -28,7 +29,6 @@
     "@bugpatrol/recon": "workspace:*",
     "@bugpatrol/report": "workspace:*",
     "@bugpatrol/triage": "workspace:*",
-    "yaml": "^2.5.1",
-    "@bugpatrol/dashboard": "workspace:*"
+    "yaml": "^2.9.1"
   }
 }

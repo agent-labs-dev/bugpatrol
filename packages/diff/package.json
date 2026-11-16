@@ -20,8 +20,8 @@
   },
   "dependencies": {
     "@bugpatrol/core": "workspace:*",
-    "odiff-bin": "^3.2.1",
-    "pixelmatch": "^6.0.0",
+    "odiff-bin": "^4.5.0",
+    "pixelmatch": "^7.2.0",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {

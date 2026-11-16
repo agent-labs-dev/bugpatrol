@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { InfrastructureError } from '@bugpatrol/core';
 import { compare } from 'odiff-bin';
 import { boundingRegionsFromLines, maskedPixelCount } from '../mask-accounting.js';
@@ -34,7 +37,7 @@ export function summarizeLoaderError(cause: unknown): string {
   const text = cause instanceof Error ? cause.message : String(cause);
   const versions = [...new Set(text.match(/GLIBC_[\d.]+/g) ?? [])];
   if (versions.length > 0) return `needs ${versions.join(', ')}, which this system's C library does not provide`;
-  if (/ENOENT/.test(text)) return 'binary not found';
+  if (/ENOENT|could not find the odiff binary/.test(text)) return 'binary not found';
   if (/Exec format/i.test(text)) return 'built for a different CPU architecture';
   return text.split('\n')[0]!.slice(0, 160);
 }
@@ -104,31 +107,38 @@ export async function diffWithOdiff(req: DiffRequest): Promise<DiffResult> {
 }
 
 async function runCompare(req: DiffRequest, masks: DiffRequest['masks'] = []) {
+  // odiff's Node wrapper always passes an output path, and odiff 4 fails a
+  // pixel diff it cannot write, so an unwanted image goes to a scratch file.
+  const scratch = req.diffOutPath ? undefined : await mkdtemp(join(tmpdir(), 'bugpatrol-odiff-'));
   try {
-    return await compare(req.baselinePath, req.actualPath, req.diffOutPath ?? nullSink(), {
+    return await compare(req.baselinePath, req.actualPath, req.diffOutPath ?? join(scratch!, 'diff.png'), {
       threshold: req.threshold ?? 0,
       antialiasing: req.antialiasing ?? false,
       captureDiffLines: true,
       failOnLayoutDiff: true,
-      ignoreRegions: masks.map((m) => ({
-        x1: Math.floor(m.x),
-        y1: Math.floor(m.y),
-        x2: Math.ceil(m.x + m.width),
-        y2: Math.ceil(m.y + m.height),
-      })),
+      // odiff 4 rejects an empty region list as an invalid format.
+      ...(masks.length > 0 && {
+        ignoreRegions: masks.map((m) => ({
+          x1: Math.floor(m.x),
+          y1: Math.floor(m.y),
+          x2: Math.ceil(m.x + m.width),
+          y2: Math.ceil(m.y + m.height),
+        })),
+      }),
     });
   } catch (cause) {
-    // odiff ships a prebuilt binary. On a host whose glibc predates the build,
-    // it cannot start at all -- which is a property of the machine, not of the
+    // odiff ships a prebuilt binary in an optional platform package. When that
+    // package was not installed, or the host's glibc predates the build, it
+    // cannot start at all -- which is a property of the machine, not of the
     // images being compared, so it must not surface as a diff.
-    if (cause instanceof Error && /GLIBC|not found|ENOENT|Exec format|cannot execute/i.test(cause.message)) {
+    if (
+      cause instanceof Error &&
+      /GLIBC|not found|could not find the odiff binary|ENOENT|Exec format|cannot execute/i.test(cause.message)
+    ) {
       throw new OdiffUnavailableError(cause);
     }
     throw cause;
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
   }
-}
-
-function nullSink(): string {
-  // odiff requires an output path even when the caller does not want the image.
-  return process.platform === 'win32' ? 'NUL' : '/dev/null';
 }
