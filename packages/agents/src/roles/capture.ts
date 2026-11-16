@@ -33,11 +33,12 @@ function recordSetup(
   targets: CaptureTarget[],
   captured: Set<CaptureTarget>,
   setup: Map<unknown, string | undefined>,
-  allowIndependentApiSteps: boolean,
+  onReplay: () => void,
 ): Tool {
   return {
     ...tool,
     async run(input) {
+      onReplay();
       const result = await tool.run(input);
       const failure = result.isError
         ? result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(' ')
@@ -45,23 +46,6 @@ function recordSetup(
       setup.set(input.id, failure);
       for (const target of targets)
         if (target.capture.routineId === input.id && !captured.has(target)) target.capture.setupFailed = failure;
-      const matching = targets.filter((target) => target.capture.routineId === input.id);
-      const independent =
-        matching.length > 0 &&
-        matching.every((target) => target.steps.every((step) => !JSON.stringify(step).includes('{{')));
-      if (failure && allowIndependentApiSteps && independent) {
-        return {
-          ...result,
-          isError: false,
-          content: [
-            ...result.content,
-            {
-              type: 'text',
-              text: 'The prerequisite routine failed, but this target has no captured-value dependency. Continue its request steps; mark it unreached if they fail.',
-            },
-          ],
-        };
-      }
       return result;
     },
   };
@@ -110,6 +94,7 @@ export async function captureTargets(
   const captured = new Set<CaptureTarget>();
   /** The latest replay result per routine id: a failure message, or undefined once it succeeds. */
   const setup = new Map<unknown, string | undefined>();
+  let resumePoint: { target: CaptureTarget; index: number; controlVersion: number | undefined } | undefined;
   let finishSummary = '';
   const allowed = new Set([
     'look',
@@ -128,20 +113,44 @@ export async function captureTargets(
     .filter((tool) => allowed.has(tool.name))
     .map((tool) =>
       tool.name === 'run_routine'
-        ? recordSetup(tool, targets, captured, setup, session.config.app.platform === 'api')
+        ? recordSetup(tool, targets, captured, setup, () => {
+            resumePoint = undefined;
+          })
         : tool,
     );
   tools.push(
     {
       name: 'replay_issue_steps',
-      description: 'Replay the target steps after the routine.',
-      inputSchema: schema(targetSchema, ['target']),
+      description:
+        'Replay the target steps after the routine. If an API read fails while an asynchronous prerequisite is incomplete, wait for completion and retry with resume=true to repeat that read and the remaining steps without resubmitting earlier writes.',
+      inputSchema: schema({ ...targetSchema, resume: { type: 'boolean' } }, ['target']),
       async run(input) {
         const target = selected(input);
         if (!target) return { ...response('Choose a valid target number.'), isError: true };
-        const result = await replaySteps(session, target.steps);
-        if (!result.ok)
-          return { ...response(`Issue steps failed at ${result.failedStep}: ${result.error}`), isError: true };
+        const api = session.config.app.platform === 'api';
+        let start = 0;
+        if (input.resume === true) {
+          if (!api || resumePoint?.target !== target || resumePoint.controlVersion !== driver.controlVersion)
+            return {
+              ...response('No current failed API read to resume for this target. Replay its flow first.'),
+              isError: true,
+            };
+          start = resumePoint.index;
+        }
+        resumePoint = undefined;
+        const result = await replaySteps(session, target.steps.slice(start), { captureDependenciesOnly: api });
+        if (!result.ok) {
+          const index = start + (result.failedStep ?? 0);
+          const failed = target.steps[index];
+          if (api && failed?.kind === 'request' && ['GET', 'HEAD', 'OPTIONS'].includes(failed.method))
+            resumePoint = { target, index, controlVersion: driver.controlVersion };
+          return {
+            ...response(
+              `Issue steps failed at ${index}: ${result.error}${resumePoint ? '. After the prerequisite completes, use resume=true to retry this read without repeating earlier requests.' : ''}`,
+            ),
+            isError: true,
+          };
+        }
         await driver.settle();
         const observation = await driver.observe();
         const file = await session.capture(observation, `retest-steps-${input.target}`);

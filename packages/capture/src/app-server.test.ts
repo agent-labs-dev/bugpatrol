@@ -45,4 +45,21 @@ describe('app server lifecycle', () => {
       if (replacement.listening) await new Promise<void>((resolve) => replacement.close(() => resolve()));
     }
   }, 20_000);
+
+  it('stops a well-behaved server without waiting for the grace window', async () => {
+    const port = await freePort();
+    const config = {
+      run: {
+        command: `node -e "require('http').createServer((_,r)=>r.end('ok')).listen(${port})"`,
+        url: `http://127.0.0.1:${port}`,
+        ready: { selectors: [], timeoutMs: 10_000, forbidConsoleErrors: true },
+        seeds: [],
+      },
+      determinism: { timezone: 'UTC' },
+    } as unknown as BugpatrolConfig;
+    const app = await startApp(config, { cwd: process.cwd(), reuseExisting: false });
+    const started = Date.now();
+    await app.stop();
+    expect(Date.now() - started).toBeLessThan(3_000);
+  }, 20_000);
 });

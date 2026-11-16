@@ -1,6 +1,8 @@
 import { missingId } from '@bugpatrol/contract';
 import type { AppConfig } from '@bugpatrol/core';
 
+const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
+
 /** Captures and allowlisted secrets share one redaction and interpolation path. */
 export class Vars {
   private readonly values = new Map<string, string>();
@@ -53,6 +55,11 @@ export class Vars {
     }
   }
 
+  /** Names consumed by the same placeholder grammar as resolve. */
+  static references(text: string): string[] {
+    return [...text.matchAll(placeholder)].map((match) => match[1] ?? match[3]!);
+  }
+
   has(name: string): boolean {
     return this.values.has(name);
   }
@@ -91,7 +98,6 @@ export class Vars {
 
   /** `{{NAME|missing}}` gives an id of the same shape as the value that does not exist (see `missingId`). */
   private interpolate(text: string, trusted: boolean, lenientShell: boolean): string {
-    const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
     return text.replace(
       placeholder,
       (match, strict: string | undefined, missing: string | undefined, env: string | undefined) => {

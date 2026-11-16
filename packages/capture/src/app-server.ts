@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { BugpatrolConfig } from '@bugpatrol/core';
 import { InfrastructureError, requireRun } from '@bugpatrol/core';
@@ -130,6 +131,31 @@ async function stopProcess(child: ChildProcess): Promise<void> {
   // server and leaves the port held for the next run.
   const groupAlive = () => {
     if (process.platform === 'win32') return false;
+    // kill(pid, 0) also succeeds for zombie descendants. On Linux, inspect
+    // process state so exited children do not consume the second grace window.
+    // Other platforms have no portable process-group state API, so retain the
+    // signal probe there.
+    if (process.platform === 'linux') {
+      try {
+        const entries = readdirSync('/proc', { withFileTypes: true }).filter(
+          (entry) => entry.isDirectory() && /^\d+$/.test(entry.name),
+        );
+        let complete = true;
+        let liveMember = false;
+        for (const entry of entries) {
+          try {
+            const stat = readFileSync(`/proc/${entry.name}/stat`, 'utf8');
+            const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+            if (fields[2] === String(child.pid) && fields[0] !== 'Z') liveMember = true;
+          } catch {
+            complete = false;
+          }
+        }
+        if (complete) return liveMember;
+      } catch {
+        // Fall through to the portable signal probe when /proc is unavailable.
+      }
+    }
     try {
       process.kill(-child.pid!, 0);
       return true;
