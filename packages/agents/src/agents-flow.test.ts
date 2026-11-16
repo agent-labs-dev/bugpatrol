@@ -528,6 +528,40 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('keeps the typing that fixes a form after its error, though the form looks the same', async () => {
+    const f = await fixture();
+    try {
+      const field = { ...element('e3', 'Email 1'), role: 'textbox', value: '' };
+      const send = element('e4', 'Send invite');
+      f.screens.team = { elements: [field, send], next: { e4: 'teamError' }, color: 90 };
+      f.screens.teamError = { elements: [field, send, element('e5', 'Enter a valid email')], color: 91 };
+      f.screens.agents = { elements: [element('e6', 'Skip for now')], color: 92 };
+      f.driver.current = 'team';
+      const tools = explorerTools(f.session);
+      await run(tools, 'look');
+      f.session.anchor = { index: 0 };
+      field.value = 'not-an-email';
+      await run(tools, 'type', { ref: 'e3', text: 'not-an-email' });
+      await run(tools, 'tap', { ref: 'e4' });
+      // Typing clears the error, so the form is back to its own names.
+      f.driver.current = 'team';
+      f.screens.team.next = { e4: 'agents' };
+      field.value = 'friend@example.com';
+      await run(tools, 'type', { ref: 'e3', text: 'friend@example.com' });
+      await run(tools, 'tap', { ref: 'e4' });
+      await run(tools, 'save_routine', { id: 'invite', description: 'Invite' });
+      const saved = await f.workspace.readRoutine('invite');
+      expect(saved?.steps.map((step) => (step.kind === 'type' ? step.value : step.kind))).toEqual([
+        'not-an-email',
+        'tap',
+        'friend@example.com',
+        'tap',
+      ]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('resolves a previous ref by role, name and position', async () => {
     const f = await fixture();
     try {

@@ -212,17 +212,19 @@ async function observe(session: AgentSession, label: string, summary?: string): 
 }
 
 /**
- * Where the app is, for loop removal: the screen key plus the element names,
- * or the text of a terminal.
+ * Where the app is, for loop removal: the screen key plus the element names
+ * and the values in its fields, or the text of a terminal.
  * A URL alone is too coarse (a form or a dialog keeps it), and the names also
- * change when the app state changes, e.g. a new row in a list.
+ * change when the app state changes, e.g. a new row in a list. A field's value
+ * is state too: a form that shows an error and is then filled in again is not
+ * where it was, and the typing that changed it must stay in the routine.
  */
 function locationKey(observation: Observation): string {
   // A terminal has no elements: its text is where it is.
   const names = shortHash(
     observation.terminal?.output ??
       observation.elements
-        .map((item) => item.name)
+        .map((item) => (item.value === undefined ? item.name : `${item.name}=${item.value}`))
         .sort()
         .join('|'),
   );

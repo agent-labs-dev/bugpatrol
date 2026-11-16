@@ -54,6 +54,9 @@ type TargetResult = { degraded: boolean; element?: UiElement };
 /** How long a sign-in hand-off at the connect URL may take to send the app on (see `awaitHandOff`). */
 const HAND_OFF_MS = 15_000;
 
+/** How long a replayed target with a name may take to render before a looser match stands in (see `resolveTarget`). */
+const NAMED_TARGET_WAIT_MS = 5000;
+
 /** Browser and CDP drivers share observation and action semantics across startup modes. */
 export class WebDriver implements Driver {
   readonly platform: 'web' | 'electron' | 'api' = 'web';
@@ -252,7 +255,7 @@ export class WebDriver implements Driver {
     if (!target) {
       throw new Error('Tap needs a target');
     }
-    const resolved = await resolveTarget(page, target, this.lastObservation);
+    const resolved = await resolveTarget(page, target, this.lastObservation, NAMED_TARGET_WAIT_MS);
     if (resolved.locator) {
       await resolved.locator.click();
     } else {
@@ -265,7 +268,7 @@ export class WebDriver implements Driver {
     const target = action.ref ?? action.locator;
     let result: TargetResult = { degraded: false };
     if (target) {
-      const resolved = await resolveTarget(page, target, this.lastObservation);
+      const resolved = await resolveTarget(page, target, this.lastObservation, NAMED_TARGET_WAIT_MS);
       result = { degraded: resolved.degraded, element: resolved.element };
       if (resolved.locator) {
         if (action.append) {
@@ -297,7 +300,7 @@ export class WebDriver implements Driver {
     const target = action.ref ?? action.locator;
     let result: TargetResult = { degraded: false };
     if (target) {
-      const resolved = await resolveTarget(page, target, this.lastObservation);
+      const resolved = await resolveTarget(page, target, this.lastObservation, NAMED_TARGET_WAIT_MS);
       result = { degraded: resolved.degraded, element: resolved.element };
       // The wheel scrolls whatever is under the pointer, so put the pointer over the target first.
       let point = resolved.point;
@@ -325,7 +328,7 @@ export class WebDriver implements Driver {
     if (!target) {
       throw new Error('Upload needs a target');
     }
-    const resolved = await resolveTarget(page, target, this.lastObservation);
+    const resolved = await resolveTarget(page, target, this.lastObservation, NAMED_TARGET_WAIT_MS);
     const file = sampleFile(action.file);
     const isInput = resolved.locator
       ? await resolved.locator.evaluate((element) => element instanceof HTMLInputElement && element.type === 'file')

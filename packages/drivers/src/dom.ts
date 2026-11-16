@@ -201,11 +201,19 @@ export type ResolvedTarget = {
   element?: UiElement;
 };
 
-/** Prefer replayable locators; a stored point remains the last resort. */
+/**
+ * Prefer replayable locators; a stored point remains the last resort. With
+ * `waitMs`, a target that has a name (a test id, or a role and a name) gets
+ * that long to appear before a looser match is used: a replayed step can run
+ * before its element renders, such as a field that shows only once the field
+ * above it is filled, and the stored selector or point then lands on another
+ * element, or on none.
+ */
 export async function resolveTarget(
   page: Page,
   target: string | StableLocator,
   lastObservation?: Observation,
+  waitMs = 0,
 ): Promise<ResolvedTarget> {
   if (typeof target === 'string') {
     const element = lastObservation?.elements.find((item) => item.ref === target);
@@ -214,34 +222,49 @@ export async function resolveTarget(
     }
     return { locator: page.locator(element.selector), degraded: false, element };
   }
-  const choices: Locator[] = [];
+  const named: Locator[] = [];
   if (target.testId) {
     const escaped = target.testId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    choices.push(page.locator(`[data-testid="${escaped}"]`));
+    named.push(page.locator(`[data-testid="${escaped}"]`));
   }
   if (target.role && target.name) {
-    choices.push(
+    named.push(
       page.getByRole(target.role as Parameters<Page['getByRole']>[0], {
         name: target.name,
         exact: true,
       }),
     );
   }
+  const looser: Locator[] = [];
   if (target.text) {
-    choices.push(page.getByText(target.text, { exact: true }));
+    looser.push(page.getByText(target.text, { exact: true }));
   }
   if (target.selector) {
-    choices.push(page.locator(target.selector));
+    looser.push(page.locator(target.selector));
   }
-  for (const locator of choices) {
-    if (await locator.count().catch(() => 0)) {
-      return { locator: locator.first(), degraded: false };
-    }
+  const deadline = Date.now() + waitMs;
+  let found = await firstPresent(named);
+  while (!found && named.length && Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    found = await firstPresent(named);
+  }
+  found ??= await firstPresent(looser);
+  if (found) {
+    return { locator: found, degraded: false };
   }
   if (target.point) {
     return { point: target.point, degraded: true };
   }
   throw new Error('Target not found');
+}
+
+async function firstPresent(locators: Locator[]): Promise<Locator | undefined> {
+  for (const locator of locators) {
+    if (await locator.count().catch(() => 0)) {
+      return locator.first();
+    }
+  }
+  return undefined;
 }
 
 /** Store a stable replay handle before the observation ref expires. */
