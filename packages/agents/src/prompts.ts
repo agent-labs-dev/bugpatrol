@@ -105,6 +105,9 @@ function explorerCommon(platform: Platform, instructions: string, lessons: Lesso
 ${platform === 'api' ? API_TOOLS : platform === 'cli' ? TERMINAL_TOOLS : SCREEN_TOOLS}
 - Secrets are placeholders such as {{E2E_LOGIN_LINK}}. Pass the placeholder text exactly. Never guess or
   type a real password, token, or code.
+- {{RUN_ID}} is new on every run. Put it in any value the app accepts only once, such as a username,
+  a handle, a slug, or a new account's email (for example qa{{RUN_ID}}), never a number you make up:
+  a replay of your steps runs on another account and must not type a value this run already took.
 - ${PLATFORM_NOTES[platform]}
 
 RULES

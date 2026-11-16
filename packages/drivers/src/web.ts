@@ -51,6 +51,9 @@ export function openAllowed(url: URL, home: URL, allowedOrigins: string[] = []):
 
 type TargetResult = { degraded: boolean; element?: UiElement };
 
+/** How long a sign-in hand-off at the connect URL may take to send the app on (see `awaitHandOff`). */
+const HAND_OFF_MS = 15_000;
+
 /** Browser and CDP drivers share observation and action semantics across startup modes. */
 export class WebDriver implements Driver {
   readonly platform: 'web' | 'electron' | 'api' = 'web';
@@ -96,6 +99,7 @@ export class WebDriver implements Driver {
     this.watch(this.page);
     this.home = new URL(this.options.url);
     await this.page.goto(this.options.url);
+    await this.awaitHandOff(this.page);
     const landed = this.offOrigin(this.page.url());
     if (landed) {
       throw new ConfigError(
@@ -103,6 +107,21 @@ export class WebDriver implements Driver {
       );
     }
     this.lastInApp = this.page.url();
+  }
+
+  /**
+   * A connect URL with a query, such as `/test/login?token=...`, is usually a
+   * sign-in hand-off: its page stores the session, then sends the app on by
+   * itself. Until it has, the app is not signed in, and an action that loads
+   * a page, such as the `open` that starts many routines, cuts the sign-in
+   * short and lands on the sign-in screen. So wait, for a while, for the page
+   * to leave the URL it loaded at. A connect URL that stays put costs the wait.
+   */
+  private async awaitHandOff(page: Page): Promise<void> {
+    const loaded = page.url();
+    if (!URL.canParse(loaded) || !new URL(loaded).search) return;
+    await page.waitForURL((url) => url.href !== loaded, { timeout: HAND_OFF_MS }).catch(() => undefined);
+    await page.waitForLoadState('load').catch(() => undefined);
   }
 
   /** The page's URL when it is a website that the explorer may not be on, else undefined. */

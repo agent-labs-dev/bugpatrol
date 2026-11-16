@@ -28,8 +28,19 @@ describe('Vars', () => {
   it('lists names but never values for an unknown strict placeholder', () => {
     const vars = new Vars();
     vars.set('TOKEN', 'top-secret');
-    expect(() => vars.resolve('{{MISSING}}')).toThrow('Available: TOKEN');
+    expect(() => vars.resolve('{{MISSING}}')).toThrow('Available: RUN_ID, TOKEN');
     expect(() => vars.resolve('{{MISSING}}')).not.toThrow('top-secret');
+  });
+
+  it('gives each run its own RUN_ID, which a routine keeps as a placeholder', () => {
+    const first = new Vars();
+    const second = new Vars();
+    const username = first.resolve('qa{{RUN_ID}}');
+    expect(username).toMatch(/^qa[a-z0-9]{8}$/);
+    expect(second.resolve('qa{{RUN_ID}}')).not.toBe(username);
+    expect(first.redact('qa{{RUN_ID}}')).toBe('qa{{RUN_ID}}');
+    first.setPublic('RUN_ID', 'from-setup');
+    expect(first.resolve('{{RUN_ID}}')).toBe('from-setup');
   });
 
   it('never gives agent input an undeclared environment variable', () => {
@@ -61,7 +72,7 @@ describe('Vars', () => {
     const vars = new Vars([], { SETUP_TOKEN: 'setup-only' });
     expect(vars.resolveConfig('${SETUP_TOKEN}')).toBe('setup-only');
     expect(vars.redact('setup-only')).toBe('{{SETUP_TOKEN}}');
-    expect(vars.names()).toEqual([]);
+    expect(vars.names()).toEqual(['RUN_ID']);
     expect(vars.resolve('${SETUP_TOKEN}')).toBe('${SETUP_TOKEN}');
     expect(vars.resolveConfig('${SHELL_VAR}')).toBe('${SHELL_VAR}');
   });

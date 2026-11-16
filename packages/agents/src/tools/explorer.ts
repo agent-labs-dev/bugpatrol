@@ -1074,7 +1074,8 @@ export function explorerTools(
       : []),
     {
       name: 'type',
-      description: 'Type in a field, preserving {{NAME}} placeholders for secrets.',
+      description:
+        'Type in a field, preserving {{NAME}} placeholders for secrets. A value the app accepts only once (a username, a slug, a new email) takes {{RUN_ID}}.',
       inputSchema: schema(
         {
           ref: string,
