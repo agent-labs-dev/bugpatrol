@@ -2,7 +2,15 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
-import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, loadConfig, paths } from '@bugpatrol/core';
+import {
+  type BugpatrolConfig,
+  ConfigError,
+  ExitCode,
+  type ExitCodeValue,
+  legacyLayout,
+  loadConfig,
+  paths,
+} from '@bugpatrol/core';
 import { chromiumProblem } from '@bugpatrol/drivers';
 
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fatal: boolean };
@@ -12,6 +20,19 @@ export type DoctorConfig = { path: string; config?: BugpatrolConfig; error?: str
 
 /** The machine probes, as a seam for the tests. */
 export type DoctorProbes = { chromium: () => string | undefined };
+
+/** `gate`: check only what the deterministic web gate (`bugpatrol run`) needs, not the agents. */
+export type DoctorOptions = { gate?: boolean };
+
+/** `bugpatrol doctor [--gate]`. Unknown flags are rejected, as `run` does. */
+export function parseDoctorFlags(args: string[]): DoctorOptions {
+  const options: DoctorOptions = {};
+  for (const arg of args) {
+    if (arg === '--gate') options.gate = true;
+    else throw new ConfigError(`Unknown flag for \`bugpatrol doctor\`: ${arg}`);
+  }
+  return options;
+}
 
 export function readDoctorConfig(root: string, configFile?: string): DoctorConfig {
   const path = paths.config(root, configFile);
@@ -39,11 +60,14 @@ function configCheck(root: string, { path, config, error }: DoctorConfig, select
  * the config itself, Node, the LLM of each agent, and what the platform
  * needs (the browser and the app URL for web, python3 for cli, Xvfb tools
  * for desktop). A gate config also gets the determinism checks.
+ * With `gate`, it checks the config for the gate only: the gate calls no
+ * agent, so the agent LLMs and gh are left out, and the config needs a run block.
  */
 export async function runChecks(
   root: string,
   loaded: DoctorConfig,
   probes: DoctorProbes = { chromium: chromiumProblem },
+  options: DoctorOptions = {},
 ): Promise<DoctorCheck[]> {
   const { config } = loaded;
   const checks: DoctorCheck[] = [configCheck(root, loaded, loaded.path !== paths.config(root))];
@@ -68,16 +92,24 @@ export async function runChecks(
 
   // With no config there is no platform to check for: `init` writes one.
   if (!config) return checks;
-  checks.push(...agentChecks(config, resolve(root, config.app.source)));
-  if (config.app.platform === 'web' || config.run) {
+  const browserCheck = (): DoctorCheck => {
     const problem = probes.chromium();
+    return { name: 'browser', ok: !problem, detail: problem ?? 'Chromium for Playwright is installed', fatal: true };
+  };
+  // The gate starts run.command and drives run.url in Chromium. The app block
+  // (platform, connect, setup) and the agents are for the agent commands only.
+  if (options.gate) {
+    if (config.run) return [...checks, browserCheck(), ...gateChecks(root, config.determinism.image)];
     checks.push({
-      name: 'browser',
-      ok: !problem,
-      detail: problem ?? 'Chromium for Playwright is installed',
+      name: 'gate',
+      ok: false,
+      detail: `${loaded.path} has no run block, so \`bugpatrol run\` cannot start the app. Run \`bugpatrol init --gate\`, or drop --gate to check the agents.`,
       fatal: true,
     });
+    return checks;
   }
+  checks.push(...agentChecks(config, resolve(root, config.app.source)));
+  if (config.app.platform === 'web' || config.run) checks.push(browserCheck());
   const url = await urlCheck(config);
   if (url) checks.push(url);
   if (config.app.platform === 'cli')
@@ -110,9 +142,13 @@ export async function runChecks(
   }
   // The pinned image and the AppModel belong to the deterministic web gate
   // (`bugpatrol run`). They do not apply to the agents.
-  if (!config.run) return checks;
+  if (config.run) checks.push(...gateChecks(root, config.determinism.image));
+  return checks;
+}
 
-  const image = config.determinism.image;
+/** The checks of the deterministic web gate: the pinned runner image, the AppModel and the Intent Ledger. */
+function gateChecks(root: string, image: string): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
   const pinned = image.includes('@sha256:');
   checks.push({
     name: 'pinned-image',
