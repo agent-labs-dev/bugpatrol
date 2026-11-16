@@ -92,23 +92,24 @@ export async function runChecks(
 
   // With no config there is no platform to check for: `init` writes one.
   if (!config) return checks;
-  if (!options.gate) checks.push(...agentChecks(config, resolve(root, config.app.source)));
-  else if (!config.run)
+  const browserCheck = (): DoctorCheck => {
+    const problem = probes.chromium();
+    return { name: 'browser', ok: !problem, detail: problem ?? 'Chromium for Playwright is installed', fatal: true };
+  };
+  // The gate starts run.command and drives run.url in Chromium. The app block
+  // (platform, connect, setup) and the agents are for the agent commands only.
+  if (options.gate) {
+    if (config.run) return [...checks, browserCheck(), ...gateChecks(root, config.determinism.image)];
     checks.push({
       name: 'gate',
       ok: false,
       detail: `${loaded.path} has no run block, so \`bugpatrol run\` cannot start the app. Run \`bugpatrol init --gate\`, or drop --gate to check the agents.`,
       fatal: true,
     });
-  if (config.app.platform === 'web' || config.run) {
-    const problem = probes.chromium();
-    checks.push({
-      name: 'browser',
-      ok: !problem,
-      detail: problem ?? 'Chromium for Playwright is installed',
-      fatal: true,
-    });
+    return checks;
   }
+  checks.push(...agentChecks(config, resolve(root, config.app.source)));
+  if (config.app.platform === 'web' || config.run) checks.push(browserCheck());
   const url = await urlCheck(config);
   if (url) checks.push(url);
   if (config.app.platform === 'cli')
@@ -141,9 +142,13 @@ export async function runChecks(
   }
   // The pinned image and the AppModel belong to the deterministic web gate
   // (`bugpatrol run`). They do not apply to the agents.
-  if (!config.run) return checks;
+  if (config.run) checks.push(...gateChecks(root, config.determinism.image));
+  return checks;
+}
 
-  const image = config.determinism.image;
+/** The checks of the deterministic web gate: the pinned runner image, the AppModel and the Intent Ledger. */
+function gateChecks(root: string, image: string): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
   const pinned = image.includes('@sha256:');
   checks.push({
     name: 'pinned-image',

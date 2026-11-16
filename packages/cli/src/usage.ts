@@ -220,8 +220,8 @@ export const COMMAND_HELP: Record<string, string> = {
   agent, and gh when agents.github is on. Then what the platform needs: Chromium for Playwright for
   web, and that the app URL answers when no setup command starts it (web and api); python3 for cli;
   Linux and the launch commands for desktop. A config with a run block also gets the gate checks:
-  the pinned runner image and the AppModel. --gate checks only what bugpatrol run needs: it leaves
-  out the agent LLMs and gh, which the gate never calls, and fails when there is no run block.
+  the pinned runner image and the AppModel. --gate checks only what bugpatrol run needs: Chromium and
+  the gate checks, not the agents, gh or the app block, and fails when there is no run block.
   Exits 2 when a required check fails.
 `,
 };

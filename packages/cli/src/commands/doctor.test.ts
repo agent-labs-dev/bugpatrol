@@ -154,6 +154,27 @@ describe('doctor --gate', () => {
     }
   });
 
+  it('checks only the gate URL, not the agent connect.url or platform tools', async () => {
+    const root = project();
+    const config = parseConfig({
+      version: 1,
+      app: { platform: 'web', connect: { url: 'http://127.0.0.1:1' } },
+      run: { command: 'npm run dev', url: 'http://localhost:3000' },
+    });
+    const checks = await runChecks(root, { path: join(root, '.bugpatrol', 'bugpatrol.yml'), config }, installed, {
+      gate: true,
+    });
+    expect(checks.map((check) => check.name)).toEqual([
+      'config',
+      'node',
+      'browser',
+      'pinned-image',
+      'app-model',
+      'intent-ledger',
+    ]);
+    expect(doctorExitCode(checks)).toBe(0);
+  });
+
   it('fails a config with no run block, which the gate cannot run', async () => {
     const root = project();
     const config = parseConfig({ version: 1, app: { platform: 'cli' } });
