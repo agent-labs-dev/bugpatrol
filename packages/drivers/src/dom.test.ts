@@ -65,6 +65,21 @@ describe('DOM driver', () => {
     expect(byPoint).toMatchObject({ point: { x: 12, y: 34 }, degraded: true });
   });
 
+  it('waits for a named target to render before falling back to its point', async () => {
+    await page.evaluate(() => {
+      setTimeout(() => {
+        const field = document.createElement('input');
+        field.setAttribute('aria-label', 'Late username');
+        document.body.append(field);
+      }, 700);
+    });
+    const late = { role: 'textbox', name: 'Late username', point: { x: 1, y: 1 } };
+    expect(await resolveTarget(page, late)).toMatchObject({ degraded: true });
+    const resolved = await resolveTarget(page, late, undefined, 3000);
+    expect(resolved.degraded).toBe(false);
+    expect(await resolved.locator?.getAttribute('aria-label')).toBe('Late username');
+  });
+
   it('acts on refs and records stable locators without refs', async () => {
     const driver = new FixtureDriver({ url: '', viewport: { width: 800, height: 600 } });
     driver.bind(browser, context, page);

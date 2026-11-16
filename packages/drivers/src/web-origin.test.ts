@@ -144,3 +144,17 @@ describe('the web driver stays on the app origin', () => {
     expect((await web.observe()).location).toBe(`${app}/home`);
   });
 });
+
+describe('the web driver waits for a sign-in hand-off', () => {
+  it('connects once a connect URL with a query has sent the app on', { timeout: 30_000 }, async () => {
+    // The page stores the session a moment after it loads, then moves on by itself.
+    const app = await serve((request) =>
+      request.url?.startsWith('/test/login')
+        ? '<title>Signing in</title><script>setTimeout(() => location.replace("/home"), 1500)</script>'
+        : '<title>Home</title><button>Signed in</button>',
+    );
+    const web = driver(`${app}/test/login?token=abc`);
+    await web.connect();
+    expect((await web.observe()).location).toBe(`${app}/home`);
+  });
+});

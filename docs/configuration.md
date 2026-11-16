@@ -130,12 +130,19 @@ Later commands and `connect` can use a captured value as `${NAME}`. The explorer
 ## Secret interpolation
 
 Agent actions and saved routines may expand `{{NAME}}` or `${NAME}` only when the
-name is declared in `app.secrets` or captured by setup. An unknown `{{NAME}}` fails
+name is declared in `app.secrets` or captured by setup, or is `{{RUN_ID}}`. An unknown `{{NAME}}` fails
 before the action runs. An unknown `${name}` stays as it is, because it is also the
 syntax of the shell: on a `cli` app, `for s in a b; do cat ${s}.txt; done` runs as
 written. A declared name is still filled in, so give a shell variable a name that is
 not a secret or a setup capture. Never put production credentials in a test
 environment.
+
+`{{RUN_ID}}` is eight lowercase letters and digits, new on each run, and not a
+secret. The explorer puts it in any value that the app accepts only once, such as a
+username, a slug or a new account's email, so a routine keeps the placeholder and its
+replay on another account types a new value. A routine that saved such a value
+literally fails on the next new account, because the app refuses it as taken. Setup
+can capture its own `RUN_ID` instead.
 
 Repository-owned setup and teardown commands and their `cwd` may also expand
 `${NAME}` from the host environment. Those values are redacted from text output
@@ -188,6 +195,8 @@ Each blocked write is logged with its method, its URL with the query values hidd
 | `cli` | `cli`, with the keys below | `{ cols: 120, rows: 40 }` |
 
 For mobile, the default device is the booted simulator or the running emulator.
+
+A web `url` with a query, such as `/test/login?token=${TOKEN}`, is taken as a sign-in hand-off: its page stores the session and then sends the app on by itself. Bugpatrol waits up to 15 seconds for the page to leave that URL before anything acts, because an action that loads a page first, such as the `open` that starts many routines, cuts the sign-in short. A URL with a query that never moves on costs that wait once per session.
 
 ### Connect for Electron
 

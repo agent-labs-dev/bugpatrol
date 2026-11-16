@@ -1,7 +1,20 @@
+import { randomBytes } from 'node:crypto';
 import { missingId } from '@bugpatrol/contract';
 import type { AppConfig } from '@bugpatrol/core';
 
 const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
+
+/**
+ * `{{RUN_ID}}`: eight lowercase letters and digits, which most username and
+ * slug rules accept, new on each run. A value that the app takes only once,
+ * such as a username, a slug or a sign-up email, carries it, so a routine
+ * keeps the placeholder and its replay on a new account types a new value
+ * instead of one an earlier run already took. A setup capture of the same
+ * name wins.
+ */
+function runId(): string {
+  return [...randomBytes(8)].map((byte) => (byte % 36).toString(36)).join('');
+}
 
 /** Captures and allowlisted secrets share one redaction and interpolation path. */
 export class Vars {
@@ -14,6 +27,7 @@ export class Vars {
     secrets: AppConfig['secrets'] = [],
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
+    this.setPublic('RUN_ID', runId());
     for (const name of secrets) {
       if (env[name] !== undefined) {
         this.set(name, env[name]);
