@@ -39,6 +39,10 @@ it('keeps an explorer candidate repro with its originating profile when judging 
       .slice(0, 5)
       .map((item) => item.id);
     const file = judgeTools(session, recent, 'test').find((tool) => tool.name === 'file_issue')!;
+    expect(file.inputSchema).toMatchObject({
+      required: expect.arrayContaining(['candidate_ids', 'reason', 'title', 'body', 'severity']),
+    });
+    expect(file.inputSchema).not.toHaveProperty('anyOf');
     await file.run({
       candidate_ids: [candidate.id],
       title: 'CLI crashes',

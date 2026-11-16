@@ -40,7 +40,12 @@ const CREDENTIAL =
 /** A JSON Web Token, whatever the key that holds it is named. */
 const JWT = /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g;
 
-function responseCaptures(status: number, body: string, pointers: Record<string, string>): Record<string, string> {
+export function responseCaptures(
+  status: number,
+  body: string,
+  pointers: Record<string, string>,
+  redact: (value: string) => string = (value) => value,
+): Record<string, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -53,6 +58,20 @@ function responseCaptures(status: number, body: string, pointers: Record<string,
       if (!found)
         throw new Error(`Response capture ${name}: JSON pointer ${pointer} did not resolve in the ${status} response`);
       const { value } = found;
+      const parts = pointer
+        .split('/')
+        .slice(1)
+        .map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+      const key = parts.at(-1) ?? '';
+      // These API resource containers hold owner-scoped IDs, not session credentials.
+      // Only their direct id leaf is exempt; credential ancestors and values stay protected.
+      const credentialPath = parts.some(
+        (part, index) =>
+          CREDENTIAL.test(part) &&
+          !(key === 'id' && index === parts.length - 2 && /^(?:browser_)?session$/i.test(part)),
+      );
+      if (credentialPath || new RegExp(JWT.source).test(String(value)) || redact(String(value)) !== String(value))
+        throw new Error(`Response capture ${name} points to a credential field`);
       if ((typeof value !== 'string' && typeof value !== 'number') || value === '[redacted]')
         throw new Error(`Response capture ${name} requires an unredacted string or number`);
       return [name, String(value)];
@@ -271,7 +290,7 @@ export class ApiDriver implements Driver {
       if (Object.keys(pointers).length && received.tooLarge)
         throw new Error('Response captures need the body, and the response was over 1 MiB');
       const captures = Object.keys(pointers).length
-        ? responseCaptures(received.status, redactCredentials(received.text), pointers)
+        ? responseCaptures(received.status, received.text, pointers, this.api.redact)
         : undefined;
       this.exchange = exchange;
       this.location = url.href;

@@ -106,6 +106,65 @@ describe('fixer', () => {
     }
   });
 
+  it('current mode edits the source checkout and refuses a dirty checkout', async () => {
+    const f = await repoFixture();
+    try {
+      const config = parseConfig({
+        version: 1,
+        app: { source: 'source', connect: { url: 'fake://home' } },
+        agents: { fixer: { enabled: true, workspace: 'current', use: { runtime: 'cli', command: 'fake' } } },
+      });
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          await writeFile(join(task.workdir!, 'app.txt'), 'fixed\n');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'Fixed' };
+        },
+      };
+      const current = new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer');
+      const [proposal] = await runFixer(current, runtime);
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('fixed\n');
+      expect(proposal?.worktree).toBe(f.source);
+      expect(proposal?.branch).toBe((await git(f.source, 'branch', '--show-current')).stdout.trim());
+      expect(proposal?.branch).not.toBe('bugpatrol/fix-iss_1');
+      await writeFile(join(f.source, 'user.txt'), 'keep\n');
+      const dirty = await runFixer(new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer'), runtime);
+      expect(dirty).toEqual([]);
+      expect(await readFile(join(f.source, 'user.txt'), 'utf8')).toBe('keep\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses current mode on detached HEAD without changing the checkout', async () => {
+    const f = await repoFixture();
+    try {
+      await git(f.source, 'checkout', '--detach', 'HEAD');
+      const config = parseConfig({
+        version: 1,
+        app: { source: 'source', connect: { url: 'fake://home' } },
+        agents: { fixer: { enabled: true, workspace: 'current', use: { runtime: 'cli', command: 'fake' } } },
+      });
+      let called = false;
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run() {
+          called = true;
+          return { stop: 'done', steps: 0, costUsd: 0 };
+        },
+      };
+      const proposals = await runFixer(
+        new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer'),
+        runtime,
+      );
+      expect(proposals).toEqual([]);
+      expect(called).toBe(false);
+      expect(await readFile(join(f.source, 'app.txt'), 'utf8')).toBe('broken\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('marks a proposal failed when the runtime changes nothing', async () => {
     const f = await repoFixture();
     try {

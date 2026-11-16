@@ -513,6 +513,13 @@ export const agentsSchema = z
         use: runtimeFor('fixer', { runtime: 'cli', agent: 'claude' }),
         /** Off until a team opts in: a fixer writes code. */
         enabled: z.boolean().default(false),
+        /** Where fixes are written. `current` is explicit and requires a clean source checkout. */
+        /**
+         * Fix in a managed worktree by default. `current` is an explicit
+         * opt-in: it edits and may commit the clean source checkout's current
+         * branch, so it must never be used with concurrent user changes.
+         */
+        workspace: z.enum(['isolated', 'current']).default('isolated'),
         /** Run after the change; a non-zero exit marks the fix failed. */
         verify: z.string().optional(),
         /**

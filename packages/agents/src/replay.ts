@@ -13,6 +13,7 @@ import {
 import { ApiDriver, type Driver, type DriverAction, type Observation, type RawResponse } from '@bugpatrol/drivers';
 import { stoppedAt } from './review-comment.js';
 import type { AgentSession } from './session.js';
+import { Vars } from './vars.js';
 
 /** Carries a replay failure back to the explorer without creating a finding. */
 export type ReplayResult = { ok: boolean; failedStep?: number; error?: string; degraded: boolean };
@@ -230,10 +231,31 @@ function difference(first: ReplayOutcome | undefined, second: ReplayOutcome): st
 export async function replaySteps(
   session: AgentSession,
   steps: RoutineStep[],
-  opts: { windowMs?: number; onStep?: (index: number) => Promise<void> } = {},
+  opts: { windowMs?: number; onStep?: (index: number) => Promise<void>; captureDependenciesOnly?: boolean } = {},
 ): Promise<ReplayResult> {
-  const result = await runSteps(session, steps, opts.windowMs ?? 30_000, false, opts.onStep);
+  const replay = opts.captureDependenciesOnly ? captureDependencies(steps) : steps;
+  const result = await runSteps(session, replay, opts.windowMs ?? 30_000, false, opts.onStep);
   return { ok: !result.error, failedStep: result.failedStep, error: result.error, degraded: result.degraded };
+}
+
+/**
+ * An API finding records the exploration prefix too. Keep every request, but
+ * require only response captures that a later request consumes. Routine replay
+ * retains all captures, since callers outside its steps can consume them.
+ */
+function captureDependencies(steps: RoutineStep[]): RoutineStep[] {
+  const needed = new Set<string>();
+  return [...steps]
+    .reverse()
+    .map((step) => {
+      if (step.kind !== 'request') return step;
+      const capture = Object.fromEntries(Object.entries(step.capture ?? {}).filter(([name]) => needed.has(name)));
+      for (const name of Object.keys(step.capture ?? {})) needed.delete(name);
+      for (const text of [step.url, step.body, ...Object.values(step.headers ?? {})])
+        if (text !== undefined) for (const name of Vars.references(text)) needed.add(name);
+      return { ...step, capture };
+    })
+    .reverse();
 }
 
 /**

@@ -5,9 +5,18 @@ description: Set up and run Bugpatrol, a QA team of AI agents that explores a we
 
 # Bugpatrol
 
-Bugpatrol is a QA team made of AI agents. It runs the user's app the way a human tester does. The CLI is the npm package `bugpatrol`. Run it with `npx bugpatrol@latest <command>`. Do not build it from source.
+Bugpatrol is a QA team made of AI agents. It runs the user's app the way a human tester does. The CLI is the npm package `bugpatrol`. Do not build it from source.
 
-Always add `@latest`, because `npx` can run an old copy from its cache. An old copy can have different commands and a different config layout. There is one exception: if the repo lists `bugpatrol` in `package.json`, run `npx bugpatrol <command>`, so that you use the version that the repo selected.
+Choose the repository's package-manager runner before copying any command below: use `bunx` when
+`package.json` declares Bun or the repo has a Bun lockfile, `pnpm dlx` for pnpm, `yarn dlx` for Yarn,
+and `npx` otherwise. Add `bugpatrol@latest` to the runner when the command below does. This avoids
+asking npm to parse package manifests that another package manager accepts.
+
+Always add `@latest` for an ad hoc install, because package-manager runners can reuse an old copy from
+their cache. An old copy can have different commands and a different config layout. There is one
+exception: if the repo lists `bugpatrol` in `package.json`, run its installed binary with `pnpm exec
+bugpatrol`, `yarn exec bugpatrol`, or `bunx --no-install bugpatrol` as appropriate, so that you use
+the version the repo selected.
 
 Source and full docs: https://github.com/agent-labs-dev/bugpatrol
 

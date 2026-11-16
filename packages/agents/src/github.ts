@@ -453,6 +453,8 @@ export async function createPr(
   },
 ): Promise<{ number: number; url: string }> {
   const { fix } = input;
+  if (fix.workspace === 'current')
+    throw new Error('GitHub publishing is unavailable for a current-folder fix; publish it from an isolated worktree.');
   if (await git(fix.worktree, 'status', '--porcelain')) {
     await git(fix.worktree, 'add', '-A');
     const committed = await commitFix(fix.worktree, input.issue.title, input.commitMessage);

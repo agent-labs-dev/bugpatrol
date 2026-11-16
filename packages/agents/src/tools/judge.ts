@@ -1,4 +1,4 @@
-import { appendFile, copyFile } from 'node:fs/promises';
+import { appendFile, copyFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   awaitsJudge,
@@ -163,7 +163,24 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
         if (capture.kind === 'http') {
           // The exchange is text, so the model reads it as the server sent it, in the one part.
           const record = JSON.stringify({ ...candidate, evidence }, null, 2);
-          return response(`${record}\n\n${formatHttpExchange(capture.exchange)}`);
+          const timeline = (await session.workspace.readEvents(candidate.sessionId))
+            .filter((event) => ['tool-result', 'candidate', 'session-end', 'error'].includes(event.kind))
+            .map(async (event) => {
+              const capture = event.capture ? ` capture=${event.capture}` : '';
+              let exchange = '';
+              if (event.capture?.endsWith('.exchange.json')) {
+                try {
+                  exchange = `\n${formatHttpExchange(JSON.parse(await readFile(join(session.root, event.capture), 'utf8')))}`;
+                } catch {
+                  exchange = '';
+                }
+              }
+              return `${event.at} ${event.kind}:${capture} ${event.summary}${exchange}`;
+            });
+          const timelineText = (await Promise.all(timeline)).join('\n');
+          return response(
+            `${record}\n\n${formatHttpExchange(capture.exchange)}\n\nSESSION TIMELINE\n${timelineText || '(none recorded)'}`,
+          );
         }
         return {
           content: [
@@ -178,7 +195,7 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
       description:
         'File a real user problem with an 80-character title, Markdown body, and one-sentence reason; ' +
         'merge candidates with the same cause. To add candidates to an open or fixed issue, pass its issue_id and a ' +
-        'reason; the title, body and severity are then not needed.',
+        'reason; the title, body and severity fields are still required by the tool contract and are ignored.',
       inputSchema: {
         ...schema(
           {
@@ -189,11 +206,10 @@ export function judgeTools(session: AgentSession, sessionIds: string[], runtimeL
             severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
             reason: string,
           },
-          ['candidate_ids', 'reason'],
+          // Keep all creation fields required in the provider-facing schema. The recorded smoke
+          // run did not follow the conditional contract, so one unconditional shape is safer.
+          ['candidate_ids', 'reason', 'title', 'body', 'severity'],
         ),
-        // A new issue needs the title, body and severity; adding to an open issue passes issue_id
-        // instead. State it in the schema, or a model that fills only the required keys omits them.
-        anyOf: [{ required: ['issue_id'] }, { required: ['title', 'body', 'severity'] }],
       },
       async run(input) {
         if (typeof input.reason !== 'string' || !input.reason.trim()) {

@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { BugpatrolConfig } from '@bugpatrol/core';
 import { InfrastructureError, requireRun } from '@bugpatrol/core';
@@ -124,22 +125,67 @@ function bodyMentions(body: string, selector: string): boolean {
 }
 
 async function stopProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.pid === undefined) return;
+  if (child.pid === undefined) return;
   // Killing the group, not the child: `shell: true` means the pid is a shell,
   // and the dev server is its child. Signalling only the shell orphans the
   // server and leaves the port held for the next run.
-  const done = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  const groupAlive = () => {
+    if (process.platform === 'win32') return false;
+    // kill(pid, 0) also succeeds for zombie descendants. On Linux, inspect
+    // process state so exited children do not consume the second grace window.
+    // Other platforms have no portable process-group state API, so retain the
+    // signal probe there.
+    if (process.platform === 'linux') {
+      try {
+        const entries = readdirSync('/proc', { withFileTypes: true }).filter(
+          (entry) => entry.isDirectory() && /^\d+$/.test(entry.name),
+        );
+        let complete = true;
+        let liveMember = false;
+        for (const entry of entries) {
+          try {
+            const stat = readFileSync(`/proc/${entry.name}/stat`, 'utf8');
+            const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+            if (fields[2] === String(child.pid) && fields[0] !== 'Z') liveMember = true;
+          } catch {
+            complete = false;
+          }
+        }
+        if (complete) return liveMember;
+      } catch {
+        // Fall through to the portable signal probe when /proc is unavailable.
+      }
+    }
+    try {
+      process.kill(-child.pid!, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  };
+  const done = new Promise<void>((resolve) =>
+    child.exitCode !== null ? resolve() : child.once('exit', () => resolve()),
+  );
   try {
     process.kill(-child.pid, 'SIGTERM');
   } catch {
     child.kill('SIGTERM');
   }
-  const settled = await Promise.race([done.then(() => true), delay(5000).then(() => false)]);
-  if (!settled) {
+  if (process.platform === 'win32') {
+    await Promise.race([done, delay(5000)]);
+    return;
+  }
+  // The shell may exit immediately, but descendants still need the full grace period.
+  for (let waited = 0; groupAlive() && waited < 5000; waited += 50) await delay(50);
+  if (groupAlive()) {
     try {
       process.kill(-child.pid, 'SIGKILL');
     } catch {
       child.kill('SIGKILL');
     }
   }
+  // The shell can exit before a child such as `uv run api` has reaped its own
+  // descendants. Keep the run-owned process group fenced off until it is gone,
+  // otherwise the next patrol can inherit its port and report a false failure.
+  for (let waited = 0; groupAlive() && waited < 5000; waited += 50) await delay(50);
 }

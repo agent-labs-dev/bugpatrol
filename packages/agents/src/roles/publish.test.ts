@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type FixProposal, type Issue, parseConfig } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Gh } from '../github.js';
+import { createPr, type Gh } from '../github.js';
 import type { Runtime, Tool } from '../types.js';
 import { Workspace } from '../workspace.js';
 import { runPublisher } from './publish.js';
@@ -108,6 +108,34 @@ async function verifiedFixInGit(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('runPublisher', () => {
+  it('refuses to publish a current-folder fix', async () => {
+    const f = await fixture();
+    const fix: FixProposal = {
+      version: 1,
+      id: 'fix_current',
+      issueId: f.issue.id,
+      status: 'verified',
+      runtime: 'fake',
+      repo: f.root,
+      worktree: f.root,
+      branch: 'main',
+      workspace: 'current',
+      startedAt: 'now',
+    };
+    await expect(
+      createPr(async () => '', {
+        repo: 'o/r',
+        defaultBranch: 'main',
+        title: 'Fix',
+        body: 'Fix',
+        labels: [],
+        draft: false,
+        fix,
+        issue: f.issue,
+        commitMessage: 'fix',
+      }),
+    ).rejects.toThrow('current-folder');
+  });
   it('does not publish a rejected fix or its issue', async () => {
     const f = await fixture();
     await f.workspace.saveFix({
