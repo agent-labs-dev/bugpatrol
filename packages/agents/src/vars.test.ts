@@ -1,5 +1,6 @@
+import { UNIQUE } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { UNIQUE, Vars } from './vars.js';
+import { Vars } from './vars.js';
 
 describe('Vars', () => {
   it('resolves captures and allowlisted environment values', () => {
@@ -40,6 +41,13 @@ describe('Vars', () => {
     expect(second.resolve('{{UNIQUE}}')).not.toBe(value);
     expect(first.resolve('user{{UNIQUE}}')).toBe(`user${value}`);
     expect(first.redact(`Welcome, user${value}`)).toBe('Welcome, user{{UNIQUE}}');
+  });
+
+  it('refuses a secret or capture that would replace {{UNIQUE}}', () => {
+    expect(() => new Vars([UNIQUE], { UNIQUE: 'fixed' })).toThrow('UNIQUE is built in');
+    const vars = new Vars();
+    expect(() => vars.set(UNIQUE, 'fixed')).toThrow('UNIQUE is built in');
+    expect(() => vars.setPublic(UNIQUE, 'fixed')).toThrow('UNIQUE is built in');
   });
 
   it('never gives agent input an undeclared environment variable', () => {

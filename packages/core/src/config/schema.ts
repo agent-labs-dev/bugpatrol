@@ -159,6 +159,9 @@ export const determinismSchema = z
  * as secrets: they are redacted from every log and never sent to a model,
  * unless `public` names them.
  */
+/** A variable that Bugpatrol declares itself, new for each app session (see `Vars` of the agents). */
+export const UNIQUE = 'UNIQUE';
+
 export const appCommandSchema = z
   .strictObject({
     run: z.string(),
@@ -181,6 +184,8 @@ export const appCommandSchema = z
       .default(10 * 60 * 1000),
   })
   .superRefine((command, ctx) => {
+    if (UNIQUE in command.capture)
+      ctx.addIssue({ code: 'custom', path: ['capture', UNIQUE], message: `${UNIQUE} is built in: use another name` });
     for (const name of command.public)
       if (!(name in command.capture))
         ctx.addIssue({ code: 'custom', path: ['public'], message: `${name} is not a capture of this command` });

@@ -137,7 +137,7 @@ written. A declared name is still filled in, so give a shell variable a name tha
 not a secret or a setup capture. Never put production credentials in a test
 environment.
 
-`{{UNIQUE}}` is always declared. It holds a new value of 12 lowercase letters and
+`{{UNIQUE}}` is always declared, so a secret or capture cannot use the name. It holds a new value of 12 lowercase letters and
 digits for each start of the app, and setup commands get it as `UNIQUE` too. Use it
 for a value that must be new on each run, such as the username or email address of
 a new account: tell the explorer in the app guide to type `bugpatrol{{UNIQUE}}`. A

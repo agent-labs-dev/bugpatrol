@@ -8,6 +8,12 @@ import { parseConfig } from './load.js';
 const minimal = { version: 1, run: { command: 'pnpm dev', url: 'http://localhost:3000' } };
 
 describe('parseConfig', () => {
+  it('rejects a setup capture named UNIQUE, which Bugpatrol declares itself', () => {
+    expect(() => parseConfig({ ...minimal, app: { setup: [{ run: 'true', capture: { UNIQUE: '(x)' } }] } })).toThrow(
+      'UNIQUE is built in',
+    );
+  });
+
   it('applies conservative defaults', () => {
     const c = parseConfig(minimal);
     expect(c.tolerance.default).toBe('exact');

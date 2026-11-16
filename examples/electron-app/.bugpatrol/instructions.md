@@ -21,7 +21,7 @@ You start signed in. Bugpatrol gave the app a test session before it started.
 A new test user sees two onboarding screens first. Complete them:
 
 1. "Tell us who you are": type `Bugpatrol` as the first name and `Patrol` as the
-   last name. If the screen asks for a username, type `bugpatrol-{{RUN_TAG}}`:
+   last name. If the screen asks for a username, type `bugpatrol{{UNIQUE}}`:
    each patrol has a new test user, and a username must be unique. Then
    click Continue.
 2. "Name your workspace": type `Bugpatrol Patrol` as the workspace name. Keep the
