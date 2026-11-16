@@ -152,6 +152,9 @@ export const determinismSchema = z
   })
   .prefault({});
 
+/** A variable that Bugpatrol declares itself, new for each app session (see `Vars` of the agents). */
+export const UNIQUE = 'UNIQUE';
+
 /**
  * One setup or teardown command (ADR 0005). `capture` pulls values out of the
  * command's output by regex, first group; later commands, `connect`, and the
@@ -159,9 +162,6 @@ export const determinismSchema = z
  * as secrets: they are redacted from every log and never sent to a model,
  * unless `public` names them.
  */
-/** A variable that Bugpatrol declares itself, new for each app session (see `Vars` of the agents). */
-export const UNIQUE = 'UNIQUE';
-
 export const appCommandSchema = z
   .strictObject({
     run: z.string(),
