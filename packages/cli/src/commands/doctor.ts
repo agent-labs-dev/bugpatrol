@@ -2,7 +2,15 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { desktopCommands, onPath, runtimeProblem } from '@bugpatrol/agents';
-import { type BugpatrolConfig, ExitCode, type ExitCodeValue, legacyLayout, loadConfig, paths } from '@bugpatrol/core';
+import {
+  type BugpatrolConfig,
+  ConfigError,
+  ExitCode,
+  type ExitCodeValue,
+  legacyLayout,
+  loadConfig,
+  paths,
+} from '@bugpatrol/core';
 import { chromiumProblem } from '@bugpatrol/drivers';
 
 export type DoctorCheck = { name: string; ok: boolean; detail: string; fatal: boolean };
@@ -12,6 +20,19 @@ export type DoctorConfig = { path: string; config?: BugpatrolConfig; error?: str
 
 /** The machine probes, as a seam for the tests. */
 export type DoctorProbes = { chromium: () => string | undefined };
+
+/** `gate`: check only what the deterministic web gate (`bugpatrol run`) needs, not the agents. */
+export type DoctorOptions = { gate?: boolean };
+
+/** `bugpatrol doctor [--gate]`. Unknown flags are rejected, as `run` does. */
+export function parseDoctorFlags(args: string[]): DoctorOptions {
+  const options: DoctorOptions = {};
+  for (const arg of args) {
+    if (arg === '--gate') options.gate = true;
+    else throw new ConfigError(`Unknown flag for \`bugpatrol doctor\`: ${arg}`);
+  }
+  return options;
+}
 
 export function readDoctorConfig(root: string, configFile?: string): DoctorConfig {
   const path = paths.config(root, configFile);
@@ -39,11 +60,14 @@ function configCheck(root: string, { path, config, error }: DoctorConfig, select
  * the config itself, Node, the LLM of each agent, and what the platform
  * needs (the browser and the app URL for web, python3 for cli, Xvfb tools
  * for desktop). A gate config also gets the determinism checks.
+ * With `gate`, it checks the config for the gate only: the gate calls no
+ * agent, so the agent LLMs and gh are left out, and the config needs a run block.
  */
 export async function runChecks(
   root: string,
   loaded: DoctorConfig,
   probes: DoctorProbes = { chromium: chromiumProblem },
+  options: DoctorOptions = {},
 ): Promise<DoctorCheck[]> {
   const { config } = loaded;
   const checks: DoctorCheck[] = [configCheck(root, loaded, loaded.path !== paths.config(root))];
@@ -68,7 +92,14 @@ export async function runChecks(
 
   // With no config there is no platform to check for: `init` writes one.
   if (!config) return checks;
-  checks.push(...agentChecks(config, resolve(root, config.app.source)));
+  if (!options.gate) checks.push(...agentChecks(config, resolve(root, config.app.source)));
+  else if (!config.run)
+    checks.push({
+      name: 'gate',
+      ok: false,
+      detail: `${loaded.path} has no run block, so \`bugpatrol run\` cannot start the app. Run \`bugpatrol init --gate\`, or drop --gate to check the agents.`,
+      fatal: true,
+    });
   if (config.app.platform === 'web' || config.run) {
     const problem = probes.chromium();
     checks.push({

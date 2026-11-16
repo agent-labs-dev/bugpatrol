@@ -845,7 +845,7 @@ export async function runInit(root: string, args: string[], log: (line: string) 
     log(`Wrote ${result.configPath}`);
     if (result.stack.framework) log(`Detected ${result.stack.framework}`);
     for (const note of result.notes) log(`  note: ${note}`);
-    log('\nNext: review the TODO markers, then run `bugpatrol doctor`.');
+    log('\nNext: review the TODO markers, then run `bugpatrol doctor --gate`.');
     return;
   }
   if (existsSync(paths.config(root))) {

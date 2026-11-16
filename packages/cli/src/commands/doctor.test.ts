@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
-import { type DoctorProbes, readDoctorConfig, runChecks } from './doctor.js';
+import { type DoctorProbes, doctorExitCode, parseDoctorFlags, readDoctorConfig, runChecks } from './doctor.js';
 
 function project(yaml = 'version: 1\napp: { platform: cli }\n', file = 'bugpatrol.yml'): string {
   const root = mkdtempSync(join(tmpdir(), 'bugpatrol-doctor-'));
@@ -119,5 +119,54 @@ describe('runChecks', () => {
     expect(check?.detail).toBe(
       'cli: app map and routines in .bugpatrol/cli/, run state in .bugpatrol/runs/profiles/cli/',
     );
+  });
+});
+
+describe('doctor --gate', () => {
+  // The config that `init --gate` writes: a run block, and agents on OpenRouter by default.
+  const gateConfig = () =>
+    parseConfig({
+      version: 1,
+      run: { command: 'npm run dev', url: 'http://localhost:3000' },
+      agents: {
+        explorer: { use: { runtime: 'model', via: 'openrouter' } },
+        judge: { use: { runtime: 'model', via: 'openrouter' } },
+      },
+    });
+
+  it('passes a gate config with no model key, because the gate calls no agent', async () => {
+    const root = project();
+    const loaded = { path: join(root, '.bugpatrol', 'bugpatrol.yml'), config: gateConfig() };
+    const saved = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const gate = await runChecks(root, loaded, installed, { gate: true });
+      expect(gate.map((check) => check.name)).not.toContain('explorer');
+      expect(gate.map((check) => check.name)).not.toContain('judge');
+      expect(gate.map((check) => check.name)).toEqual(expect.arrayContaining(['browser', 'pinned-image']));
+      expect(doctorExitCode(gate)).toBe(0);
+      // Without --gate the same config still needs the agent LLMs.
+      const all = await runChecks(root, loaded, installed);
+      expect(all.find((check) => check.name === 'explorer')).toMatchObject({ ok: false, fatal: true });
+      expect(doctorExitCode(all)).toBe(2);
+    } finally {
+      if (saved !== undefined) process.env.OPENROUTER_API_KEY = saved;
+    }
+  });
+
+  it('fails a config with no run block, which the gate cannot run', async () => {
+    const root = project();
+    const config = parseConfig({ version: 1, app: { platform: 'cli' } });
+    const checks = await runChecks(root, { path: join(root, '.bugpatrol', 'bugpatrol.yml'), config }, installed, {
+      gate: true,
+    });
+    expect(checks.find((check) => check.name === 'gate')).toMatchObject({ ok: false, fatal: true });
+    expect(doctorExitCode(checks)).toBe(2);
+  });
+
+  it('parses --gate and rejects an unknown flag', () => {
+    expect(parseDoctorFlags([])).toEqual({});
+    expect(parseDoctorFlags(['--gate'])).toEqual({ gate: true });
+    expect(() => parseDoctorFlags(['--gtae'])).toThrow('Unknown flag for `bugpatrol doctor`: --gtae');
   });
 });

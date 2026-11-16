@@ -9,6 +9,7 @@ Setup
   bugpatrol init [--yes] [--agent a]      detect the app and the LLMs, write .bugpatrol/
   bugpatrol init --gate                   write a starter config for the deterministic web gate
   bugpatrol doctor                        check the config, Node, the agents, and what the platform needs
+  bugpatrol doctor --gate                 check only what the deterministic web gate needs, not the agents
   bugpatrol adopt --config <file>         move the shared app map and routines into that config's folder
 
 Recon
@@ -214,12 +215,14 @@ export const COMMAND_HELP: Record<string, string> = {
   dashboard: `bugpatrol dashboard [--port N]
   Serve the dashboard on http://127.0.0.1:4311. It updates live, and it does not stop by itself.
 `,
-  doctor: `bugpatrol doctor [--config <file>]
+  doctor: `bugpatrol doctor [--gate] [--config <file>]
   Check that this machine can run the selected config: the config file, Node 22, the LLM of each
   agent, and gh when agents.github is on. Then what the platform needs: Chromium for Playwright for
   web, and that the app URL answers when no setup command starts it (web and api); python3 for cli;
   Linux and the launch commands for desktop. A config with a run block also gets the gate checks:
-  the pinned runner image and the AppModel. Exits 2 when a required check fails.
+  the pinned runner image and the AppModel. --gate checks only what bugpatrol run needs: it leaves
+  out the agent LLMs and gh, which the gate never calls, and fails when there is no run block.
+  Exits 2 when a required check fails.
 `,
 };
 
