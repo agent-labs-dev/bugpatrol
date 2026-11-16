@@ -45,7 +45,11 @@ function recordSetup(
       setup.set(input.id, failure);
       for (const target of targets)
         if (target.capture.routineId === input.id && !captured.has(target)) target.capture.setupFailed = failure;
-      if (failure && allowIndependentApiSteps) {
+      const matching = targets.filter((target) => target.capture.routineId === input.id);
+      const independent =
+        matching.length > 0 &&
+        matching.every((target) => target.steps.every((step) => !JSON.stringify(step).includes('{{')));
+      if (failure && allowIndependentApiSteps && independent) {
         return {
           ...result,
           isError: false,
@@ -53,7 +57,7 @@ function recordSetup(
             ...result.content,
             {
               type: 'text',
-              text: "The prerequisite routine failed. Continue with each target's request steps when they do not use its captured values; mark the target unreached if those steps also fail.",
+              text: 'The prerequisite routine failed, but this target has no captured-value dependency. Continue its request steps; mark it unreached if they fail.',
             },
           ],
         };

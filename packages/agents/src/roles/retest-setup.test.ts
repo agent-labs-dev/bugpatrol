@@ -159,7 +159,12 @@ it('lets API targets continue after an unrelated setup routine is missing', asyn
     const record = await new Workspace(root).startSession('explorer');
     const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
     expect(session.config.app.platform).toBe('api');
-    const targets: CaptureTarget[] = [{ capture: { routineId: 'unrelated-exploration' }, steps: [] }];
+    const targets: CaptureTarget[] = [
+      {
+        capture: { routineId: 'unrelated-exploration' },
+        steps: [{ kind: 'request', method: 'GET', url: '/independent' }],
+      },
+    ];
     let setupResultIsError: boolean | undefined;
     await captureTargets(
       session,
