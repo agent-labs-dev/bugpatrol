@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Vars } from './vars.js';
+import { UNIQUE, Vars } from './vars.js';
 
 describe('Vars', () => {
   it('resolves captures and allowlisted environment values', () => {
@@ -28,8 +28,18 @@ describe('Vars', () => {
   it('lists names but never values for an unknown strict placeholder', () => {
     const vars = new Vars();
     vars.set('TOKEN', 'top-secret');
-    expect(() => vars.resolve('{{MISSING}}')).toThrow('Available: TOKEN');
+    expect(() => vars.resolve('{{MISSING}}')).toThrow('Available: UNIQUE, TOKEN');
     expect(() => vars.resolve('{{MISSING}}')).not.toThrow('top-secret');
+  });
+
+  it('gives each app session its own {{UNIQUE}}, redacted like a secret', () => {
+    const first = new Vars();
+    const second = new Vars();
+    const value = first.resolve('{{UNIQUE}}');
+    expect(value).toMatch(/^[0-9a-f]{12}$/);
+    expect(second.resolve('{{UNIQUE}}')).not.toBe(value);
+    expect(first.resolve('user{{UNIQUE}}')).toBe(`user${value}`);
+    expect(first.redact(`Welcome, user${value}`)).toBe('Welcome, user{{UNIQUE}}');
   });
 
   it('never gives agent input an undeclared environment variable', () => {
@@ -61,7 +71,7 @@ describe('Vars', () => {
     const vars = new Vars([], { SETUP_TOKEN: 'setup-only' });
     expect(vars.resolveConfig('${SETUP_TOKEN}')).toBe('setup-only');
     expect(vars.redact('setup-only')).toBe('{{SETUP_TOKEN}}');
-    expect(vars.names()).toEqual([]);
+    expect(vars.names()).toEqual([UNIQUE]);
     expect(vars.resolve('${SETUP_TOKEN}')).toBe('${SETUP_TOKEN}');
     expect(vars.resolveConfig('${SHELL_VAR}')).toBe('${SHELL_VAR}');
   });

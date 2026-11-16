@@ -137,6 +137,16 @@ written. A declared name is still filled in, so give a shell variable a name tha
 not a secret or a setup capture. Never put production credentials in a test
 environment.
 
+`{{UNIQUE}}` is always declared. It holds a new value of 12 lowercase letters and
+digits for each start of the app, and setup commands get it as `UNIQUE` too. Use it
+for a value that must be new on each run, such as the username or email address of
+a new account: tell the explorer in the app guide to type `bugpatrol{{UNIQUE}}`. A
+routine records the placeholder, not the value, so its replay on the next fresh
+account types a new one, and the routines that it requires use the same one.
+Bugpatrol replaces the value with `{{UNIQUE}}` in all that the explorer sees, so it
+types the placeholder back when it reuses the value. A value that the explorer made
+up itself is recorded as it was typed, and replays as it is.
+
 Repository-owned setup and teardown commands and their `cwd` may also expand
 `${NAME}` from the host environment. Those values are redacted from text output
 but do not become available to the agent. Review configuration before running an

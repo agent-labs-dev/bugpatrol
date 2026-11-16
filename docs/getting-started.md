@@ -179,7 +179,7 @@ My App is a chat workspace. The sidebar lists the channels.
 Sign in with the email {{TEST_EMAIL}} and the password {{TEST_PASSWORD}}.
 
 ## Onboarding
-Type `Bugpatrol` as the first name. For the username, type `bugpatrol-{{RUN_TAG}}`.
+Type `Bugpatrol` as the first name. For the username, type `bugpatrol{{UNIQUE}}`.
 
 ## Never do these things
 - Do not delete the workspace. Do not invite a person by email.

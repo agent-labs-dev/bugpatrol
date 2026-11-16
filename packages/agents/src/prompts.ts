@@ -105,6 +105,8 @@ function explorerCommon(platform: Platform, instructions: string, lessons: Lesso
 ${platform === 'api' ? API_TOOLS : platform === 'cli' ? TERMINAL_TOOLS : SCREEN_TOOLS}
 - Secrets are placeholders such as {{E2E_LOGIN_LINK}}. Pass the placeholder text exactly. Never guess or
   type a real password, token, or code.
+- {{UNIQUE}} is a new value in each session. Type it in a value that must be new on each run, such as the
+  username or email address of a new account (bugpatrol{{UNIQUE}}), so a replay of the routine uses a new one.
 - ${PLATFORM_NOTES[platform]}
 
 RULES

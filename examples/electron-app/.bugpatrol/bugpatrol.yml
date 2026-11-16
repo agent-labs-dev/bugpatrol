@@ -20,8 +20,6 @@ app:
       cwd: ../../../my-electron-app
       capture:
         E2E_RUN_ID: 'run (e2e-[0-9A-Za-z-]+) on'
-        # The random end of the run id, for unique usernames.
-        RUN_TAG: 'run e2e-[0-9]{8}T[0-9]{6}Z-([0-9a-f]{4}) on'
     # Makes a test user, and saves its session for the next step.
     - run: npm run e2e:user
       cwd: ../../../my-electron-app

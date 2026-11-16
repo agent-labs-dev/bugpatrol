@@ -1074,7 +1074,8 @@ export function explorerTools(
       : []),
     {
       name: 'type',
-      description: 'Type in a field, preserving {{NAME}} placeholders for secrets.',
+      description:
+        'Type in a field, preserving {{NAME}} placeholders for secrets. Put {{UNIQUE}} in a value that must be new on each run, such as a new username.',
       inputSchema: schema(
         {
           ref: string,

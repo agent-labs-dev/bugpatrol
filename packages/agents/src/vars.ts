@@ -1,5 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import { missingId } from '@bugpatrol/contract';
 import type { AppConfig } from '@bugpatrol/core';
+
+/**
+ * A value that is new for each app session: each Vars belongs to one start of
+ * the app. The explorer types it where a value must differ on each run, such
+ * as the username of a new account, so a routine records `{{UNIQUE}}` and a
+ * replay on the next fresh account types a new value. Like a secret, it is
+ * redacted to its placeholder in all the explorer sees, so the explorer also
+ * types it back as the placeholder. Lowercase letters and digits, so a
+ * username or an email address accepts it.
+ */
+export const UNIQUE = 'UNIQUE';
 
 const placeholder = /\{\{([A-Za-z_][A-Za-z_0-9]*)(\|missing)?\}\}|\$\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
 
@@ -14,6 +26,7 @@ export class Vars {
     secrets: AppConfig['secrets'] = [],
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
+    this.values.set(UNIQUE, randomUUID().replaceAll('-', '').slice(0, 12));
     for (const name of secrets) {
       if (env[name] !== undefined) {
         this.set(name, env[name]);

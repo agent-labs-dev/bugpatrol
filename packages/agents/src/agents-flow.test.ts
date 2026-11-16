@@ -509,6 +509,33 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('records a {{UNIQUE}} value as its placeholder, so a replay on a new session types a new value', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      f.session.anchor = { index: 0 };
+      await run(tools, 'look');
+      await run(tools, 'type', { ref: 'e1', text: 'bugpatrol{{UNIQUE}}' });
+      const typed = f.driver.actions.at(-1);
+      const recorded = f.session.vars.resolve('bugpatrol{{UNIQUE}}');
+      expect(typed).toMatchObject({ kind: 'type', value: recorded });
+      await run(tools, 'save_routine', { id: 'sign-up', description: 'Sign up a new account' });
+      const saved = await f.workspace.readRoutine('sign-up');
+      const values = saved?.steps.flatMap((step) => (step.kind === 'type' ? [step.value] : []));
+      expect(values).toEqual(['bugpatrol{{UNIQUE}}']);
+
+      const driver = new FakeDriver(f.screens);
+      const next = new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'explorer', driver);
+      expect((await replayRoutine(next, 'sign-up')).ok).toBe(true);
+      const replayed = driver.actions.flatMap((action) => (action.kind === 'type' ? [action.value] : []));
+      const fresh = next.vars.resolve('bugpatrol{{UNIQUE}}');
+      expect(fresh).not.toBe(recorded);
+      expect(replayed).toEqual([fresh]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps steps that stay in one place, such as a form', async () => {
     const f = await fixture();
     try {
