@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { InfrastructureError } from '@bugpatrol/core';
 import { compare } from 'odiff-bin';
 import { boundingRegionsFromLines, maskedPixelCount } from '../mask-accounting.js';
@@ -104,18 +107,24 @@ export async function diffWithOdiff(req: DiffRequest): Promise<DiffResult> {
 }
 
 async function runCompare(req: DiffRequest, masks: DiffRequest['masks'] = []) {
+  // odiff's Node wrapper always passes an output path, and odiff 4 fails a
+  // pixel diff it cannot write, so an unwanted image goes to a scratch file.
+  const scratch = req.diffOutPath ? undefined : await mkdtemp(join(tmpdir(), 'bugpatrol-odiff-'));
   try {
-    return await compare(req.baselinePath, req.actualPath, req.diffOutPath ?? nullSink(), {
+    return await compare(req.baselinePath, req.actualPath, req.diffOutPath ?? join(scratch!, 'diff.png'), {
       threshold: req.threshold ?? 0,
       antialiasing: req.antialiasing ?? false,
       captureDiffLines: true,
       failOnLayoutDiff: true,
-      ignoreRegions: masks.map((m) => ({
-        x1: Math.floor(m.x),
-        y1: Math.floor(m.y),
-        x2: Math.ceil(m.x + m.width),
-        y2: Math.ceil(m.y + m.height),
-      })),
+      // odiff 4 rejects an empty region list as an invalid format.
+      ...(masks.length > 0 && {
+        ignoreRegions: masks.map((m) => ({
+          x1: Math.floor(m.x),
+          y1: Math.floor(m.y),
+          x2: Math.ceil(m.x + m.width),
+          y2: Math.ceil(m.y + m.height),
+        })),
+      }),
     });
   } catch (cause) {
     // odiff ships a prebuilt binary. On a host whose glibc predates the build,
@@ -125,10 +134,7 @@ async function runCompare(req: DiffRequest, masks: DiffRequest['masks'] = []) {
       throw new OdiffUnavailableError(cause);
     }
     throw cause;
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
   }
-}
-
-function nullSink(): string {
-  // odiff requires an output path even when the caller does not want the image.
-  return process.platform === 'win32' ? 'NUL' : '/dev/null';
 }
