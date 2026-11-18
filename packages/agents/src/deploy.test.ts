@@ -100,6 +100,16 @@ describe('sessionRevision of an external backend', () => {
     });
     expect(await sessionRevision(root, config, new Vars())).toBe('aaa');
     expect(await sessionRevision(root, config)).toBe('aaa');
+    // A name that setup captures is setup's, even when the host sets it too: without setup it has no value.
+    const captured = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        setup: [{ run: 'echo x', capture: { BUGPATROL_TEST_API_URL: '(.+)' }, public: ['BUGPATROL_TEST_API_URL'] }],
+        connect: { url: '${BUGPATROL_TEST_API_URL}', version: { path: '/version', pointer: '/result/commit' } },
+      },
+    });
+    expect(await sessionRevision(root, captured)).toBeNull();
   });
 });
 
