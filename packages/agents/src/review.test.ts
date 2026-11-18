@@ -88,6 +88,10 @@ function fakeGh(
         closingIssuesReferences: (state.issues ?? []).map((issue) => ({
           number: issue.number,
           url: `https://github.com/${issue.repo ?? 'o/r'}/issues/${issue.number}`,
+          repository: {
+            name: (issue.repo ?? 'o/r').split('/')[1],
+            owner: { login: (issue.repo ?? 'o/r').split('/')[0] },
+          },
         })),
       });
     if (args[0] === 'issue') {
@@ -916,7 +920,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
         body: 'Changes how the settings screen saves, and cleans up the settings code.',
         issues: [
           { number: 12, title: 'Settings do not save', body: 'Saving does nothing after a reload.' },
-          { number: 40, title: 'The save endpoint drops fields', body: 'The API ignores the theme.', repo: 'o/api' },
+          // The same number in another repository is another issue.
+          { number: 12, title: 'The save endpoint drops fields', body: 'The API ignores the theme.', repo: 'o/api' },
         ],
       });
       const agents = scripted('introduced', 1);
@@ -935,8 +940,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
       expect(claims!.prompt).toContain('change settings');
       expect(claims!.prompt).toContain('ISSUE #12: Settings do not save');
       expect(claims!.prompt).toContain('Saving does nothing after a reload.');
-      // An issue of another repository is read from that repository.
-      expect(claims!.prompt).toContain('ISSUE #40: The save endpoint drops fields');
+      // An issue of another repository is read from that repository, and named with it.
+      expect(claims!.prompt).toContain('ISSUE o/api#12: The save endpoint drops fields\nThe API ignores the theme.');
       expect(claims!.prompt).toContain('+    1 save is broken');
       expect(review.sessions.claims).toBeDefined();
       expect(review.claims).toMatchObject([
@@ -962,6 +967,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
           reason: 'No screen or request shows how clean the code is.',
         },
       ]);
+      // A claim that names issue 12 with no repo is this repository's issue 12.
+      expect(review.claims![1]!.claim.source).toEqual({ kind: 'issue', number: 12 });
       // An untestable claim is never explored.
       expect(explorer!.prompt).not.toContain('Cleans up the settings code.');
       expect(review.findings).toHaveLength(1);

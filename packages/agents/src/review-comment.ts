@@ -78,6 +78,9 @@ export function numberDiff(diff: string): { text: string; lines: Map<string, Set
   return { text: text.join('\n'), lines };
 }
 
+/** The GitHub reference of an issue: `#12` in the pull request's repository, `owner/name#12` in another. */
+export const issueRef = (issue: { number: number; repo?: string }) => `${issue.repo ?? ''}#${issue.number}`;
+
 function sourceWords(source: ClaimSource): string {
   switch (source.kind) {
     case 'section':
@@ -89,7 +92,7 @@ function sourceWords(source: ClaimSource): string {
     case 'commit':
       return `commit \`${short(source.commit)}\``;
     case 'issue':
-      return `issue #${source.number}`;
+      return `issue ${issueRef(source)}`;
   }
 }
 
