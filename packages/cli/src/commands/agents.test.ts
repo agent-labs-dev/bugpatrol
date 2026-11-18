@@ -93,4 +93,9 @@ describe('judge session selection', () => {
     expect(staleSessions(sessions, 'abc').map((item) => item.id)).toEqual(['other', 'unknown']);
     expect(staleSessions(sessions, undefined).map((item) => item.id)).toEqual(['same', 'other', 'unknown']);
   });
+
+  it('judges every session of an app that has no revision at all', () => {
+    const sessions = [{ id: 'same', revision: 'abc' }, { id: 'unknown' }];
+    expect(staleSessions(sessions, null)).toEqual([]);
+  });
 });

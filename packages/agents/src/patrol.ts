@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, agentFiles, type BugpatrolConfig } from '@bugpatrol/core';
 import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
-import { externalBackend, probeDeploy } from './deploy.js';
+import { deployedCommit, externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -129,11 +129,38 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
 }
 
 /**
- * The revision that a session outside a patrol tests: the source commit. An
- * external backend's revision is its deploy, which only a patrol probes.
+ * The revision that a session outside a patrol tests: the source commit, or
+ * the commit that an external backend's version endpoint reports. Undefined
+ * when it is not known now (a dirty source, a deploy in progress). Null when
+ * no revision can be read here: an external backend with no
+ * `app.connect.version`, or one whose URL `vars` cannot resolve. With no
+ * `vars` (as in `judge`), no setup ran, so a name that setup captures has no
+ * value, even when the host environment sets the same name.
  */
-export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | undefined> {
-  return externalBackend(config.app) ? undefined : sourceCommit(root, config);
+export async function sessionRevision(
+  root: string,
+  config: BugpatrolConfig,
+  vars = new Vars(config.app.secrets, withoutSetupCaptures(config)),
+): Promise<string | null | undefined> {
+  if (!externalBackend(config.app)) return sourceCommit(root, config);
+  const { version, url = config.run?.url } = config.app.connect;
+  if (!version || !url) return null;
+  let resolved: string;
+  try {
+    resolved = vars.resolveStrict(url);
+  } catch {
+    // The same rule the driver connects by: a value that is neither in `vars` nor in the host environment.
+    return null;
+  }
+  const deploy = await deployedCommit(resolved, version);
+  return 'commit' in deploy ? deploy.commit : undefined;
+}
+
+/** The host environment without the names that setup captures, which a run with setup takes from setup instead. */
+function withoutSetupCaptures(config: BugpatrolConfig): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const command of config.app.setup) for (const name of Object.keys(command.capture)) delete env[name];
+  return env;
 }
 
 export function alive(pid: number): boolean {

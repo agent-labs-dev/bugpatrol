@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { startFixtureApi } from '@bugpatrol/api-fixture';
 import { type FixProposal, type Issue, parseConfig, type RetestOutcome } from '@bugpatrol/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deployedCommit } from './deploy.js';
-import { runPatrol } from './patrol.js';
+import { runPatrol, sessionRevision } from './patrol.js';
 import { recheckMerged } from './roles/retest.js';
 import { FakeDriver } from './testing/fake-driver.js';
 import type { Runtime } from './types.js';
+import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
 const exec = promisify(execFile);
@@ -50,6 +51,65 @@ describe('deployedCommit', () => {
       throw new Error('refused');
     }) as unknown as typeof fetch;
     expect(await deployedCommit('http://x', fleet, down)).toEqual({ pending: expect.stringContaining('refused') });
+  });
+});
+
+describe('sessionRevision of an external backend', () => {
+  it('is the deployed commit, so explore and judge agree on it', async () => {
+    const root = await tempDir();
+    const api = await startFixtureApi({ commit: 'aaa' });
+    cleanup.push(() => api.close());
+    const config = (version?: { path: string; pointer: string }) =>
+      parseConfig({ version: 1, app: { platform: 'api', connect: { url: api.url, ...(version ? { version } : {}) } } });
+    expect(await sessionRevision(root, config({ path: '/version', pointer: '/result/commit' }))).toBe('aaa');
+    api.setFleet(['aaa', 'bbb']);
+    expect(await sessionRevision(root, config(fleet))).toBeUndefined();
+    expect(await sessionRevision(root, config())).toBeNull();
+    // A URL that a setup step captures: explore has the value, and a judge, which runs no setup, reads no revision.
+    const captured = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        setup: [{ run: 'echo 3400', capture: { API_PORT: '(\\d+)' }, public: ['API_PORT'] }],
+        connect: { url: 'http://127.0.0.1:${API_PORT}', version: { path: '/version', pointer: '/result/commit' } },
+      },
+    });
+    const vars = new Vars();
+    vars.setPublic('API_PORT', new URL(api.url).port);
+    api.setFleet(['aaa']);
+    expect(await sessionRevision(root, captured, vars)).toBe('aaa');
+    expect(await sessionRevision(root, captured)).toBeNull();
+    // Outside a patrol, the probe leaves the patrol's own record of the deploy alone.
+    expect(await new Workspace(root).readDeploy()).toBeUndefined();
+  });
+
+  it('reads a URL from the host environment, as the driver resolves it', async () => {
+    const root = await tempDir();
+    const api = await startFixtureApi({ commit: 'aaa' });
+    cleanup.push(() => api.close());
+    vi.stubEnv('BUGPATROL_TEST_API_URL', api.url);
+    cleanup.push(() => {
+      vi.unstubAllEnvs();
+    });
+    const config = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        connect: { url: '${BUGPATROL_TEST_API_URL}', version: { path: '/version', pointer: '/result/commit' } },
+      },
+    });
+    expect(await sessionRevision(root, config, new Vars())).toBe('aaa');
+    expect(await sessionRevision(root, config)).toBe('aaa');
+    // A name that setup captures is setup's, even when the host sets it too: without setup it has no value.
+    const captured = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        setup: [{ run: 'echo x', capture: { BUGPATROL_TEST_API_URL: '(.+)' }, public: ['BUGPATROL_TEST_API_URL'] }],
+        connect: { url: '${BUGPATROL_TEST_API_URL}', version: { path: '/version', pointer: '/result/commit' } },
+      },
+    });
+    expect(await sessionRevision(root, captured)).toBeNull();
   });
 });
 

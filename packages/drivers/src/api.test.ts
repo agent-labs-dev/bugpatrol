@@ -98,6 +98,14 @@ describe('API driver against the fixture API', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+  it('shows no exchange after a wait, which sends no request', async () => {
+    await driver.act({ kind: 'request', method: 'GET', url: '/health' });
+    expect(await exchange()).toBeDefined();
+    expect(await driver.act({ kind: 'wait', ms: 0 })).toMatchObject({ ok: true });
+    expect(await exchange()).toBeUndefined();
+    expect(driver.lastRaw()).toBeUndefined();
+  });
+
   it('sends allowed writes and exposes redacted response evidence', async () => {
     const login = await driver.act({ kind: 'request', method: 'POST', url: '/auth/login', body: '{"user":"a"}' });
     expect(login.ok).toBe(true);

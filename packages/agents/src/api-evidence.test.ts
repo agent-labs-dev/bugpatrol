@@ -84,7 +84,9 @@ describe('api evidence', () => {
   it('keeps a planted secret out of tool results, the session log, and exchange.json', async () => {
     const { session, call } = await explorer();
     const look = await call('look', {});
-    expect(look.content).toEqual([{ type: 'text', text: expect.stringContaining('No request yet.') }]);
+    expect(look.content).toEqual([
+      { type: 'text', text: expect.stringContaining('No response: the last step sent no request.') },
+    ]);
     const login = await call('request', { method: 'POST', url: '/auth/login', body: '{"user":"a"}' });
     expect(login.content.every((part) => part.type === 'text')).toBe(true);
     const text = login.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
@@ -104,6 +106,18 @@ describe('api evidence', () => {
     ];
     expect(records[1]).toContain('"status": 200');
     for (const record of records) expect(record).not.toContain(PLANTED);
+  });
+
+  it('a wait shows no response and saves no exchange, so an old one never stands for a fresh read', async () => {
+    const { session, call } = await explorer();
+    await call('request', { method: 'GET', url: '/health' });
+    const waited = await call('wait', { seconds: 0 });
+    const text = waited.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
+    expect(text).toContain('No response: the last step sent no request.');
+    expect(text).not.toContain('HTTP 200');
+    expect(waited.meta?.capture).toBeUndefined();
+    const files = await readdir(paths.session(root, session.sessionId));
+    expect(files.filter((file) => file.endsWith('.exchange.json'))).toHaveLength(1);
   });
 
   it('gives the judge an http candidate as one text part and no image', async () => {
