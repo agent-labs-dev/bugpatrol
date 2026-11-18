@@ -20,7 +20,7 @@
     "check:fix": "biome check --write .",
     "knip": "knip --no-config-hints",
     "gate": "biome check . --error-on-warnings && knip --no-config-hints && tsc --build",
-    "gate:changed": "biome check --changed --since=origin/main --no-errors-on-unmatched --error-on-warnings && tsc --build && vitest run --changed origin/main --passWithNoTests",
+    "gate:changed": "git diff --name-only --diff-filter=d origin/main -- \"*.ts\" \"*.tsx\" \"*.js\" \"*.mjs\" \"*.json\" | xargs -r biome check --no-errors-on-unmatched --error-on-warnings && tsc --build && vitest run --changed origin/main --passWithNoTests",
     "prepare": "husky"
   },
   "devDependencies": {
