@@ -11,6 +11,7 @@ import { runPatrol, sessionRevision } from './patrol.js';
 import { recheckMerged } from './roles/retest.js';
 import { FakeDriver } from './testing/fake-driver.js';
 import type { Runtime } from './types.js';
+import { Vars } from './vars.js';
 import { Workspace } from './workspace.js';
 
 const exec = promisify(execFile);
@@ -64,6 +65,20 @@ describe('sessionRevision of an external backend', () => {
     api.setFleet(['aaa', 'bbb']);
     expect(await sessionRevision(root, config(fleet))).toBeUndefined();
     expect(await sessionRevision(root, config())).toBeNull();
+    // A URL that a setup step captures: explore has the value, and a judge, which runs no setup, reads no revision.
+    const captured = parseConfig({
+      version: 1,
+      app: {
+        platform: 'api',
+        setup: [{ run: 'echo 3400', capture: { API_PORT: '(\\d+)' }, public: ['API_PORT'] }],
+        connect: { url: 'http://127.0.0.1:${API_PORT}', version: { path: '/version', pointer: '/result/commit' } },
+      },
+    });
+    const vars = new Vars();
+    vars.setPublic('API_PORT', new URL(api.url).port);
+    api.setFleet(['aaa']);
+    expect(await sessionRevision(root, captured, vars)).toBe('aaa');
+    expect(await sessionRevision(root, captured)).toBeNull();
     // Outside a patrol, the probe leaves the patrol's own record of the deploy alone.
     expect(await new Workspace(root).readDeploy()).toBeUndefined();
   });

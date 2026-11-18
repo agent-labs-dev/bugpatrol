@@ -458,7 +458,7 @@ export async function runAgentCommand(
       }
       throw new BugpatrolError(`The bug of ${flags.id} still shows`, ExitCode.Regression);
     }
-    const record = await workspace.startSession('explorer', (await sessionRevision(root, config)) ?? undefined);
+    const record = await workspace.startSession('explorer', (await sessionRevision(root, config, vars)) ?? undefined);
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
     activeSession = session;
     const outcome = await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>

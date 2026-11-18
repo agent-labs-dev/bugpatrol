@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, agentFiles, type BugpatrolConfig } from '@bugpatrol/core';
 import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
-import { externalBackend, liveDeploy, probeDeploy } from './deploy.js';
+import { deployedCommit, externalBackend, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -131,14 +131,20 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
 /**
  * The revision that a session outside a patrol tests: the source commit, or
  * the commit that an external backend's version endpoint reports. Undefined
- * when it is not known now (a dirty source, a deploy in progress), and null
- * when the app has no revision at all: an external backend with no
- * `app.connect.version`.
+ * when it is not known now (a dirty source, a deploy in progress). Null when
+ * no revision can be read here: an external backend with no
+ * `app.connect.version`, or one whose URL needs a value that only setup
+ * captures, which `vars` lacks when no setup ran (as in `judge`).
  */
-export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | null | undefined> {
+export async function sessionRevision(
+  root: string,
+  config: BugpatrolConfig,
+  vars = new Vars(config.app.secrets),
+): Promise<string | null | undefined> {
   if (!externalBackend(config.app)) return sourceCommit(root, config);
-  const deploy = await liveDeploy(config);
-  if (!deploy) return null;
+  const { version, url = config.run?.url } = config.app.connect;
+  if (!version || !url || Vars.references(url).some((name) => !vars.has(name))) return null;
+  const deploy = await deployedCommit(vars.resolveStrict(url), version);
   return 'commit' in deploy ? deploy.commit : undefined;
 }
 
