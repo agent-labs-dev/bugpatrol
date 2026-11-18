@@ -24,7 +24,7 @@ import { compareOutputs, outputOf } from '../outputs.js';
 import { judgeClaimVerdictsSystem } from '../prompts.js';
 import { assertionWords, bugMisses, checkAssertions, confirmFailure, replaySteps } from '../replay.js';
 import { reproRoutine } from '../report.js';
-import { short, stoppedAt } from '../review-comment.js';
+import { issueRef, short, stoppedAt } from '../review-comment.js';
 import { AgentSession } from '../session.js';
 import type { Tool } from '../types.js';
 import { Vars } from '../vars.js';
@@ -107,14 +107,14 @@ export async function reproClaims(
     const routine = other ? undefined : await ctx.workspace.readRoutine(id);
     const claim: Claim = {
       id: `claim-${first + claims.length}`,
-      text: `Fixes #${issue.number}: ${issue.title}`,
+      text: `Fixes ${issueRef(issue)}: ${issue.title}`,
       platform: routine?.platform ?? ctx.config.app.platform,
-      source: { kind: 'issue', number: issue.number },
+      source: { kind: 'issue', number: issue.number, ...(issue.repo ? { repo: issue.repo } : {}) },
       testable: Boolean(routine?.bug),
     };
     claims.push(claim);
     if (other) {
-      claim.untestable = `The repro routine ${id} of issue #${issue.number} belongs to ${
+      claim.untestable = `The repro routine ${id} of issue ${issueRef(issue)} belongs to ${
         repro.profile ? `the ${repro.profile} profile` : 'the default config'
       }. Review with that config to replay it.`;
       continue;

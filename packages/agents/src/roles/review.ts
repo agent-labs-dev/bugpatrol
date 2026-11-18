@@ -37,6 +37,7 @@ import {
 } from '../prompts.js';
 import {
   claimMedia,
+  issueRef,
   lineReviewBody,
   numberDiff,
   renderReview,
@@ -198,7 +199,8 @@ type PullRequest = {
   lines: Map<string, Set<number>>;
   /** Read for the claim check only. */
   commits: { commit: string; message: string }[];
-  issues: { number: number; title: string; body: string }[];
+  /** `repo` is set only for an issue of another repository than the pull request's. */
+  issues: { number: number; repo?: string; title: string; body: string }[];
 };
 
 export type ReviewContext = {
@@ -245,7 +247,8 @@ async function loadPullRequest(
     url: string;
     baseRefName: string;
     isCrossRepository: boolean;
-    closingIssuesReferences?: { number: number }[];
+    /** An issue's repository can differ from the pull request's. */
+    closingIssuesReferences?: { url: string; repository: { name: string; owner: { login: string } } }[];
   };
   if (view.isCrossRepository && !opts.allowFork)
     throw new ConfigError(
@@ -277,11 +280,19 @@ async function loadPullRequest(
         })
     : [];
   const issues: PullRequest['issues'] = [];
-  for (const { number: issue } of view.closingIssuesReferences ?? []) {
-    const read = JSON.parse(
-      await gh(['issue', 'view', String(issue), '--repo', repo, '--json', 'number,title,body'], { cwd: source }),
-    ) as { number: number; title: string; body: string | null };
-    issues.push({ number: read.number, title: read.title, body: (read.body ?? '').slice(0, ISSUE_LIMIT) });
+  for (const { url, repository } of view.closingIssuesReferences ?? []) {
+    const read = JSON.parse(await gh(['issue', 'view', url, '--json', 'number,title,body'], { cwd: source })) as {
+      number: number;
+      title: string;
+      body: string | null;
+    };
+    const issueRepo = `${repository.owner.login}/${repository.name}`;
+    issues.push({
+      number: read.number,
+      ...(issueRepo.toLowerCase() === repo.toLowerCase() ? {} : { repo: issueRepo }),
+      title: read.title,
+      body: (read.body ?? '').slice(0, ISSUE_LIMIT),
+    });
   }
   return {
     number,
@@ -838,11 +849,14 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
         : `The pull request has no commit ${String(input.commit)}. Use a full hash from the prompt.`;
     }
     if (input.source === 'issue') {
-      const found = pr.issues.find((item) => item.number === input.issue);
+      // The pull request's own repository, named or not, is the issue with no repo.
+      const named = typeof input.repo === 'string' ? input.repo.trim().toLowerCase() : '';
+      const repo = named && named !== ctx.repo.toLowerCase() ? named : undefined;
+      const found = pr.issues.find((item) => item.number === input.issue && item.repo?.toLowerCase() === repo);
       return found
-        ? { kind: 'issue', number: found.number }
-        : `The pull request closes no issue #${String(input.issue)}. ` +
-            `It closes: ${pr.issues.map((item) => `#${item.number}`).join(', ') || 'none'}.`;
+        ? { kind: 'issue', number: found.number, ...(found.repo ? { repo: found.repo } : {}) }
+        : `The pull request closes no issue ${repo ?? ''}#${String(input.issue)}. ` +
+            `It closes: ${pr.issues.map(issueRef).join(', ') || 'none'}.`;
     }
     return 'Use the source title, body, commit or issue.';
   };
@@ -851,7 +865,8 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
       name: 'add_claim',
       description:
         'Add one claim of the pull request. Name its source: title, body, commit (with the commit hash) or issue ' +
-        '(with the issue number). A claim that cannot be tested needs testable false and a reason.',
+        '(with the issue number, and repo when the issue names another repository as owner/name#number). ' +
+        'A claim that cannot be tested needs testable false and a reason.',
       inputSchema: schema(
         {
           text: string,
@@ -859,6 +874,7 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
           source: { type: 'string', enum: ['title', 'body', 'commit', 'issue'] },
           commit: string,
           issue: { type: 'integer', minimum: 1 },
+          repo: string,
           testable: { type: 'boolean' },
           reason: string,
         },
@@ -906,7 +922,7 @@ async function writeClaims(ctx: ReviewContext, review: PrReview): Promise<Claim[
       `PLATFORM OF THE APP: ${config.app.platform}`,
       `COMMITS\n${pr.commits.map((item) => `commit ${item.commit}\n${item.message}`).join('\n\n') || '(none)'}`,
       `ISSUES THAT IT CLOSES\n${
-        pr.issues.map((item) => `ISSUE #${item.number}: ${item.title}\n${item.body.trim()}`).join('\n\n') || '(none)'
+        pr.issues.map((item) => `ISSUE ${issueRef(item)}: ${item.title}\n${item.body.trim()}`).join('\n\n') || '(none)'
       }`,
       `DIFF (each line has its sign, then its line number in the new file)\n${pr.diff}`,
     ].join('\n\n'),

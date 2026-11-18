@@ -598,7 +598,8 @@ export type ClaimSource =
   | { kind: 'title' }
   | { kind: 'body' }
   | { kind: 'commit'; commit: string }
-  | { kind: 'issue'; number: number };
+  /** `repo` (owner/name) is set only for an issue of another repository than the pull request's. */
+  | { kind: 'issue'; number: number; repo?: string };
 
 /** One thing that a pull request says it does. */
 export type Claim = {
