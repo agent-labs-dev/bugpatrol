@@ -245,7 +245,8 @@ async function loadPullRequest(
     url: string;
     baseRefName: string;
     isCrossRepository: boolean;
-    closingIssuesReferences?: { number: number }[];
+    /** The url names the issue's own repository, which can differ from the pull request's. */
+    closingIssuesReferences?: { url: string }[];
   };
   if (view.isCrossRepository && !opts.allowFork)
     throw new ConfigError(
@@ -277,10 +278,12 @@ async function loadPullRequest(
         })
     : [];
   const issues: PullRequest['issues'] = [];
-  for (const { number: issue } of view.closingIssuesReferences ?? []) {
-    const read = JSON.parse(
-      await gh(['issue', 'view', String(issue), '--repo', repo, '--json', 'number,title,body'], { cwd: source }),
-    ) as { number: number; title: string; body: string | null };
+  for (const { url: issue } of view.closingIssuesReferences ?? []) {
+    const read = JSON.parse(await gh(['issue', 'view', issue, '--json', 'number,title,body'], { cwd: source })) as {
+      number: number;
+      title: string;
+      body: string | null;
+    };
     issues.push({ number: read.number, title: read.title, body: (read.body ?? '').slice(0, ISSUE_LIMIT) });
   }
   return {
