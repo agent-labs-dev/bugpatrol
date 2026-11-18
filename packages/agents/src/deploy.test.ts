@@ -7,7 +7,7 @@ import { startFixtureApi } from '@bugpatrol/api-fixture';
 import { type FixProposal, type Issue, parseConfig, type RetestOutcome } from '@bugpatrol/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deployedCommit } from './deploy.js';
-import { runPatrol } from './patrol.js';
+import { runPatrol, sessionRevision } from './patrol.js';
 import { recheckMerged } from './roles/retest.js';
 import { FakeDriver } from './testing/fake-driver.js';
 import type { Runtime } from './types.js';
@@ -50,6 +50,22 @@ describe('deployedCommit', () => {
       throw new Error('refused');
     }) as unknown as typeof fetch;
     expect(await deployedCommit('http://x', fleet, down)).toEqual({ pending: expect.stringContaining('refused') });
+  });
+});
+
+describe('sessionRevision of an external backend', () => {
+  it('is the deployed commit, so explore and judge agree on it', async () => {
+    const root = await tempDir();
+    const api = await startFixtureApi({ commit: 'aaa' });
+    cleanup.push(() => api.close());
+    const config = (version?: { path: string; pointer: string }) =>
+      parseConfig({ version: 1, app: { platform: 'api', connect: { url: api.url, ...(version ? { version } : {}) } } });
+    expect(await sessionRevision(root, config({ path: '/version', pointer: '/result/commit' }))).toBe('aaa');
+    api.setFleet(['aaa', 'bbb']);
+    expect(await sessionRevision(root, config(fleet))).toBeUndefined();
+    expect(await sessionRevision(root, config())).toBeNull();
+    // Outside a patrol, the probe leaves the patrol's own record of the deploy alone.
+    expect(await new Workspace(root).readDeploy()).toBeUndefined();
   });
 });
 

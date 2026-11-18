@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { sweepCases } from '@bugpatrol/contract';
 import { type AgentsFile, agentFiles, type BugpatrolConfig } from '@bugpatrol/core';
 import { ApiDriver, apiCredentials, type Driver, createDriver as makeDriver } from '@bugpatrol/drivers';
-import { externalBackend, probeDeploy } from './deploy.js';
+import { externalBackend, liveDeploy, probeDeploy } from './deploy.js';
 import { syncGitHub } from './github.js';
 import { startApp } from './lifecycle.js';
 import { withSessionLogs } from './logs.js';
@@ -129,11 +129,17 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
 }
 
 /**
- * The revision that a session outside a patrol tests: the source commit. An
- * external backend's revision is its deploy, which only a patrol probes.
+ * The revision that a session outside a patrol tests: the source commit, or
+ * the commit that an external backend's version endpoint reports. Undefined
+ * when it is not known now (a dirty source, a deploy in progress), and null
+ * when the app has no revision at all: an external backend with no
+ * `app.connect.version`.
  */
-export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | undefined> {
-  return externalBackend(config.app) ? undefined : sourceCommit(root, config);
+export async function sessionRevision(root: string, config: BugpatrolConfig): Promise<string | null | undefined> {
+  if (!externalBackend(config.app)) return sourceCommit(root, config);
+  const deploy = await liveDeploy(config);
+  if (!deploy) return null;
+  return 'commit' in deploy ? deploy.commit : undefined;
 }
 
 export function alive(pid: number): boolean {

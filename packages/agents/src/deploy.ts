@@ -60,6 +60,21 @@ export async function deployedCommit(
   return { commit: commits[0]! };
 }
 
+/** What `app.connect.version` answers now, with no record of it. Undefined when the app has no version endpoint. */
+export async function liveDeploy(
+  config: BugpatrolConfig,
+  fetchImpl?: typeof globalThis.fetch,
+): Promise<Deploy | undefined> {
+  const { version, url = config.run?.url } = config.app.connect;
+  if (!version) return undefined;
+  try {
+    if (!url) throw new Error('app.connect.url is not set');
+    return await deployedCommit(new Vars(config.app.secrets).resolve(url), version, fetchImpl);
+  } catch (error) {
+    return { pending: (error as Error).message };
+  }
+}
+
 /**
  * Probe `app.connect.version` and keep the answer in `deploy.json`, so the
  * merged-fix recheck of this cycle reads the same answer. Undefined when the
@@ -70,15 +85,8 @@ export async function probeDeploy(
   config: BugpatrolConfig,
   fetchImpl?: typeof globalThis.fetch,
 ): Promise<Deploy | undefined> {
-  const { version, url = config.run?.url } = config.app.connect;
-  if (!version) return undefined;
-  let deploy: Deploy;
-  try {
-    if (!url) throw new Error('app.connect.url is not set');
-    deploy = await deployedCommit(new Vars(config.app.secrets).resolve(url), version, fetchImpl);
-  } catch (error) {
-    deploy = { pending: (error as Error).message };
-  }
+  const deploy = await liveDeploy(config, fetchImpl);
+  if (!deploy) return deploy;
   await new Workspace(root, config.profile).writeDeploy({ version: 1, ...deploy, checkedAt: new Date().toISOString() });
   return deploy;
 }

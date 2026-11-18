@@ -458,7 +458,7 @@ export async function runAgentCommand(
       }
       throw new BugpatrolError(`The bug of ${flags.id} still shows`, ExitCode.Regression);
     }
-    const record = await workspace.startSession('explorer', await sessionRevision(root, config));
+    const record = await workspace.startSession('explorer', (await sessionRevision(root, config)) ?? undefined);
     const session = new AgentSession(root, config, vars, record.id, 'explorer', driver, log);
     activeSession = session;
     const outcome = await withSessionLogs({ config, root, vars, onLog: log, workspace, session: record }, () =>
@@ -488,8 +488,13 @@ export async function runAgentCommand(
 
 /**
  * The sessions that `judge` leaves out by default: any not recorded at `revision`. Two unknown revisions are not
- * one revision (a dirty or untracked source has none), so only a known, equal revision is judged.
+ * one revision (a dirty or untracked source has none), so only a known, equal revision is judged. An app with no
+ * revision at all (`null`, see `sessionRevision`) has no other revision to skip.
  */
-export function staleSessions<T extends { revision?: string | undefined }>(sessions: T[], revision?: string): T[] {
+export function staleSessions<T extends { revision?: string | undefined }>(
+  sessions: T[],
+  revision: string | null | undefined,
+): T[] {
+  if (revision === null) return [];
   return sessions.filter((item) => !revision || item.revision !== revision);
 }
