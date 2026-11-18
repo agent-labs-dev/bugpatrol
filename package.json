@@ -19,6 +19,8 @@
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "knip": "knip --no-config-hints",
+    "gate": "biome check . --error-on-warnings && knip --no-config-hints && tsc --build",
+    "gate:changed": "biome check --changed --since=origin/main --no-errors-on-unmatched --error-on-warnings && tsc --build && vitest run --changed origin/main --passWithNoTests",
     "prepare": "husky"
   },
   "devDependencies": {
