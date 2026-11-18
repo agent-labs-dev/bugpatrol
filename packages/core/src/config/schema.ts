@@ -291,6 +291,25 @@ export const appSchema = z
         allowedOrigins: z.array(z.string()).default([]),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
+        /**
+         * Electron: a regex the URL of the app's own window matches, for an
+         * app that also keeps an overlay, tray or other small window open.
+         * Only a matching page is driven and captured.
+         */
+        window: z
+          .string()
+          .refine(
+            (pattern) => {
+              try {
+                new RegExp(pattern);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: 'must be a valid regular expression' },
+          )
+          .optional(),
         /** Electron: launch the app in a private Xvfb display instead of connecting to an existing CDP endpoint. */
         launch: z
           .strictObject({

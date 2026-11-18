@@ -227,6 +227,16 @@ app:
 
 Private launch requires Linux with Xvfb, xauth, setsid and dbus-run-session.
 
+Bugpatrol drives the app's visible window, preferring one the app serves itself and then the focused one. An app that also keeps a small window open, such as an overlay or a tray popover, can have that window chosen instead. Set `connect.window` to a regular expression that only the main window's URL matches, and Bugpatrol drives and captures that window alone:
+
+```yaml
+app:
+  platform: electron
+  connect:
+    cdp: http://127.0.0.1:${CDP_PORT}
+    window: '/chat$'
+```
+
 ### Connect for a command line app
 
 With `platform: cli`, the explorer runs the app in a terminal from the root of `app.source`. It can run a command until it exits, or start a program that stays open, such as a full screen terminal UI, and drive it with keys. The terminal comes from the `pty` module of `python3`, so `python3` must be on the `PATH`.

@@ -111,6 +111,16 @@ describe('ElectronDriver page choice', () => {
     },
   );
 
+  it('drives only the window the config names, even when an overlay has focus', () => {
+    const candidates = [
+      { url: 'file:///app/index.html#/capsule', visible: true, focused: true },
+      { url: 'file:///app/index.html#/chat', visible: true, focused: false },
+    ];
+    expect(appPage(candidates)).toBe(0);
+    expect(appPage(candidates, /#\/chat$/)).toBe(1);
+    expect(appPage(candidates.slice(0, 1), /#\/chat$/)).toBeUndefined();
+  });
+
   it.each([
     'data:text/html,splash',
     'about:blank',
