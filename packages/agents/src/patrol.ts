@@ -133,8 +133,9 @@ export async function sourceCommit(root: string, config: BugpatrolConfig): Promi
  * the commit that an external backend's version endpoint reports. Undefined
  * when it is not known now (a dirty source, a deploy in progress). Null when
  * no revision can be read here: an external backend with no
- * `app.connect.version`, or one whose URL needs a value that only setup
- * captures, which `vars` lacks when no setup ran (as in `judge`).
+ * `app.connect.version`, or one whose URL names a value that `vars` and
+ * the host environment both lack, such as a setup capture when no setup ran
+ * (as in `judge`).
  */
 export async function sessionRevision(
   root: string,
@@ -143,8 +144,15 @@ export async function sessionRevision(
 ): Promise<string | null | undefined> {
   if (!externalBackend(config.app)) return sourceCommit(root, config);
   const { version, url = config.run?.url } = config.app.connect;
-  if (!version || !url || Vars.references(url).some((name) => !vars.has(name))) return null;
-  const deploy = await deployedCommit(vars.resolveStrict(url), version);
+  if (!version || !url) return null;
+  let resolved: string;
+  try {
+    resolved = vars.resolveStrict(url);
+  } catch {
+    // The same rule the driver connects by: a value no setup captured and the host does not set.
+    return null;
+  }
+  const deploy = await deployedCommit(resolved, version);
   return 'commit' in deploy ? deploy.commit : undefined;
 }
 
