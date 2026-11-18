@@ -224,6 +224,9 @@ export class ApiDriver implements Driver {
   async act(action: DriverAction): Promise<ActResult> {
     if (action.kind === 'wait') {
       await new Promise((resolve) => setTimeout(resolve, action.ms));
+      // A wait sends no request, so the last exchange no longer shows the API as it is now.
+      this.raw = undefined;
+      this.exchange = undefined;
       return { ok: true, step: { kind: 'wait', ms: action.ms } };
     }
     if (action.kind !== 'request') return { ok: false, error: 'Use request to exercise an API endpoint' };

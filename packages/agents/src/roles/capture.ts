@@ -162,7 +162,9 @@ export async function captureTargets(
               : {
                   type: 'text',
                   text: session.vars.redact(
-                    capture.exchange ? formatHttpExchange(capture.exchange) : 'No request yet.',
+                    capture.exchange
+                      ? formatHttpExchange(capture.exchange)
+                      : 'No response: the last step sent no request. Send one to read the current state.',
                   ) as string,
                 },
             {

@@ -156,7 +156,11 @@ function observationText(observation: Observation, contract?: Contract): string 
     ...errorLines(observation),
     // One entry, so the line cap below never cuts an exchange: its body has its own cap.
     ...(observation.capture.kind === 'http'
-      ? [observation.capture.exchange ? exchangeText(observation.capture.exchange, contract) : 'No request yet.']
+      ? [
+          observation.capture.exchange
+            ? exchangeText(observation.capture.exchange, contract)
+            : 'No response: the last step sent no request. Send one to read the current state.',
+        ]
       : []),
     ...(observation.terminal ? terminalLines(observation.terminal) : []),
     'Elements:',
@@ -790,6 +794,7 @@ export function explorerTools(
 ): Tool[] {
   const api = session.driver instanceof ApiDriver ? session.driver : undefined;
   const browser = session.driver?.platform === 'web' || session.driver?.platform === 'electron';
+  const cli = session.driver?.platform === 'cli';
   const tools: Tool[] = [
     ...(session.driver?.platform === 'desktop'
       ? [
@@ -883,7 +888,7 @@ export function explorerTools(
           },
         ]
       : []),
-    ...(session.driver?.platform === 'cli'
+    ...(cli
       ? [
           {
             name: 'run_command',
@@ -1122,7 +1127,7 @@ export function explorerTools(
         return viewed;
       },
     },
-    session.driver?.platform === 'cli'
+    cli
       ? {
           name: 'press',
           description:
@@ -1333,11 +1338,17 @@ export function explorerTools(
           'shows, with no one looking, in one or more of: shows (text in the response only while the bug is there), ' +
           'lacks (text that the response should have and lacks), error (part of a network error that you saw). ' +
           'Bugpatrol checks each against the last exchange. Without them, a fix of the bug cannot be proven by a replay.'
-        : "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
-          'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
-          'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
-          'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
-          'this screen. Without them, a fix of the bug cannot be proven by a replay.',
+        : cli
+          ? "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+            'Name how a replay can tell that the bug shows, with no one looking, in one or both of: shows (text in the ' +
+            'terminal only while the bug is there, like "NaN", an error message or a line of a stack trace), lacks ' +
+            '(text that the terminal should show and lacks). Bugpatrol checks each against this terminal. Without ' +
+            'them, a fix of the bug cannot be proven by a replay.'
+          : "Report a visible product bug for judge review. screen_id is the id you gave record_screen for the screen you are on, or 'unrecorded'. " +
+            'Name how a replay can tell that the bug shows, with no one looking, in one or more of: shows (text on this ' +
+            'screen only while the bug is there, like "NaN" or an error message), lacks (text that this screen should ' +
+            'have and lacks), error (part of a console or network error that you saw). Bugpatrol checks each against ' +
+            'this screen. Without them, a fix of the bug cannot be proven by a replay.',
       inputSchema: schema(
         {
           ...(api ? {} : { screen_id: string }),
@@ -1347,7 +1358,8 @@ export function explorerTools(
           severity: { type: 'string', enum: ['cosmetic', 'minor', 'major', 'critical'] },
           shows: string,
           lacks: string,
-          error: string,
+          // A terminal app has no console or network errors: what it writes to stderr is on the terminal.
+          ...(cli ? {} : { error: string }),
           ...(api
             ? { rule: { type: 'string', enum: API_RULES, description: 'The API rule that the bug breaks.' } }
             : {}),
@@ -1364,6 +1376,13 @@ export function explorerTools(
         if (!capture)
           return { ...text('Not reported: send a request first, so the issue has evidence.'), isError: true };
         const bug: BugCheck = {};
+        if (cli && arg(input, 'error').trim())
+          return {
+            ...text(
+              'Not reported: a terminal app has no console or network errors. Put the text of its output in shows.',
+            ),
+            isError: true,
+          };
         for (const key of ['shows', 'lacks', 'error'] as const) {
           const value = session.vars.redact(arg(input, key).trim()) as string;
           if (value) bug[key] = value;
