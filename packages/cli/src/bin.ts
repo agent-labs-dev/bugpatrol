@@ -12,7 +12,7 @@ import {
   profileOf,
 } from '@bugpatrol/core';
 import { startDashboard } from '@bugpatrol/dashboard';
-import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
+import { configArgs, dropLauncherEnv, legacyEnv, withDefaultCommand } from './argv.js';
 import { runAgentCommand } from './commands/agents.js';
 import { doctorExitCode, parseDoctorFlags, readDoctorConfig, runChecks } from './commands/doctor.js';
 import { runEndpointsCommand } from './commands/endpoints.js';
@@ -27,6 +27,7 @@ import { runSweepCommand } from './commands/sweep.js';
 import { commandHelp, USAGE } from './usage.js';
 
 legacyEnv(process.env);
+dropLauncherEnv(process.env);
 
 // The folder that holds .bugpatrol/, found from any subfolder the way git does.
 const root = findProjectRoot(process.cwd());

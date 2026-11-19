@@ -51,6 +51,7 @@ app:
   teardown: []
   connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { command, timeoutMs, cols, rows, env }
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
+  # connect.loadTimeoutMs: 180000   # web: how long the first page load may take; 30 seconds by default
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
   # readOnly: true              # only GET, HEAD and OPTIONS reach the backend; see Read-only mode
@@ -122,6 +123,8 @@ Each item in `app.setup` and `app.teardown` is one shell command:
 | `background` | `true` keeps the process alive for the session. Use it for a dev server |
 | `readyWhen` | For a background command: Bugpatrol waits until the output matches this regex |
 | `timeoutMs` | The time limit. The default is 10 minutes |
+
+Each command gets Bugpatrol's environment without any lowercase `npm_*` variable. `npx` and package manager scripts set those for Bugpatrol itself, and they name that launcher, not the app, and a guard such as `only-allow` in the app's `preinstall` would read `npm_config_user_agent` and refuse.
 
 Bugpatrol stops background commands itself and runs `app.teardown` on every exit: after a finished run, a failed setup, an error and an interrupt. Anything that setup starts outside its own processes, such as a Docker compose project or a registration with a dev tool, needs a teardown command, or it outlives the run. A pull request review builds the head and the base in worktrees whose path is new for each run (`BUGPATROL_SOURCE`), so a setup that names its resources after that path never reuses the names of an earlier run. A second review of a pull request stops while one runs.
 
@@ -196,6 +199,8 @@ Each blocked write is logged with its method, its URL with the query values hidd
 
 For mobile, the default device is the booted simulator or the running emulator.
 
+The explorer's first load of a web app's page has 30 seconds, or the session stops as an infrastructure failure. A dev server that builds the app when the first page asks for it, such as Metro for Expo web or a cold Vite server, can take longer: set `connect.loadTimeoutMs` to the time it needs, for example `180000`. The limit covers only that first load; setup's `readyWhen` and `timeoutMs` cover the server's start.
+
 A web `url` with a query, such as `/test/login?token=${TOKEN}`, is taken as a sign-in hand-off: its page stores the session and then sends the app on by itself. Bugpatrol waits up to 15 seconds for the page to leave that URL before anything acts, because an action that loads a page first, such as the `open` that starts many routines, cuts the sign-in short. A URL with a query that never moves on costs that wait once per session.
 
 ### Connect for Electron
@@ -226,6 +231,16 @@ app:
 ```
 
 Private launch requires Linux with Xvfb, xauth, setsid and dbus-run-session.
+
+Bugpatrol drives the app's visible window, preferring one the app serves itself and then the focused one. An app that also keeps a small window open, such as an overlay or a tray popover, can have that window chosen instead. Set `connect.window` to a regular expression that only the main window's URL matches, and Bugpatrol drives and captures that window alone, and the explorer cannot switch to another. The pattern chooses the window at connect and on a switch; that window then moves through the app's routes as usual. It can use a setup capture as `${NAME}`, substituted as written:
+
+```yaml
+app:
+  platform: electron
+  connect:
+    cdp: http://127.0.0.1:${CDP_PORT}
+    window: '/chat$'
+```
 
 ### Connect for a command line app
 

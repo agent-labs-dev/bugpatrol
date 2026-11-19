@@ -28,10 +28,11 @@ function local(url: URL): boolean {
  * The page bugpatrol treats as the app: a visible page first, then an app page over a remote one, then the focused one.
  * Visibility leads so a hidden background window never beats the window a person sees.
  */
-export function appPage(candidates: AppPageCandidate[]): number | undefined {
+export function appPage(candidates: AppPageCandidate[], window?: RegExp): number | undefined {
   let best: { index: number; rank: number } | undefined;
   candidates.forEach((candidate, index) => {
     if (!URL.canParse(candidate.url)) return;
+    if (window && !window.test(candidate.url)) return;
     const url = new URL(candidate.url);
     if (browserOwnedProtocols.has(url.protocol)) return;
     const rank = (candidate.visible ? 0 : 4) + (local(url) ? 0 : 2) + (candidate.focused ? 0 : 1);
@@ -66,8 +67,9 @@ export class ElectronDriver extends WebDriver {
     allowedOrigins: string[] = [],
     private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
     readOnly?: ReadOnlyOptions,
+    window?: RegExp,
   ) {
-    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly });
+    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly, window });
   }
 
   override async connect(): Promise<void> {
@@ -115,11 +117,12 @@ export class ElectronDriver extends WebDriver {
           return { url, ...state };
         }),
       );
-      const index = appPage(candidates);
+      const { window } = this.options;
+      const index = appPage(candidates, window);
       if (index !== undefined) return pages[index]!;
       if (Date.now() >= deadline) {
         throw new InfrastructureError(
-          `Electron CDP connection has no app page after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+          `Electron CDP connection has no app page${window ? ' matching app.connect.window' : ''} after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));

@@ -33,6 +33,17 @@ function shellCommand(command: string, vars: (value: string) => string): string 
     .join('');
 }
 
+/** `connect.window` after setup captures: a capture can make a valid pattern invalid. The message leaves the pattern out, since captures are secrets. */
+function windowPattern(pattern: string): RegExp {
+  try {
+    return new RegExp(pattern);
+  } catch {
+    throw new ConfigError(
+      'app.connect.window is not a valid regular expression once its setup captures are substituted',
+    );
+  }
+}
+
 /** What `app.readOnly` asks of a driver, logging to `log`. Undefined when read-only mode is off. */
 export function readOnlyOptions(config: BugpatrolConfig, log: WriteLog = new WriteLog()): ReadOnlyOptions | undefined {
   const readOnly = config.app.readOnly;
@@ -114,12 +125,14 @@ export function createDriver(
       viewport: { width: viewport.width, height: viewport.height },
       allowedOrigins: connect.allowedOrigins.map(vars),
       readOnly,
+      loadTimeoutMs: connect.loadTimeoutMs,
     });
   }
   if (platform === 'electron') {
     const { cdp, launch } = connect;
     const origins = connect.allowedOrigins.map(vars);
-    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly);
+    const window = connect.window ? windowPattern(vars(connect.window)) : undefined;
+    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly, window);
     if (!launch || cdp) {
       throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');
     }
@@ -138,6 +151,7 @@ export function createDriver(
       origins,
       undefined,
       readOnly,
+      window,
     );
   }
   if (!connect.appId) {

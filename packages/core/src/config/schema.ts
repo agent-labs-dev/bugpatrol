@@ -289,8 +289,34 @@ export const appSchema = z
          * `open` that lands on any other website goes back to the app.
          */
         allowedOrigins: z.array(z.string()).default([]),
+        /**
+         * Web: how long the explorer's first page load may take, in ms. Playwright's 30
+         * seconds when unset. A dev server that builds the app on its first
+         * request (Metro for Expo web, a cold Vite or webpack) needs longer.
+         */
+        loadTimeoutMs: z.number().int().positive().optional(),
         /** Electron: the CDP endpoint, e.g. http://127.0.0.1:${CDP_PORT}. */
         cdp: z.string().optional(),
+        /**
+         * Electron: a regex the URL of the app's own window matches, for an
+         * app that also keeps an overlay, tray or other small window open.
+         * Only a matching page is driven and captured. It can use setup
+         * captures as ${NAME}, substituted as written.
+         */
+        window: z
+          .string()
+          .refine(
+            (pattern) => {
+              try {
+                new RegExp(pattern);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: 'must be a valid regular expression' },
+          )
+          .optional(),
         /** Electron: launch the app in a private Xvfb display instead of connecting to an existing CDP endpoint. */
         launch: z
           .strictObject({

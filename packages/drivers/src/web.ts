@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ConfigError, sha256 } from '@bugpatrol/core';
+import { ConfigError, InfrastructureError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
-import { type Browser, type BrowserContext, type CDPSession, chromium, type Page } from 'playwright';
+import { type Browser, type BrowserContext, type CDPSession, chromium, errors, type Page } from 'playwright';
 import { observeDom, resolveTarget, stepFor } from './dom.js';
 import { guardBrowser, type ReadOnlyOptions } from './readonly.js';
 import { sampleFile } from './samples.js';
@@ -30,6 +30,10 @@ export type WebOptions = {
   allowedOrigins?: string[];
   /** Only reads reach the backend: other requests are aborted and logged. */
   readOnly?: ReadOnlyOptions;
+  /** How long the first page load may take, for a dev server that builds the app on its first request. */
+  loadTimeoutMs?: number;
+  /** The app's own window, by URL, when the app keeps other windows open beside it: no other page is driven. */
+  window?: RegExp;
 };
 
 /**
@@ -50,6 +54,9 @@ export function openAllowed(url: URL, home: URL, allowedOrigins: string[] = []):
 }
 
 type TargetResult = { degraded: boolean; element?: UiElement };
+
+/** Playwright's own navigation limit, which applies when the config sets none. */
+const DEFAULT_LOAD_TIMEOUT_MS = 30_000;
 
 /** How long a sign-in hand-off at the connect URL may take to send the app on (see `awaitHandOff`). */
 const HAND_OFF_MS = 15_000;
@@ -101,7 +108,14 @@ export class WebDriver implements Driver {
     this.page = await this.context.newPage();
     this.watch(this.page);
     this.home = new URL(this.options.url);
-    await this.page.goto(this.options.url);
+    const { url, loadTimeoutMs } = this.options;
+    await this.page.goto(url, { timeout: loadTimeoutMs }).catch((error: unknown) => {
+      if (!(error instanceof errors.TimeoutError)) throw error;
+      throw new InfrastructureError(
+        `The app at ${url} did not load within ${(loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) / 1000}s. A dev server that builds the app on the first request can take longer: raise app.connect.loadTimeoutMs`,
+        { cause: error },
+      );
+    });
     await this.awaitHandOff(this.page);
     const landed = this.offOrigin(this.page.url());
     if (landed) {
@@ -365,11 +379,17 @@ export class WebDriver implements Driver {
         title: await candidate.title().catch(() => ''),
       })),
     );
-    const chosen = found.find(
+    const matching = found.filter(
       ({ candidate, title }) => candidate.url().toLowerCase().includes(match) || title.toLowerCase().includes(match),
     );
+    const { window } = this.options;
+    const chosen = matching.find(({ candidate }) => !window || window.test(candidate.url()));
     if (!chosen) {
-      throw new Error(`Window not found: ${action.match}`);
+      throw new Error(
+        matching.length
+          ? `Not switched: ${action.match} is not the app window that app.connect.window names`
+          : `Window not found: ${action.match}`,
+      );
     }
     const outside = this.offOrigin(chosen.candidate.url());
     if (outside) {
