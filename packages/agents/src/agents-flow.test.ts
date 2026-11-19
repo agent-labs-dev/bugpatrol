@@ -336,15 +336,21 @@ describe('explorer, replay, and judge', () => {
       // A web observation drains the errors it reports, so the next look lists none.
       f.screens.settings!.consoleErrors = [];
       await run(tools, 'look');
-      const reported = await run(tools, 'report_bug', {
-        screen_id: 'settings',
-        title: 'The settings screen crashes',
-        what_is_wrong: 'A crash screen',
-        expected: 'The settings',
-        severity: 'major',
-        error: 'useZero must be used within a ZeroProvider',
-      });
-      expect(reported.isError).toBeFalsy();
+      // The saved routine holds the tap, so a replay of the report still sees the error.
+      await run(tools, 'save_routine', { id: 'open-settings', description: 'Open the settings' });
+      const report = () =>
+        run(tools, 'report_bug', {
+          screen_id: 'settings',
+          title: 'The settings screen crashes',
+          what_is_wrong: 'A crash screen',
+          expected: 'The settings',
+          severity: 'major',
+          error: 'useZero must be used within a ZeroProvider',
+        });
+      expect((await report()).isError).toBeFalsy();
+      // A new flow replays none of the steps before it, so the error is no longer in reach.
+      f.session.startFlow();
+      expect((await report()).isError).toBe(true);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

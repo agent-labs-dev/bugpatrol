@@ -30,12 +30,12 @@ export class AgentSession {
   /** Where the app was when lastScreenId was recorded. */
   lastScreenLocation?: string;
   /**
-   * The console and network errors that the app logged in this session, each
-   * with the trail length when it was seen. An observation holds only what was
-   * logged since the one before it, so a report checks its error against all of
-   * these that the replay of its steps sees.
+   * The console and network errors that the app logged since the start of what
+   * a report replays: the session, a claim flow or a replayed routine (see
+   * `startFlow`). An observation holds only what was logged since the one
+   * before it, so a report checks its error against all of these.
    */
-  readonly errorsSeen: { step: number; text: string }[] = [];
+  readonly errorsSeen: string[] = [];
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
@@ -91,6 +91,17 @@ export class AgentSession {
       };
   }
 
+  /**
+   * Starts a flow that a report replays from here: after the routine
+   * `routineId`, or from the current state of the app. The errors seen before
+   * it are not part of that replay. A saved routine continues the flow instead,
+   * since it holds the steps before it.
+   */
+  startFlow(routineId?: string): void {
+    this.anchor = { ...(routineId ? { routineId } : {}), index: this.trail.length };
+    this.errorsSeen.length = 0;
+  }
+
   /** Status for the dashboard. A failed status write is logged, never thrown into a tool. */
   async activity(text: string, spentUsd?: number, runtime?: string): Promise<void> {
     this.runtimeLabel = runtime ?? this.runtimeLabel;
@@ -140,9 +151,7 @@ export class AgentSession {
           : undefined;
     if (this.lastObservation !== observation) {
       this.previousObservation = this.lastObservation;
-      const step = this.trail.length;
-      for (const text of [...observation.consoleErrors, ...(observation.networkErrors ?? [])])
-        this.errorsSeen.push({ step, text });
+      this.errorsSeen.push(...observation.consoleErrors, ...(observation.networkErrors ?? []));
     }
     this.lastObservation = observation;
     this.lastCapture = file;
