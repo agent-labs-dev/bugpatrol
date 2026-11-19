@@ -349,6 +349,37 @@ describe('reviews', () => {
     expect(reviews[0]).not.toHaveProperty('claims');
   });
 
+  it('reads a running review whose process is gone as failed, and a live one as running', () => {
+    const dir = join(root, '.bugpatrol', 'runs', 'reviews');
+    mkdirSync(dir, { recursive: true });
+    const running = (number: number, pid: number) =>
+      writeFileSync(
+        join(dir, `pr-${number}.json`),
+        JSON.stringify({
+          version: 1,
+          pr: { number, url: `https://github.com/o/r/pull/${number}`, title: 'A review' },
+          head: 'head',
+          base: 'base',
+          baseRef: 'main',
+          status: 'running',
+          pid,
+          startedAt: '2026-01-01T00:00:00.000Z',
+          sessions: {},
+          findings: [],
+          costUsd: 0,
+        }),
+      );
+    // A pid far above any real one: the process cannot exist.
+    running(1, 2 ** 22 + 12345);
+    running(2, process.pid);
+    const reader = new AgentReader(root);
+    expect(reader.review(1)?.review).toMatchObject({
+      status: 'failed',
+      error: 'Interrupted. Stopped: its process ended.',
+    });
+    expect(reader.review(2)?.review.status).toBe('running');
+  });
+
   it('gives one review with the recordings in its run directory, matched to claim and build', () => {
     writeAgentFixture(root);
     const reader = new AgentReader(root);
