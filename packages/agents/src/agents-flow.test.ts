@@ -327,6 +327,98 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('accepts an error that an earlier look showed, since its replay sees it too', async () => {
+    const f = await fixture();
+    try {
+      f.screens.settings!.consoleErrors = ['Error: useZero must be used within a ZeroProvider'];
+      const tools = explorerTools(f.session);
+      await run(tools, 'tap', { ref: 'e1' });
+      // A web observation drains the errors it reports, so the next look lists none.
+      f.screens.settings!.consoleErrors = [];
+      await run(tools, 'look');
+      // The saved routine holds the tap, so a replay of the report still sees the error.
+      await run(tools, 'save_routine', { id: 'open-settings', description: 'Open the settings' });
+      const report = () =>
+        run(tools, 'report_bug', {
+          screen_id: 'settings',
+          title: 'The settings screen crashes',
+          what_is_wrong: 'A crash screen',
+          expected: 'The settings',
+          severity: 'major',
+          error: 'useZero must be used within a ZeroProvider',
+        });
+      expect((await report()).isError).toBeFalsy();
+      // A new flow replays none of the steps before it, so the error is no longer in reach.
+      f.session.startFlow();
+      expect((await report()).isError).toBe(true);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts only errors on steps that the saved routine keeps', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      f.screens.home!.consoleErrors = ['Error: focus trap missing'];
+      await run(tools, 'press', { key: 'Tab' });
+      f.screens.home!.consoleErrors = [];
+      f.screens.settings!.consoleErrors = ['Error: settings failed to load'];
+      await run(tools, 'tap', { ref: 'e1' });
+      f.screens.settings!.consoleErrors = [];
+      // Back home unchanged: compaction drops the tap to settings as a detour.
+      await run(tools, 'open', { url: 'fake://home' });
+      await run(tools, 'save_routine', { id: 'focus', description: 'Focus the first control' });
+      expect((await f.workspace.readRoutine('focus'))?.steps).toMatchObject([{ kind: 'press', key: 'Tab' }]);
+      const report = (error: string) =>
+        run(tools, 'report_bug', {
+          screen_id: 'home',
+          title: 'The app logs an error',
+          what_is_wrong: 'An error in the console',
+          expected: 'No error',
+          severity: 'minor',
+          error,
+        });
+      expect((await report('settings failed to load')).isError).toBe(true);
+      expect((await report('focus trap missing')).isError).toBeFalsy();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('drops the errors of a failed action and of a routine that a save replaces', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      const report = (error: string) =>
+        run(tools, 'report_bug', {
+          screen_id: 'settings',
+          title: 'The app logs an error',
+          what_is_wrong: 'An error in the console',
+          expected: 'No error',
+          severity: 'minor',
+          error,
+        });
+      f.driver.failAt = 1;
+      f.screens.home!.consoleErrors = ['Error: tab failed'];
+      await run(tools, 'press', { key: 'Tab' });
+      f.screens.home!.consoleErrors = [];
+      // The failed press is no step of the trail, so no replay shows its error.
+      expect((await report('tab failed')).isError).toBe(true);
+      f.screens.settings!.consoleErrors = ['Error: settings failed to load'];
+      await run(tools, 'tap', { ref: 'e1' });
+      f.screens.settings!.consoleErrors = [];
+      await run(tools, 'save_routine', { id: 'flow', description: 'Open the settings' });
+      expect((await report('settings failed to load')).isError).toBeFalsy();
+      await run(tools, 'press', { key: 'Escape' });
+      // Saved again under its own id, the routine holds only the press.
+      await run(tools, 'save_routine', { id: 'flow', description: 'Press escape' });
+      expect((await report('settings failed to load')).isError).toBe(true);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('redacts observation errors before validating a report check', async () => {
     const f = await fixture();
     try {

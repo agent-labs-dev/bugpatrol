@@ -508,6 +508,11 @@ export class AgentReader {
             review.startedAt &&
             Array.isArray(review.findings),
         ),
+      )
+      .map((review) =>
+        review.status === 'running' && !processAlive(review.pid)
+          ? { ...review, status: 'failed' as const, error: review.error ?? `Interrupted. ${STOPPED}` }
+          : review,
       );
   }
 

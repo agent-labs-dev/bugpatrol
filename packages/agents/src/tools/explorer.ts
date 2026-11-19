@@ -364,7 +364,7 @@ async function act(session: AgentSession, action: DriverAction, recorded?: Routi
   if (version !== session.driver!.controlVersion)
     return failed(session, 'Human takeover interrupted this action. Look again; start a new routine.', summary);
   if (recorded ?? result.step)
-    session.trail.push({ ...(recorded ?? result.step)!, at: locationKey(session.lastObservation!) });
+    session.recordStep({ ...(recorded ?? result.step)!, at: locationKey(session.lastObservation!) });
   await arriveAtKnownScreen(session, before);
   if (replacement) viewed.content.unshift({ type: 'text', text: replacement.message });
   if (!settled.stable)
@@ -400,6 +400,7 @@ function resolveOldRef(session: AgentSession, ref?: string): { ref: string; mess
  */
 async function failed(session: AgentSession, error: string, summary: string): Promise<ToolResult> {
   const current = await observe(session, 'failed', `${summary}: failed`);
+  session.dropFailedActionErrors();
   const hint = /unknown element ref/i.test(error)
     ? ' The screen changed since that list. Use a ref from the list below.'
     : '';
@@ -419,9 +420,9 @@ async function saveRoutine(
 ): Promise<{ routine: Routine; flattenedFrom?: number; warning?: string }> {
   const prior = await session.workspace.readRoutine(id);
   const now = new Date().toISOString();
-  let steps = session.trail
-    .slice(session.anchor.index)
-    .map((step) => (assertions.has(step) ? { ...step, assert: assertions.get(step) } : step));
+  const trail = session.trail.slice(session.anchor.index);
+  const sliced = trail.map((step) => (assertions.has(step) ? { ...step, assert: assertions.get(step) } : step));
+  let steps = sliced;
   let requires = session.anchor.routineId && session.anchor.routineId !== id ? [session.anchor.routineId] : [];
   const chain: Routine[] = [];
   const seen = new Set([id]);
@@ -438,13 +439,20 @@ async function saveRoutine(
     requires = [chain[0]!.id];
     steps = [...chain.slice(1).flatMap((routine) => routine.steps), ...steps];
   }
+  const compacted = compactSteps(steps);
+  const kept = new Set(compacted);
+  const inSlice = new Set(trail);
+  const inRoutine = new Set(trail.filter((_, index) => kept.has(sliced[index]!)));
+  // Saved over the routine that it continues, the routine no longer holds what came before this slice.
+  const replaces = session.anchor.routineId === id;
+  session.keepErrors((step) => (step && inSlice.has(step) ? inRoutine.has(step) : !replaces));
   const routine: Routine = {
     version: 1,
     id,
     description,
     platform: session.config.app.platform,
     requires,
-    steps: compactSteps(steps),
+    steps: compacted,
     screenId,
     expect: endState(session),
     createdAt: prior?.createdAt ?? now,
@@ -1114,7 +1122,7 @@ export function explorerTools(
         const viewed = await observe(session, 'type', summary);
         if (version !== session.driver!.controlVersion)
           return failed(session, 'Human takeover interrupted typing. Look again; start a new routine.', summary);
-        session.trail.push({
+        session.recordStep({
           kind: 'type',
           target: result.step?.kind === 'type' ? result.step.target : undefined,
           value: session.vars.redact(value) as string,
@@ -1326,7 +1334,7 @@ export function explorerTools(
             isError: true,
           };
         }
-        session.anchor = { routineId: id, index: session.trail.length };
+        session.startFlow(id);
         await session.driver!.settle();
         return observe(session, `routine-${id}`, `Replayed the routine ${id}`);
       },
@@ -1389,10 +1397,7 @@ export function explorerTools(
         }
         const observation = session.lastObservation!;
         const redactedObservation = session.vars.redact(observation) as Observation;
-        const misses = bugMisses(bug, redactedObservation, [
-          ...redactedObservation.consoleErrors,
-          ...(redactedObservation.networkErrors ?? []),
-        ]);
+        const misses = bugMisses(bug, redactedObservation, session.vars.redact(session.errorsInReplay()) as string[]);
         if (misses.length)
           return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };
         const requested = arg(input, 'screen_id');
