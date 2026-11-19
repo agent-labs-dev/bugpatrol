@@ -23,6 +23,19 @@ export function legacyEnv(env: NodeJS.ProcessEnv): void {
   }
 }
 
+/**
+ * `npx bugpatrol`, or a package manager script that runs it, sets `npm_*`
+ * variables such as `npm_config_user_agent` for Bugpatrol's own process.
+ * They describe that launcher, and every command Bugpatrol runs for the app
+ * inherits its environment, so a package manager guard in the app (`only-allow`
+ * in a `preinstall`) would see npm and refuse. Bugpatrol drops them first.
+ */
+export function dropLauncherEnv(env: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('npm_')) delete env[key];
+  }
+}
+
 /** Selects a profile without changing the project root or consuming command flags. */
 export function configArgs(args: string[]): { args: string[]; configFile?: string } {
   const index = args.indexOf('--config');

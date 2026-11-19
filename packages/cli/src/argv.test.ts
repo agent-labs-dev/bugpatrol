@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configArgs, legacyEnv, withDefaultCommand } from './argv.js';
+import { configArgs, dropLauncherEnv, legacyEnv, withDefaultCommand } from './argv.js';
 
 describe('withDefaultCommand', () => {
   it('starts the patrol with no command, and keeps the patrol flags', () => {
@@ -21,6 +21,20 @@ describe('legacyEnv', () => {
     const env = { BUGHUNTERS_MODEL_API_KEY: 'old', BUGHUNTERS_MODEL_NAME: 'old', BUGPATROL_MODEL_NAME: 'new' };
     legacyEnv(env);
     expect(env).toMatchObject({ BUGPATROL_MODEL_API_KEY: 'old', BUGPATROL_MODEL_NAME: 'new' });
+  });
+});
+
+describe('dropLauncherEnv', () => {
+  it('drops the npm_ variables npx sets, so app commands do not see npm as their package manager', () => {
+    const env: NodeJS.ProcessEnv = {
+      npm_config_user_agent: 'npm/12.2.2 node/v22.23.5 linux x64',
+      npm_execpath: '/usr/lib/node_modules/npm/bin/npx-cli.js',
+      npm_command: 'exec',
+      PATH: '/usr/bin',
+      NPM_CONFIG_REGISTRY: 'https://registry.example.com',
+    };
+    dropLauncherEnv(env);
+    expect(env).toEqual({ PATH: '/usr/bin', NPM_CONFIG_REGISTRY: 'https://registry.example.com' });
   });
 });
 
