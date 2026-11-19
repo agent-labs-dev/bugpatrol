@@ -74,11 +74,12 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
 /**
  * Holds back the writes of a browser: every request that `deny` matches is
  * aborted, and so is every request but a read unless `allowWrites` is set.
- * WebSockets are refused or have their matching client frames dropped.
+ * A WebSocket whose handshake `deny` matches is refused; the others are
+ * refused or have their matching client frames dropped.
  * Routes apply to pages and requests made after this call; a service worker's
  * own requests bypass them, so a web context blocks service workers. WebSocket
- * routes do not reach a dedicated or shared worker, so while a WebSocket rule
- * applies, pages cannot start one.
+ * routes do not reach a dedicated or shared worker, so while a read-only
+ * WebSocket rule applies, pages cannot start one.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
   await context.route('**/*', async (route) => {
@@ -88,13 +89,20 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
     options.log.record(request.method(), request.url(), rule);
     await route.abort('blockedbyclient');
   });
-  if (options.websockets === 'pass' && !options.dropFrames.length) return;
-  await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) => options.log.record('WORKER', url));
-  await context.addInitScript(refuseWorkers);
+  const readOnlySockets = options.websockets === 'block' || options.dropFrames.length > 0;
+  if (!readOnlySockets && !options.deny) return;
+  if (readOnlySockets) {
+    await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) =>
+      options.log.record('WORKER', url),
+    );
+    await context.addInitScript(refuseWorkers);
+  }
   await context.routeWebSocket(/.*/, async (socket) => {
-    if (options.websockets === 'block') {
-      options.log.record('WEBSOCKET', socket.url());
-      await socket.close({ code: 1008, reason: 'Bugpatrol read-only mode' });
+    // A WebSocket handshake is a GET.
+    const rule = options.deny?.('GET', socket.url());
+    if (rule || options.websockets === 'block') {
+      options.log.record('WEBSOCKET', socket.url(), rule);
+      await socket.close({ code: 1008, reason: rule ? `app.connect.deny has ${rule}` : 'Bugpatrol read-only mode' });
       return;
     }
     const server = socket.connectToServer();
@@ -197,8 +205,8 @@ export type ReadOnlyProxy = { url: string; close(): Promise<void> };
  * A loopback reverse proxy to `upstream` for an app that talks to its
  * backend itself. Reads go through; any other method gets a 405 and is
  * logged, and a request that `deny` matches gets a 403 and is logged. A
- * WebSocket upgrade is refused, or tunnelled with the matching client
- * frames dropped.
+ * WebSocket upgrade that `deny` matches is refused; the others are refused,
+ * or tunnelled with the matching client frames dropped.
  */
 export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOptions): Promise<ReadOnlyProxy> {
   const base = new URL(upstream);
@@ -246,8 +254,9 @@ export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOpti
   };
   server.on('upgrade', (request: IncomingMessage, client: Duplex, head: Buffer) => {
     track(client);
-    if (options.websockets === 'block') {
-      options.log.record('WEBSOCKET', target(request.url));
+    const rule = options.deny?.('GET', target(request.url));
+    if (rule || options.websockets === 'block') {
+      options.log.record('WEBSOCKET', target(request.url), rule);
       client.end('HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n');
       return;
     }

@@ -201,13 +201,13 @@ app:
       - POST /billing/top-up/**
 ```
 
-Each glob has an optional leading method and a path that starts with `/`: `*` is one segment or part of one, `**` is any number of segments. A glob without a method matches every method, reads included.
+Each glob has an optional leading method and a path that starts with `/`: `*` is one segment or part of one, `**` is any number of segments. A glob without a method matches every method, reads included, and a WebSocket handshake counts as a `GET`. A path matches in its encoded and its decoded form. The config is rejected for a glob of another shape.
 
-- **Web and Electron**: the driver aborts each request of the app whose method and path match, on any host, and lets every other request through. A web context blocks service workers, whose own requests would bypass the rule. An Electron app's service workers and the requests it sent before Bugpatrol attached are not covered.
-- **API**: the request policy never sends a request that matches, on the path template of the spec or the request path.
-- **CLI, desktop, iOS and Android**: the read-only proxies of `app.readOnly.proxy` answer a matching request with a 403, so these platforms need a `proxy`; the config is rejected without one. The proxy matches the path on the backend, so for an upstream such as `https://api.example.com/v1` the glob starts with `/v1`.
+- **Web and Electron**: the driver aborts each request and refuses each WebSocket of the app whose method and path match, on any host, and lets every other request through. A web context blocks service workers, whose own requests would bypass the rule. In an Electron app, the driver sees only the requests of its windows after Bugpatrol attaches: requests from the main process, from service workers and from before the attach reach the backend. When those can start what the list forbids, use `app.readOnly` with a `proxy` instead, which blocks every write.
+- **API**: the request policy never sends a request that matches, on the path template of the spec or the request path. The explorer's request fails with the glob as its reason.
+- **CLI, desktop, iOS and Android**: the read-only proxies of `app.readOnly.proxy` answer a matching request with a 403, so these platforms need a `proxy`; the config is rejected without one. A proxy is always in read-only mode, so on these platforms the list adds to it: it also holds back the reads that match. The proxy matches the path on the backend, so for an upstream such as `https://api.example.com/v1` the glob starts with `/v1`.
 
-A blocked request is logged and reported like a blocked write, with the glob it matched: `POST https://app.example.com/billing/checkout/session at <time>: app.connect.deny has POST /billing/checkout/**`. The explorer sees it after its step, so it knows the backend never got the request.
+On web, Electron and the proxies, a blocked request is logged and reported like a blocked write, with the glob it matched: `POST https://app.example.com/billing/checkout/session at <time>: app.connect.deny has POST /billing/checkout/**`. The explorer sees it after its step, so it knows the backend never got the request.
 
 ## Connect
 

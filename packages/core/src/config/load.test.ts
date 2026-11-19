@@ -81,6 +81,14 @@ describe('parseConfig', () => {
     for (const platform of ['web', 'electron', 'api']) expect(() => app(platform)).not.toThrow();
   });
 
+  it('rejects a deny glob that could never match, before the app starts', () => {
+    const deny = (glob: string) =>
+      parseConfig({ version: 1, app: { platform: 'web', connect: { url: 'http://127.0.0.1:3000', deny: [glob] } } });
+    for (const glob of ['billing/**', 'POST //billing/checkout/**', 'FETCH /billing', 'POST /billing extra'])
+      expect(() => deny(glob)).toThrow(/app.connect.deny/);
+    expect(deny('post /billing/*').app.connect.deny).toEqual(['post /billing/*']);
+  });
+
   it('rejects an unknown version rather than guessing', () => {
     expect(() => parseConfig({ ...minimal, version: 2 })).toThrow(ConfigError);
   });

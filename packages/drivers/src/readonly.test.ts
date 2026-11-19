@@ -159,16 +159,38 @@ describe('the read-only proxy', () => {
     expect(log.drain()).toEqual([]);
   });
 
+  it('refuses a WebSocket whose path app.connect.deny matches, and passes the others', async () => {
+    const api = await backend();
+    const { url, log } = await proxy(api.url, { websockets: 'pass', allowWrites: true, deny: denyList(['/sync']) });
+    const open = (path: string) =>
+      new Promise<string>((done) => {
+        const socket = new WebSocket(`${url.replace('http', 'ws')}${path}`);
+        socket.onopen = () => {
+          socket.close();
+          done('open');
+        };
+        socket.onerror = () => done('refused');
+      });
+    expect(await open('/sync')).toBe('refused');
+    expect(await open('/live')).toBe('open');
+    expect(api.seen).toEqual([expect.stringMatching(/^UPGRADE \/live/)]);
+    expect(log.drain()).toEqual([
+      expect.stringMatching(/^WEBSOCKET http:\/\/127\.0\.0\.1:\d+\/sync at .*: app.connect.deny has \/sync$/),
+    ]);
+  });
+
   it('answers a request that app.connect.deny matches with a 403, read or write', async () => {
     const api = await backend();
     const { url, log } = await proxy(`${api.url}/v1`, { deny: denyList(['/v1/billing/**']) });
     expect((await fetch(`${url}/billing/plans`)).status).toBe(403);
+    expect((await fetch(`${url}/billing/plans`, { method: 'POST' })).status).toBe(403);
     expect((await fetch(`${url}/items`)).status).toBe(200);
     expect(api.seen).toEqual([`GET /v1/items ${new URL(api.url).host}`]);
     expect(log.drain()).toEqual([
       expect.stringMatching(
         /^GET http:\/\/127\.0\.0\.1:\d+\/v1\/billing\/plans at .*: app.connect.deny has \/v1\/billing\/\*\*$/,
       ),
+      expect.stringMatching(/^POST .*\/v1\/billing\/plans at .*: app.connect.deny has \/v1\/billing\/\*\*$/),
     ]);
   });
 
@@ -261,6 +283,20 @@ describe('app.connect.deny in a browser', () => {
       expect.stringMatching(/^POST .*\/api\/items\?token=\[redacted\] at .*: app.connect.deny has POST \/api\/items$/),
       expect.stringMatching(/^POST .*\/api\/form at .*: app.connect.deny has POST \/api\/form$/),
     ]);
+  });
+
+  it('web: refuses a WebSocket whose path a glob matches', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const driver = new WebDriver({
+      url: `${api.url}/`,
+      viewport: { width: 640, height: 400 },
+      readOnly: denyOnly(['/sync']),
+    });
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { blocked } = await writeEverything(driver);
+    expect(api.seen.filter((line) => line.startsWith('UPGRADE'))).toEqual([]);
+    expect(blocked).toEqual([expect.stringMatching(/^WEBSOCKET ws:.*\/sync at .*: app.connect.deny has \/sync$/)]);
   });
 
   it('electron: aborts the matching requests of an app it attached to over CDP', { timeout: 60_000 }, async () => {

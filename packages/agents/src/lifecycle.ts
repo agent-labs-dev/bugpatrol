@@ -26,7 +26,7 @@ type RunningApp = {
    * endpoint inventory it has no endpoints, so only reads can go out.
    */
   contract?: Contract;
-  /** Read-only mode: the requests that it blocked, to give to the driver. */
+  /** Read-only mode or `app.connect.deny`: the requests that they blocked, to give to the driver. */
   writes?: WriteLog;
   stop(): Promise<void>;
 };
@@ -142,7 +142,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
   }
 
   let contract: Contract | undefined;
-  const writes = app.readOnly ? new WriteLog() : undefined;
+  const writes = app.readOnly || app.connect.deny.length ? new WriteLog() : undefined;
   const proxies: ReadOnlyProxy[] = [];
   const closeProxies = () => Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
   try {

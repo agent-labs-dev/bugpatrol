@@ -1,6 +1,7 @@
 export * from './assertion.js';
 export * from './baseline-store.js';
 export * from './config/agents.js';
+export * from './config/deny.js';
 export * from './config/load.js';
 export * from './config/schema.js';
 export * from './errors.js';

@@ -1,4 +1,4 @@
-import { type AppConfig, ConfigError, type Endpoint, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
+import { type AppConfig, ConfigError, denyRule, type Endpoint, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
 import type { Contract, SkipReason } from './contract.js';
 import { matcher } from './match.js';
 
@@ -93,33 +93,17 @@ export function isLoopback(url: string): boolean {
  * the web and Electron drivers and the read-only proxies all use it.
  */
 export function denyList(globs: string[]): (method: string, url: string, template?: string) => string | undefined {
-  const rules = globs.map(denyRule);
+  const rules = globs.map((glob) => {
+    const rule = denyRule(glob);
+    if (!rule) throw new ConfigError(`app.connect.deny ${glob}: use an optional method and a path that starts with /`);
+    return rule;
+  });
   return (method, url, template) => {
     // Both the encoded and the decoded path: a server may split the path before
     // or after it decodes %2F, and neither reading may reach a denied route.
     const paths = [...(template ? [template] : []), ...requestPaths(url)];
     return rules.find((rule) => (!rule.method || rule.method === method.toUpperCase()) && paths.some(rule.test))?.glob;
   };
-}
-
-/** `[METHOD] /path`: `*` is one segment or a part of one, and a `**` segment is any number of segments. */
-function denyRule(glob: string): { glob: string; method?: HttpMethod; test(path: string): boolean } {
-  const [first, second] = glob.trim().split(/\s+/);
-  const method = second === undefined ? undefined : first!.toUpperCase();
-  const path = second ?? first!;
-  if ((method && !HTTP_METHODS.includes(method as HttpMethod)) || !path.startsWith('/'))
-    throw new ConfigError(`app.connect.deny ${glob}: use an optional method and a path that starts with /`);
-  const source = path
-    .split('/')
-    .slice(1)
-    .map((segment) =>
-      segment === '**'
-        ? '(?:/[^/]*)*'
-        : `/${segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replaceAll('\\*', '[^/]*')}`,
-    )
-    .join('');
-  const pattern = new RegExp(`^${source}/?$`, 's');
-  return { glob, ...(method ? { method: method as HttpMethod } : {}), test: (value) => pattern.test(value) };
 }
 
 function requestPaths(url: string): string[] {
