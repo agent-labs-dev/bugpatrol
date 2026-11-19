@@ -400,6 +400,7 @@ function resolveOldRef(session: AgentSession, ref?: string): { ref: string; mess
  */
 async function failed(session: AgentSession, error: string, summary: string): Promise<ToolResult> {
   const current = await observe(session, 'failed', `${summary}: failed`);
+  session.dropFailedActionErrors();
   const hint = /unknown element ref/i.test(error)
     ? ' The screen changed since that list. Use a ref from the list below.'
     : '';
@@ -440,9 +441,11 @@ async function saveRoutine(
   }
   const compacted = compactSteps(steps);
   const kept = new Set(compacted);
-  trail.forEach((step, index) => {
-    if (!kept.has(sliced[index]!)) session.stepsLeftOut.add(step);
-  });
+  const inSlice = new Set(trail);
+  const inRoutine = new Set(trail.filter((_, index) => kept.has(sliced[index]!)));
+  // Saved over the routine that it continues, the routine no longer holds what came before this slice.
+  const replaces = session.anchor.routineId === id;
+  session.keepErrors((step) => (step && inSlice.has(step) ? inRoutine.has(step) : !replaces));
   const routine: Routine = {
     version: 1,
     id,

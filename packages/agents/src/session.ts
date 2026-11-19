@@ -34,13 +34,15 @@ export class AgentSession {
    * a report replays: the session, a claim flow or a replayed routine (see
    * `startFlow`). An observation holds only what was logged since the one
    * before it, so a report checks its error against all of these. Each keeps
-   * the trail step that showed it, since a saved routine can leave that step out.
+   * the trail step that showed it, since a saved routine can leave that step
+   * out (see `keepErrors`). One seen before the first step of the flow has none:
+   * the start of the replay shows it.
    */
   private readonly errorsSeen: { text: string; step?: RoutineStep }[] = [];
   /** How many of errorsSeen the last observation added. */
   private lastObservationErrors = 0;
-  /** Trail steps that a saved routine left out, so its replay does not take them. */
-  readonly stepsLeftOut = new WeakSet<RoutineStep>();
+  /** Where the trail of the current flow starts. */
+  private flowStart = 0;
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
@@ -92,6 +94,7 @@ export class AgentSession {
           this.lastScreenTrailIndex = 0;
           this.errorsSeen.length = 0;
           this.lastObservationErrors = 0;
+          this.flowStart = 0;
         }
         this.emit(event);
       };
@@ -107,6 +110,7 @@ export class AgentSession {
     this.anchor = { ...(routineId ? { routineId } : {}), index: this.trail.length };
     this.errorsSeen.length = 0;
     this.lastObservationErrors = 0;
+    this.flowStart = this.trail.length;
   }
 
   /**
@@ -118,9 +122,25 @@ export class AgentSession {
     for (const error of this.errorsSeen.slice(this.errorsSeen.length - this.lastObservationErrors)) error.step = step;
   }
 
-  /** The errors seen on steps that a replay of a report still takes. */
+  /**
+   * An action that failed adds no step, so a replay never takes it: the errors
+   * that its observation showed are not part of the replay.
+   */
+  dropFailedActionErrors(): void {
+    this.errorsSeen.splice(this.errorsSeen.length - this.lastObservationErrors);
+    this.lastObservationErrors = 0;
+  }
+
+  /** Keeps only the errors whose step (none before the flow's first step) a replay still takes. */
+  keepErrors(replayed: (step?: RoutineStep) => boolean): void {
+    const kept = this.errorsSeen.filter(({ step }) => replayed(step));
+    this.errorsSeen.splice(0, this.errorsSeen.length, ...kept);
+    this.lastObservationErrors = 0;
+  }
+
+  /** The errors that a replay of a report shows. */
   errorsInReplay(): string[] {
-    return this.errorsSeen.filter(({ step }) => !step || !this.stepsLeftOut.has(step)).map(({ text }) => text);
+    return this.errorsSeen.map(({ text }) => text);
   }
 
   /** Status for the dashboard. A failed status write is logged, never thrown into a tool. */
@@ -173,7 +193,7 @@ export class AgentSession {
     if (this.lastObservation !== observation) {
       this.previousObservation = this.lastObservation;
       // A look shows what the last step went on to log; an action's own step is added after it.
-      const step = this.trail.at(-1);
+      const step = this.trail.length > this.flowStart ? this.trail.at(-1) : undefined;
       const errors = [...observation.consoleErrors, ...(observation.networkErrors ?? [])];
       this.errorsSeen.push(...errors.map((text) => ({ text, step })));
       this.lastObservationErrors = errors.length;

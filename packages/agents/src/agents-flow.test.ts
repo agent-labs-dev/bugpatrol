@@ -386,6 +386,39 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('drops the errors of a failed action and of a routine that a save replaces', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      const report = (error: string) =>
+        run(tools, 'report_bug', {
+          screen_id: 'settings',
+          title: 'The app logs an error',
+          what_is_wrong: 'An error in the console',
+          expected: 'No error',
+          severity: 'minor',
+          error,
+        });
+      f.driver.failAt = 1;
+      f.screens.home!.consoleErrors = ['Error: tab failed'];
+      await run(tools, 'press', { key: 'Tab' });
+      f.screens.home!.consoleErrors = [];
+      // The failed press is no step of the trail, so no replay shows its error.
+      expect((await report('tab failed')).isError).toBe(true);
+      f.screens.settings!.consoleErrors = ['Error: settings failed to load'];
+      await run(tools, 'tap', { ref: 'e1' });
+      f.screens.settings!.consoleErrors = [];
+      await run(tools, 'save_routine', { id: 'flow', description: 'Open the settings' });
+      expect((await report('settings failed to load')).isError).toBeFalsy();
+      await run(tools, 'press', { key: 'Escape' });
+      // Saved again under its own id, the routine holds only the press.
+      await run(tools, 'save_routine', { id: 'flow', description: 'Press escape' });
+      expect((await report('settings failed to load')).isError).toBe(true);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('redacts observation errors before validating a report check', async () => {
     const f = await fixture();
     try {
