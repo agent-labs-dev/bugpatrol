@@ -35,14 +35,14 @@ ENV TZ=UTC \
 
 WORKDIR /work
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json tsconfig.base.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.base.json ./
 COPY packages ./packages
 COPY examples ./examples
 
 # pnpm from npm rather than corepack: the corepack bundled with this image's
 # Node predates npm's registry signing-key rotation and refuses every download
 # with "Cannot find matching keyid". The version matches packageManager.
-RUN npm install -g pnpm@9.12.0 \
+RUN npm install -g pnpm@12.19.0 \
  && pnpm install --frozen-lockfile \
  && pnpm build
 

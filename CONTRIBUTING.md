@@ -12,7 +12,7 @@ pnpm knip    # Dead code: unused files, exports, and dependencies.
 
 CI runs `pnpm check --error-on-warnings` and `pnpm knip`. The pre-commit hook runs Biome on the staged files and then knip.
 
-Node 22+ and pnpm 9+.
+Node 22+ and pnpm 12. pnpm switches to the version in `packageManager` by itself.
 
 ## The rules that matter most
 

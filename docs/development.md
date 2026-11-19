@@ -4,7 +4,7 @@ This page is for work on Bugpatrol itself. To use Bugpatrol in your app, run `np
 
 ## Build and test
 
-Node 22+ and pnpm 9+.
+Node 22+ and pnpm 12. pnpm switches to the version in `packageManager` by itself.
 
 ```bash
 pnpm install
