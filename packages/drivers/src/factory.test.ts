@@ -29,6 +29,23 @@ describe('createDriver', () => {
     expect(() => createDriver(config, vars)).toThrow('app.connect.appId');
   });
 
+  it('resolves setup captures in connect.window before it compiles the pattern', () => {
+    const config = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'electron', connect: { cdp: 'http://127.0.0.1:9222', window: '#/chat-${SUFFIX}$' } },
+    });
+    const driver = createDriver(config, (value) => value.replace('${SUFFIX}', 'abc'));
+    expect(driver).toMatchObject({ options: { window: /#\/chat-abc$/ } });
+  });
+
+  it('gives the web driver the first page load limit', () => {
+    const config = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'web', connect: { url: 'http://127.0.0.1:8081', loadTimeoutMs: 180_000 } },
+    });
+    expect(createDriver(config, vars)).toMatchObject({ options: { loadTimeoutMs: 180_000 } });
+  });
+
   it('runs a CLI app from the source of the build', () => {
     const config = bugpatrolConfigSchema.parse({
       version: 1,

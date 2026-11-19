@@ -114,12 +114,13 @@ export function createDriver(
       viewport: { width: viewport.width, height: viewport.height },
       allowedOrigins: connect.allowedOrigins.map(vars),
       readOnly,
+      loadTimeoutMs: connect.loadTimeoutMs,
     });
   }
   if (platform === 'electron') {
     const { cdp, launch } = connect;
     const origins = connect.allowedOrigins.map(vars);
-    const window = connect.window ? new RegExp(connect.window) : undefined;
+    const window = connect.window ? new RegExp(vars(connect.window)) : undefined;
     if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly, window);
     if (!launch || cdp) {
       throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');

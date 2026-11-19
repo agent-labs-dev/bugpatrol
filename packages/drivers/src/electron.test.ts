@@ -163,6 +163,34 @@ describe('ElectronDriver page choice', () => {
     expect((await driver.observe()).location).toBe(appUrl);
   });
 
+  it('does not switch to a window that connect.window leaves out', async () => {
+    server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<title>App</title>');
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Could not start app server');
+    const appUrl = `http://127.0.0.1:${address.port}/`;
+
+    const cdpPort = await freePort();
+    profileDir = await createProfileDir();
+    browser = await chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      args: [`--remote-debugging-port=${cdpPort}`, '--disable-gpu'],
+    });
+    await browser.pages()[0]!.goto(`${appUrl}#/chat`);
+    await browser.newPage().then((page) => page.goto(`${appUrl}#/capsule`));
+
+    driver = new ElectronDriver(`http://127.0.0.1:${cdpPort}`, [], undefined, undefined, /#\/chat$/);
+    await driver.connect();
+
+    const result = await driver.act({ kind: 'window', match: 'capsule' });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Not switched');
+    expect((await driver.observe()).location).toBe(`${appUrl}#/chat`);
+  });
+
   it('throws an infrastructure error when only browser-owned pages exist', async () => {
     const cdpPort = await freePort();
     profileDir = await createProfileDir();

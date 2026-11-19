@@ -67,10 +67,9 @@ export class ElectronDriver extends WebDriver {
     allowedOrigins: string[] = [],
     private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
     readOnly?: ReadOnlyOptions,
-    /** The app's own window, by URL, when the app opens other windows beside it. */
-    private readonly window?: RegExp,
+    window?: RegExp,
   ) {
-    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly });
+    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly, window });
   }
 
   override async connect(): Promise<void> {
@@ -118,11 +117,12 @@ export class ElectronDriver extends WebDriver {
           return { url, ...state };
         }),
       );
-      const index = appPage(candidates, this.window);
+      const { window } = this.options;
+      const index = appPage(candidates, window);
       if (index !== undefined) return pages[index]!;
       if (Date.now() >= deadline) {
         throw new InfrastructureError(
-          `Electron CDP connection has no app page${this.window ? ` matching ${this.window}` : ''} after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+          `Electron CDP connection has no app page${window ? ` matching ${window}` : ''} after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));
