@@ -73,6 +73,10 @@ describe('requestPolicy', () => {
     const guarded = policy('http://127.0.0.1:8000', { deny: ['/admin/**'] });
     for (const url of ['/admin%2Fwipe', '/admin%2fwipe', 'http://127.0.0.1:8000/admin/%77ipe', '/a/../admin/wipe'])
       for (const method of ['GET', 'POST'] as const) expect(guarded.check(method, url).ok).toBe(false);
+    // A server that splits the path before decoding reads a%2Fb as one segment.
+    expect(denyList(['POST /billing/session/*'])('POST', 'https://app.test/billing/session/a%2Fb')).toBe(
+      'POST /billing/session/*',
+    );
   });
 
   it('skips x-bugpatrol-skip operations, and lets a URL outside the contract only read', () => {

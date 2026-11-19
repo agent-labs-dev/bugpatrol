@@ -95,8 +95,9 @@ export function isLoopback(url: string): boolean {
 export function denyList(globs: string[]): (method: string, url: string, template?: string) => string | undefined {
   const rules = globs.map(denyRule);
   return (method, url, template) => {
-    // The decoded path too: a server that decodes %2F must not reach a denied route.
-    const paths = [...(template ? [template] : []), decodedPath(url)];
+    // Both the encoded and the decoded path: a server may split the path before
+    // or after it decodes %2F, and neither reading may reach a denied route.
+    const paths = [...(template ? [template] : []), ...requestPaths(url)];
     return rules.find((rule) => (!rule.method || rule.method === method.toUpperCase()) && paths.some(rule.test))?.glob;
   };
 }
@@ -121,11 +122,11 @@ function denyRule(glob: string): { glob: string; method?: HttpMethod; test(path:
   return { glob, ...(method ? { method: method as HttpMethod } : {}), test: (value) => pattern.test(value) };
 }
 
-function decodedPath(url: string): string {
+function requestPaths(url: string): string[] {
   const { pathname } = new URL(url, 'http://policy.invalid');
   try {
-    return decodeURIComponent(pathname);
+    return [pathname, decodeURIComponent(pathname)];
   } catch {
-    return pathname;
+    return [pathname];
   }
 }
