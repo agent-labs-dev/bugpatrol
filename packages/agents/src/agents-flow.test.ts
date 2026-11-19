@@ -356,6 +356,36 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('accepts only errors on steps that the saved routine keeps', async () => {
+    const f = await fixture();
+    try {
+      const tools = explorerTools(f.session);
+      f.screens.home!.consoleErrors = ['Error: focus trap missing'];
+      await run(tools, 'press', { key: 'Tab' });
+      f.screens.home!.consoleErrors = [];
+      f.screens.settings!.consoleErrors = ['Error: settings failed to load'];
+      await run(tools, 'tap', { ref: 'e1' });
+      f.screens.settings!.consoleErrors = [];
+      // Back home unchanged: compaction drops the tap to settings as a detour.
+      await run(tools, 'open', { url: 'fake://home' });
+      await run(tools, 'save_routine', { id: 'focus', description: 'Focus the first control' });
+      expect((await f.workspace.readRoutine('focus'))?.steps).toMatchObject([{ kind: 'press', key: 'Tab' }]);
+      const report = (error: string) =>
+        run(tools, 'report_bug', {
+          screen_id: 'home',
+          title: 'The app logs an error',
+          what_is_wrong: 'An error in the console',
+          expected: 'No error',
+          severity: 'minor',
+          error,
+        });
+      expect((await report('settings failed to load')).isError).toBe(true);
+      expect((await report('focus trap missing')).isError).toBeFalsy();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('redacts observation errors before validating a report check', async () => {
     const f = await fixture();
     try {

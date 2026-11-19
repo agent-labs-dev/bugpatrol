@@ -33,9 +33,14 @@ export class AgentSession {
    * The console and network errors that the app logged since the start of what
    * a report replays: the session, a claim flow or a replayed routine (see
    * `startFlow`). An observation holds only what was logged since the one
-   * before it, so a report checks its error against all of these.
+   * before it, so a report checks its error against all of these. Each keeps
+   * the trail step that showed it, since a saved routine can leave that step out.
    */
-  readonly errorsSeen: string[] = [];
+  private readonly errorsSeen: { text: string; step?: RoutineStep }[] = [];
+  /** How many of errorsSeen the last observation added. */
+  private lastObservationErrors = 0;
+  /** Trail steps that a saved routine left out, so its replay does not take them. */
+  readonly stepsLeftOut = new WeakSet<RoutineStep>();
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
@@ -86,6 +91,7 @@ export class AgentSession {
           this.lastScreenLocation = undefined;
           this.lastScreenTrailIndex = 0;
           this.errorsSeen.length = 0;
+          this.lastObservationErrors = 0;
         }
         this.emit(event);
       };
@@ -100,6 +106,21 @@ export class AgentSession {
   startFlow(routineId?: string): void {
     this.anchor = { ...(routineId ? { routineId } : {}), index: this.trail.length };
     this.errorsSeen.length = 0;
+    this.lastObservationErrors = 0;
+  }
+
+  /**
+   * Adds a step to the trail. The observation after its action showed the
+   * errors that the step caused, so those errors belong to it.
+   */
+  recordStep(step: RoutineStep): void {
+    this.trail.push(step);
+    for (const error of this.errorsSeen.slice(this.errorsSeen.length - this.lastObservationErrors)) error.step = step;
+  }
+
+  /** The errors seen on steps that a replay of a report still takes. */
+  errorsInReplay(): string[] {
+    return this.errorsSeen.filter(({ step }) => !step || !this.stepsLeftOut.has(step)).map(({ text }) => text);
   }
 
   /** Status for the dashboard. A failed status write is logged, never thrown into a tool. */
@@ -151,7 +172,11 @@ export class AgentSession {
           : undefined;
     if (this.lastObservation !== observation) {
       this.previousObservation = this.lastObservation;
-      this.errorsSeen.push(...observation.consoleErrors, ...(observation.networkErrors ?? []));
+      // A look shows what the last step went on to log; an action's own step is added after it.
+      const step = this.trail.at(-1);
+      const errors = [...observation.consoleErrors, ...(observation.networkErrors ?? [])];
+      this.errorsSeen.push(...errors.map((text) => ({ text, step })));
+      this.lastObservationErrors = errors.length;
     }
     this.lastObservation = observation;
     this.lastCapture = file;
