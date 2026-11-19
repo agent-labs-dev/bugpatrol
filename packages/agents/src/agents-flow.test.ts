@@ -327,6 +327,29 @@ describe('explorer, replay, and judge', () => {
     }
   });
 
+  it('accepts an error that an earlier look showed, since its replay sees it too', async () => {
+    const f = await fixture();
+    try {
+      f.screens.settings!.consoleErrors = ['Error: useZero must be used within a ZeroProvider'];
+      const tools = explorerTools(f.session);
+      await run(tools, 'tap', { ref: 'e1' });
+      // A web observation drains the errors it reports, so the next look lists none.
+      f.screens.settings!.consoleErrors = [];
+      await run(tools, 'look');
+      const reported = await run(tools, 'report_bug', {
+        screen_id: 'settings',
+        title: 'The settings screen crashes',
+        what_is_wrong: 'A crash screen',
+        expected: 'The settings',
+        severity: 'major',
+        error: 'useZero must be used within a ZeroProvider',
+      });
+      expect(reported.isError).toBeFalsy();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('redacts observation errors before validating a report check', async () => {
     const f = await fixture();
     try {

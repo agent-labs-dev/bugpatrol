@@ -1389,10 +1389,9 @@ export function explorerTools(
         }
         const observation = session.lastObservation!;
         const redactedObservation = session.vars.redact(observation) as Observation;
-        const misses = bugMisses(bug, redactedObservation, [
-          ...redactedObservation.consoleErrors,
-          ...(redactedObservation.networkErrors ?? []),
-        ]);
+        // The replay of the report's steps sees every error from the start of those steps.
+        const errors = session.errorsSeen.filter((seen) => seen.step >= session.anchor.index).map((seen) => seen.text);
+        const misses = bugMisses(bug, redactedObservation, session.vars.redact(errors) as string[]);
         if (misses.length)
           return { ...text(`Not reported: ${misses.join(', and ')}. Fix or leave out that part.`), isError: true };
         const requested = arg(input, 'screen_id');

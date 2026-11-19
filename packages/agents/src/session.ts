@@ -29,6 +29,13 @@ export class AgentSession {
   lastScreenTrailIndex = 0;
   /** Where the app was when lastScreenId was recorded. */
   lastScreenLocation?: string;
+  /**
+   * The console and network errors that the app logged in this session, each
+   * with the trail length when it was seen. An observation holds only what was
+   * logged since the one before it, so a report checks its error against all of
+   * these that the replay of its steps sees.
+   */
+  readonly errorsSeen: { step: number; text: string }[] = [];
   /** Issues already counted as seen again in this session. */
   readonly seenIssues = new Set<string>();
   cancelled = false;
@@ -78,6 +85,7 @@ export class AgentSession {
           this.lastScreenId = undefined;
           this.lastScreenLocation = undefined;
           this.lastScreenTrailIndex = 0;
+          this.errorsSeen.length = 0;
         }
         this.emit(event);
       };
@@ -130,7 +138,12 @@ export class AgentSession {
               label,
             )
           : undefined;
-    if (this.lastObservation !== observation) this.previousObservation = this.lastObservation;
+    if (this.lastObservation !== observation) {
+      this.previousObservation = this.lastObservation;
+      const step = this.trail.length;
+      for (const text of [...observation.consoleErrors, ...(observation.networkErrors ?? [])])
+        this.errorsSeen.push({ step, text });
+    }
     this.lastObservation = observation;
     this.lastCapture = file;
     this.lastTerminal =
