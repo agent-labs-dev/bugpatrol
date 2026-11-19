@@ -190,7 +190,7 @@ Each blocked write is logged with its method, its URL with the query values hidd
 
 ## Deny list
 
-`app.connect.deny` names requests that never reach the backend, while every other request, writes included, goes out. Use it for an app that a review must use normally but that can start something it must not, such as a payment: the app guide's never-do list is prose for the model, and `readOnly` would block every write the app needs.
+`app.connect.deny` names requests that never reach the backend. On web, Electron and API apps every other request, writes included, goes out. Use it for an app that a review must use normally but that can start something it must not, such as a payment: the app guide's never-do list is prose for the model, and `readOnly` would block every write the app needs.
 
 ```yaml
 app:
