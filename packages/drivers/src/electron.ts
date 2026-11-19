@@ -122,7 +122,7 @@ export class ElectronDriver extends WebDriver {
       if (index !== undefined) return pages[index]!;
       if (Date.now() >= deadline) {
         throw new InfrastructureError(
-          `Electron CDP connection has no app page${window ? ` matching ${window}` : ''} after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
+          `Electron CDP connection has no app page${window ? ' matching app.connect.window' : ''} after ${this.pageTimeoutMs / 1000}s. Pages seen: ${candidates.map(({ url }) => pageLabel(url)).join(', ')}`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, PAGE_POLL_MS));

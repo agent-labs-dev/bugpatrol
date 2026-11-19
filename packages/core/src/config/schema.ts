@@ -290,7 +290,7 @@ export const appSchema = z
          */
         allowedOrigins: z.array(z.string()).default([]),
         /**
-         * Web: how long the first page load may take, in ms. Playwright's 30
+         * Web: how long the explorer's first page load may take, in ms. Playwright's 30
          * seconds when unset. A dev server that builds the app on its first
          * request (Metro for Expo web, a cold Vite or webpack) needs longer.
          */

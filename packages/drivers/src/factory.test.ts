@@ -38,6 +38,17 @@ describe('createDriver', () => {
     expect(driver).toMatchObject({ options: { window: /#\/chat-abc$/ } });
   });
 
+  it('names connect.window, and not the capture, when a capture makes the pattern invalid', () => {
+    const config = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'electron', connect: { cdp: 'http://127.0.0.1:9222', window: '#/chat-${SUFFIX}$' } },
+    });
+    const create = () => createDriver(config, (value) => value.replace('${SUFFIX}', 'secret('));
+    expect(create).toThrow(ConfigError);
+    expect(create).toThrow('app.connect.window');
+    expect(create).not.toThrow('secret');
+  });
+
   it('gives the web driver the first page load limit', () => {
     const config = bugpatrolConfigSchema.parse({
       version: 1,
