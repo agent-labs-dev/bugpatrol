@@ -20,6 +20,11 @@ const STOP_REASONS: Record<RoleOutcome['stop'], string> = {
   error: 'stopped on an error',
 };
 
+/** Whether Bugpatrol holds back requests of this app: read-only mode, or a driver that applies `app.connect.deny`. */
+function guarded(session: AgentSession): boolean {
+  return Boolean(session.config.app.readOnly || session.driver?.writes);
+}
+
 /**
  * The finish tool's text when the explorer wrote one. Otherwise a sentence
  * Bugpatrol writes itself: the model's last thought at a step limit is a note to
@@ -32,7 +37,7 @@ function sessionSummary(
   session: AgentSession,
 ): string {
   // The counts come from the files, not from the model: its own count can be wrong. An API has no screens.
-  const blocked = session.config.app.readOnly ? ` Read-only mode blocked ${session.writesBlocked} write(s).` : '';
+  const blocked = guarded(session) ? ` Bugpatrol blocked ${session.writesBlocked} request(s).` : '';
   const known = screens === undefined ? '' : `${screens} screen(s) known, `;
   const counts = `${known}${candidates} candidate(s) raised in ${outcome.steps} steps.${blocked}`;
   if (outcome.stop === 'done' && outcome.summary) return `${outcome.summary.trim()}\n${counts}`;
@@ -176,7 +181,7 @@ export async function runExplorer(
       summary: outcome.summary,
       candidates: candidates.length,
       screensFound: screens.map((item) => item.id),
-      ...(session.config.app.readOnly ? { writesBlocked: session.writesBlocked } : {}),
+      ...(guarded(session) ? { writesBlocked: session.writesBlocked } : {}),
     });
     session.emit({ kind: 'session-end', summary: outcome.summary ?? `Explorer stopped: ${outcome.stop}` });
     await session.idle(outcome.costUsd);

@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { type Contract, loadContract } from '@bugpatrol/contract';
 import { type AppCommand, type AppConfig, ConfigError, InfrastructureError } from '@bugpatrol/core';
-import { type ReadOnlyProxy, startReadOnlyProxy, WriteLog } from '@bugpatrol/drivers';
+import { type ReadOnlyProxy, readOnlyOptions, startReadOnlyProxy, WriteLog } from '@bugpatrol/drivers';
 import type { Vars } from './vars.js';
 
 /** A secret capture shorter than this also matches ordinary numbers and words of the app's output. */
@@ -26,7 +26,7 @@ type RunningApp = {
    * endpoint inventory it has no endpoints, so only reads can go out.
    */
   contract?: Contract;
-  /** Read-only mode: the writes that it blocked, to give to the driver. */
+  /** Read-only mode: the requests that it blocked, to give to the driver. */
   writes?: WriteLog;
   stop(): Promise<void>;
 };
@@ -151,11 +151,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
       const upstream = opts.vars.resolveConfig(value);
       if (!URL.canParse(upstream) || !/^https?:$/.test(new URL(upstream).protocol))
         throw new ConfigError(`app.readOnly.proxy.${name} is not an http(s) URL: ${opts.vars.redact(upstream)}`);
-      const proxy = await startReadOnlyProxy(upstream, {
-        log: writes!,
-        websockets: app.readOnly!.websockets,
-        dropFrames: app.readOnly!.dropFrames.map((pattern) => new RegExp(pattern)),
-      });
+      const proxy = await startReadOnlyProxy(upstream, readOnlyOptions(app, writes)!);
       proxies.push(proxy);
       // Before the URL is a variable, which redaction would hide.
       report(`Read-only: {{${name}}} is ${proxy.url}, which passes only GET, HEAD and OPTIONS to the backend`);
@@ -206,7 +202,7 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
         }),
       );
       await closeProxies();
-      if (writes) report(`Read-only mode blocked ${writes.count} write(s) in this run`);
+      if (writes) report(`Bugpatrol blocked ${writes.count} request(s) in this run`);
     },
   };
 }

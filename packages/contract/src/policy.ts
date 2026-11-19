@@ -42,7 +42,7 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
   const allowedMethods = HTTP_METHODS.filter(
     (method) => connect.methods.includes(method) && (writesAllowed || READS.includes(method)),
   );
-  const deny = connect.deny.map(denyRule);
+  const denied = denyList(connect.deny);
   const skipped = contract.skipped.map(({ key, reason }) => {
     const space = key.indexOf(' ');
     return { method: key.slice(0, space) as HttpMethod, template: key.slice(space + 1), reason };
@@ -56,10 +56,8 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
     check(method, url) {
       const found = match(method, url);
       if (found && 'reason' in found) return { ok: false, reason: SKIPPED[found.reason] };
-      // The decoded path too: a server that decodes %2F must not reach a denied route.
-      const paths = [...(found ? [found.template] : []), decodedPath(url)];
-      const rule = deny.find((item) => (!item.method || item.method === method) && paths.some(item.test));
-      if (rule) return { ok: false, reason: `app.connect.deny has ${rule.glob}` };
+      const rule = denied(method, url, found?.template);
+      if (rule) return { ok: false, reason: `app.connect.deny has ${rule}` };
       if (!allowedMethods.includes(method)) {
         if (!writesAllowed && !READS.includes(method))
           return {
@@ -86,6 +84,21 @@ export function isLoopback(url: string): boolean {
     return false;
   }
   return hostname === 'localhost' || hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
+/**
+ * `app.connect.deny` as one test: the glob that a request matches, or
+ * undefined. It matches the path of `url`, on any host, and `template`, the
+ * path template of the endpoint, when there is one. The api request policy,
+ * the web and Electron drivers and the read-only proxies all use it.
+ */
+export function denyList(globs: string[]): (method: string, url: string, template?: string) => string | undefined {
+  const rules = globs.map(denyRule);
+  return (method, url, template) => {
+    // The decoded path too: a server that decodes %2F must not reach a denied route.
+    const paths = [...(template ? [template] : []), decodedPath(url)];
+    return rules.find((rule) => (!rule.method || rule.method === method.toUpperCase()) && paths.some(rule.test))?.glob;
+  };
 }
 
 /** `[METHOD] /path`: `*` is one segment or a part of one, and a `**` segment is any number of segments. */

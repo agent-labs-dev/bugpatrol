@@ -5,6 +5,7 @@ import { type AddressInfo, createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { denyList } from '@bugpatrol/contract';
 import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ElectronDriver } from './electron.js';
@@ -102,6 +103,32 @@ async function writeEverything(driver: Driver): Promise<{ title?: string; blocke
 
 const readOnly = () => ({ log: new WriteLog(), websockets: 'block' as const, dropFrames: [] });
 
+/** What `app.connect.deny` alone asks of a driver: writes go out, less the matching requests. */
+const denyOnly = (globs: string[]) => ({
+  log: new WriteLog(),
+  allowWrites: true as const,
+  websockets: 'pass' as const,
+  dropFrames: [],
+  deny: denyList(globs),
+});
+
+/** A browser with the app open, standing in for an Electron app: returns its CDP endpoint. */
+async function cdpApp(url: string): Promise<string> {
+  const probe = createNetServer();
+  await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise((done) => probe.close(done));
+  const profile = await mkdtemp(join(tmpdir(), 'bugpatrol-readonly-'));
+  cleanups.push(() => rm(profile, { recursive: true, force: true }));
+  const app = await chromium.launchPersistentContext(profile, {
+    headless: true,
+    args: [`--remote-debugging-port=${port}`, '--disable-gpu'],
+  });
+  cleanups.push(() => app.close());
+  await app.pages()[0]!.goto(`${url}/`);
+  return `http://127.0.0.1:${port}`;
+}
+
 async function proxy(upstream: string, options: Partial<Parameters<typeof startReadOnlyProxy>[1]> = {}) {
   const log = new WriteLog();
   const started = await startReadOnlyProxy(upstream, { log, websockets: 'block', dropFrames: [], ...options });
@@ -130,6 +157,19 @@ describe('the read-only proxy', () => {
     expect(lines[0]).toMatch(new RegExp(`^POST ${api.url}/v1/items/1\\?token=\\[redacted\\] at \\d{4}-`));
     expect(lines.join('\n')).not.toContain('secret-value');
     expect(log.drain()).toEqual([]);
+  });
+
+  it('answers a request that app.connect.deny matches with a 403, read or write', async () => {
+    const api = await backend();
+    const { url, log } = await proxy(`${api.url}/v1`, { deny: denyList(['/v1/billing/**']) });
+    expect((await fetch(`${url}/billing/plans`)).status).toBe(403);
+    expect((await fetch(`${url}/items`)).status).toBe(200);
+    expect(api.seen).toEqual([`GET /v1/items ${new URL(api.url).host}`]);
+    expect(log.drain()).toEqual([
+      expect.stringMatching(
+        /^GET http:\/\/127\.0\.0\.1:\d+\/v1\/billing\/plans at .*: app.connect.deny has \/v1\/billing\/\*\*$/,
+      ),
+    ]);
   });
 
   it('refuses a WebSocket by default, and logs it', async () => {
@@ -187,19 +227,7 @@ describe('read-only mode in a browser', () => {
 
   it('electron: aborts the writes of an app it attached to over CDP', { timeout: 60_000 }, async () => {
     const api = await backend();
-    const probe = createNetServer();
-    await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
-    const port = (probe.address() as AddressInfo).port;
-    await new Promise((done) => probe.close(done));
-    const profile = await mkdtemp(join(tmpdir(), 'bugpatrol-readonly-'));
-    cleanups.push(() => rm(profile, { recursive: true, force: true }));
-    const app = await chromium.launchPersistentContext(profile, {
-      headless: true,
-      args: [`--remote-debugging-port=${port}`, '--disable-gpu'],
-    });
-    cleanups.push(() => app.close());
-    await app.pages()[0]!.goto(`${api.url}/`);
-    const driver = new ElectronDriver(`http://127.0.0.1:${port}`, [], undefined, readOnly());
+    const driver = new ElectronDriver(await cdpApp(api.url), [], undefined, readOnly());
     cleanups.push(() => driver.close());
     await driver.connect();
     // The page was open before Bugpatrol attached: its requests are held back from now on.
@@ -208,6 +236,46 @@ describe('read-only mode in a browser', () => {
     expect(blocked.filter((line) => line.startsWith('POST'))).toHaveLength(3);
     expect(api.seen.filter((line) => /^(POST|PUT|PATCH|DELETE|UPGRADE) /.test(line))).toEqual([]);
     expect(blocked).toContainEqual(expect.stringMatching(/^WEBSOCKET /));
+  });
+});
+
+describe('app.connect.deny in a browser', () => {
+  const host = (url: string) => new URL(url).host;
+
+  it('web: aborts each request that a glob matches, and lets every other write through', {
+    timeout: 60_000,
+  }, async () => {
+    const api = await backend();
+    const options = denyOnly(['POST /api/items', 'POST /api/form']);
+    const driver = new WebDriver({ url: `${api.url}/`, viewport: { width: 640, height: 400 }, readOnly: options });
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { title, blocked } = await writeEverything(driver);
+    expect(title).toBe('read GET');
+    expect(api.seen.filter((line) => !line.startsWith('GET / '))).toEqual([
+      `GET /api/items ${host(api.url)}`,
+      `POST /api/beacon ${host(api.url)}`,
+      expect.stringMatching(/^UPGRADE \/sync/),
+    ]);
+    expect(blocked).toEqual([
+      expect.stringMatching(/^POST .*\/api\/items\?token=\[redacted\] at .*: app.connect.deny has POST \/api\/items$/),
+      expect.stringMatching(/^POST .*\/api\/form at .*: app.connect.deny has POST \/api\/form$/),
+    ]);
+  });
+
+  it('electron: aborts the matching requests of an app it attached to over CDP', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const driver = new ElectronDriver(await cdpApp(api.url), [], undefined, denyOnly(['POST /api/items']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { blocked } = await writeEverything(driver);
+    expect(blocked).toEqual([
+      expect.stringMatching(/^POST .*\/api\/items\?token=\[redacted\] at .*: app.connect.deny has POST \/api\/items$/),
+    ]);
+    expect(api.seen.filter((line) => line.startsWith('POST'))).toEqual([
+      `POST /api/beacon ${host(api.url)}`,
+      `POST /api/form ${host(api.url)}`,
+    ]);
   });
 });
 

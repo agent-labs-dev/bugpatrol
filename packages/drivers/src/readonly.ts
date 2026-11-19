@@ -8,18 +8,26 @@ import type { BrowserContext } from 'playwright';
 /** The methods that read-only mode lets reach the backend. */
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/**
+ * What a driver holds back from the backend. Without `allowWrites`, only
+ * reads go out (`app.readOnly`). `deny` names the `app.connect.deny` glob
+ * that a request matches; a matching request never goes out, read or write.
+ */
 export type ReadOnlyOptions = {
   log: WriteLog;
+  /** Writes go out, less those that `deny` matches: `app.connect.deny` without read-only mode. */
+  allowWrites?: true;
+  deny?: (method: string, url: string) => string | undefined;
   /** `block` refuses every WebSocket; `pass` lets it through, less the client frames that `dropFrames` matches. */
   websockets: 'block' | 'pass';
   dropFrames: RegExp[];
 };
 
 /**
- * A write that read-only mode kept from the backend. `method` is `WEBSOCKET` for a refused socket, `FRAME` for a
- * dropped frame and `WORKER` for a refused worker.
+ * A request that Bugpatrol kept from the backend. `method` is `WEBSOCKET` for a refused socket, `FRAME` for a
+ * dropped frame and `WORKER` for a refused worker. `rule` is the `app.connect.deny` glob it matched, if any.
  */
-export type BlockedWrite = { at: string; method: string; url: string };
+export type BlockedWrite = { at: string; method: string; url: string; rule?: string };
 
 /** The URL with each query value hidden, since a query can carry a token. */
 export function redactQuery(url: string): string {
@@ -35,22 +43,24 @@ export function redactQuery(url: string): string {
   return `${parsed.href}?${names.map((name) => `${name}=[redacted]`).join('&')}`;
 }
 
-/** Every write that read-only mode blocked in a run. */
+/** Every request that read-only mode or `app.connect.deny` blocked in a run. */
 export class WriteLog {
   private readonly blocked: BlockedWrite[] = [];
   private drained = 0;
 
-  record(method: string, url: string): void {
-    this.blocked.push({ at: new Date().toISOString(), method, url: redactQuery(url) });
+  record(method: string, url: string, rule?: string): void {
+    this.blocked.push({ at: new Date().toISOString(), method, url: redactQuery(url), ...(rule ? { rule } : {}) });
   }
 
   get count(): number {
     return this.blocked.length;
   }
 
-  /** One line for each write blocked since the last call. */
+  /** One line for each request blocked since the last call. */
   drain(): string[] {
-    const lines = this.blocked.slice(this.drained).map(({ at, method, url }) => `${method} ${url} at ${at}`);
+    const lines = this.blocked
+      .slice(this.drained)
+      .map(({ at, method, url, rule }) => `${method} ${url} at ${at}${rule ? `: app.connect.deny has ${rule}` : ''}`);
     this.drained = this.blocked.length;
     return lines;
   }
@@ -62,8 +72,9 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
 };
 
 /**
- * Holds back the writes of a browser: every request but a read is aborted,
- * and WebSockets are refused or have their matching client frames dropped.
+ * Holds back the writes of a browser: every request that `deny` matches is
+ * aborted, and so is every request but a read unless `allowWrites` is set.
+ * WebSockets are refused or have their matching client frames dropped.
  * Routes apply to pages and requests made after this call; a service worker's
  * own requests bypass them, so a web context blocks service workers. WebSocket
  * routes do not reach a dedicated or shared worker, so while a WebSocket rule
@@ -72,8 +83,9 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
   await context.route('**/*', async (route) => {
     const request = route.request();
-    if (SAFE.has(request.method())) return route.continue();
-    options.log.record(request.method(), request.url());
+    const rule = options.deny?.(request.method(), request.url());
+    if (!rule && (options.allowWrites || SAFE.has(request.method()))) return route.continue();
+    options.log.record(request.method(), request.url(), rule);
     await route.abort('blockedbyclient');
   });
   if (options.websockets === 'pass' && !options.dropFrames.length) return;
@@ -184,8 +196,9 @@ export type ReadOnlyProxy = { url: string; close(): Promise<void> };
 /**
  * A loopback reverse proxy to `upstream` for an app that talks to its
  * backend itself. Reads go through; any other method gets a 405 and is
- * logged. A WebSocket upgrade is refused, or tunnelled with the matching
- * client frames dropped.
+ * logged, and a request that `deny` matches gets a 403 and is logged. A
+ * WebSocket upgrade is refused, or tunnelled with the matching client
+ * frames dropped.
  */
 export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOptions): Promise<ReadOnlyProxy> {
   const base = new URL(upstream);
@@ -196,11 +209,17 @@ export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOpti
 
   const server = createServer((request, response) => {
     const method = request.method ?? 'GET';
-    if (!SAFE.has(method)) {
-      options.log.record(method, target(request.url));
+    const rule = options.deny?.(method, target(request.url));
+    if (rule || (!options.allowWrites && !SAFE.has(method))) {
+      options.log.record(method, target(request.url), rule);
       request.resume();
-      response.writeHead(405, { allow: 'GET, HEAD, OPTIONS', 'content-type': 'text/plain' });
-      response.end('Bugpatrol read-only mode blocked this write.\n');
+      if (rule) {
+        response.writeHead(403, { 'content-type': 'text/plain' });
+        response.end(`Bugpatrol blocked this request: app.connect.deny has ${rule}.\n`);
+      } else {
+        response.writeHead(405, { allow: 'GET, HEAD, OPTIONS', 'content-type': 'text/plain' });
+        response.end('Bugpatrol read-only mode blocked this write.\n');
+      }
       return;
     }
     const outgoing = (secure ? httpsRequest : httpRequest)(

@@ -28,7 +28,7 @@ export type WebOptions = {
   headless?: boolean;
   /** Origins besides the app's own that the explorer may be on, e.g. a sign-in provider. */
   allowedOrigins?: string[];
-  /** Only reads reach the backend: other requests are aborted and logged. */
+  /** What Bugpatrol holds back (read-only mode, `app.connect.deny`): such a request is aborted and logged. */
   readOnly?: ReadOnlyOptions;
   /** How long the first page load may take, for a dev server that builds the app on its first request. */
   loadTimeoutMs?: number;

@@ -55,7 +55,7 @@ it('reports writes blocked while replaying a routine with assertions', { timeout
     });
     expect(replayError).toBe(false);
     expect(app.writes?.count).toBe(1);
-    expect(outcome.summary).toContain('Read-only mode blocked 1 write(s).');
+    expect(outcome.summary).toContain('Bugpatrol blocked 1 request(s).');
     expect((await workspace.readEvents(record.id)).filter((event) => event.kind === 'write-blocked')).toHaveLength(1);
   } finally {
     await driver.close();

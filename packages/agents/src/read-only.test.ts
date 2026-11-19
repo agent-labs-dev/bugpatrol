@@ -62,9 +62,9 @@ it('keeps the writes of a cli app from its backend, and reports each one', { tim
     expect(outputs[0]).toContain('200');
     expect(outputs[1]).toContain('405');
     expect(outputs[1]).toMatch(
-      /Writes blocked by read-only mode[^\n]*:\n- POST http:\/\/127\.0\.0\.1:\d+\/v1\/items\?token=\[redacted\]/,
+      /Requests blocked by read-only mode or app.connect.deny[^\n]*:\n- POST http:\/\/127\.0\.0\.1:\d+\/v1\/items\?token=\[redacted\]/,
     );
-    expect(outcome.summary).toContain('Read-only mode blocked 2 write(s).');
+    expect(outcome.summary).toContain('Bugpatrol blocked 2 request(s).');
     const events = await session.workspace.readEvents(record.id);
     expect(events.filter((event) => event.kind === 'write-blocked')).toHaveLength(2);
     expect((await session.workspace.readSession(record.id))?.writesBlocked).toBe(2);

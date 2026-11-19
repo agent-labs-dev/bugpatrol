@@ -3,7 +3,7 @@ import { ConfigError, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildContract, type Contract } from './contract.js';
 import { loadSpec } from './load.js';
-import { requestPolicy } from './policy.js';
+import { denyList, requestPolicy } from './policy.js';
 
 let contract: Contract;
 beforeAll(async () => {
@@ -57,6 +57,16 @@ describe('requestPolicy', () => {
     });
     expect(guarded.check('PATCH', '/items/7').ok).toBe(true);
     expect(() => policy('http://127.0.0.1:8000', { deny: ['admin/**'] })).toThrow(ConfigError);
+  });
+
+  it('denyList matches the path of a URL on any host, and names the glob', () => {
+    const denied = denyList(['POST /billing/checkout/**', '/admin/*']);
+    expect(denied('POST', 'https://app.test/billing/checkout/session?plan=pro')).toBe('POST /billing/checkout/**');
+    expect(denied('post', 'https://pay.other.test/billing/checkout')).toBe('POST /billing/checkout/**');
+    expect(denied('GET', 'https://app.test/billing/checkout/session')).toBeUndefined();
+    expect(denied('GET', 'http://127.0.0.1:3000/admin/users')).toBe('/admin/*');
+    expect(denied('POST', 'https://app.test/billing/plans')).toBeUndefined();
+    expect(() => denyList(['billing/**'])).toThrow(ConfigError);
   });
 
   it('%2F does not escape a deny glob', () => {

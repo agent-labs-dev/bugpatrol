@@ -70,6 +70,17 @@ describe('parseConfig', () => {
     });
   });
 
+  it('applies app.connect.deny to a CLI, desktop or mobile app only through a read-only proxy', () => {
+    const app = (platform: string, readOnly?: unknown) =>
+      parseConfig({
+        version: 1,
+        app: { platform, connect: { url: 'http://127.0.0.1:3000', deny: ['POST /billing/**'] }, readOnly },
+      });
+    expect(() => app('cli')).toThrow(/app.readOnly.proxy.*app.connect.deny/s);
+    expect(app('cli', { proxy: { API: 'https://api.test' } }).app.connect.deny).toEqual(['POST /billing/**']);
+    for (const platform of ['web', 'electron', 'api']) expect(() => app(platform)).not.toThrow();
+  });
+
   it('rejects an unknown version rather than guessing', () => {
     expect(() => parseConfig({ ...minimal, version: 2 })).toThrow(ConfigError);
   });

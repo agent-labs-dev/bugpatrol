@@ -41,7 +41,7 @@ it('reports a native app write blocked by its read-only proxy in the session sum
       },
     };
     const outcome = await runExplorer(session, runtime);
-    expect(outcome.summary).toContain('Read-only mode blocked 1 write(s).');
+    expect(outcome.summary).toContain('Bugpatrol blocked 1 request(s).');
     expect((await workspace.readEvents(record.id)).filter((event) => event.kind === 'write-blocked')).toHaveLength(1);
   } finally {
     await app.stop();

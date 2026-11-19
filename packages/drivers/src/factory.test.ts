@@ -3,7 +3,7 @@ import { bugpatrolConfigSchema, ConfigError } from '@bugpatrol/core';
 import { describe, expect, it } from 'vitest';
 import { credentialSets } from './api.js';
 import { CliDriver } from './cli.js';
-import { apiCredentials, createDriver } from './factory.js';
+import { apiCredentials, createDriver, readOnlyOptions } from './factory.js';
 
 const vars = (value: string) => value;
 
@@ -55,6 +55,21 @@ describe('createDriver', () => {
       app: { platform: 'web', connect: { url: 'http://127.0.0.1:8081', loadTimeoutMs: 180_000 } },
     });
     expect(createDriver(config, vars)).toMatchObject({ options: { loadTimeoutMs: 180_000 } });
+  });
+
+  it('holds back the requests app.connect.deny matches, and writes too only in read-only mode', () => {
+    const app = (extra: { connect?: object; readOnly?: boolean }) =>
+      bugpatrolConfigSchema.parse({
+        version: 1,
+        app: { platform: 'web', ...extra, connect: { url: 'http://127.0.0.1:3000', ...extra.connect } },
+      }).app;
+    expect(readOnlyOptions(app({}))).toBeUndefined();
+    const denied = readOnlyOptions(app({ connect: { deny: ['POST /billing/**'] } }));
+    expect(denied).toMatchObject({ allowWrites: true, websockets: 'pass', dropFrames: [] });
+    expect(denied?.deny?.('POST', 'https://app.test/billing/top-up')).toBe('POST /billing/**');
+    const both = readOnlyOptions(app({ connect: { deny: ['/admin/**'] }, readOnly: true }));
+    expect(both?.allowWrites).toBeUndefined();
+    expect(both?.deny?.('GET', 'https://app.test/admin/users')).toBe('/admin/**');
   });
 
   it('runs a CLI app from the source of the build', () => {

@@ -144,7 +144,7 @@ export interface Driver {
   onControlEvent?: (event: ControlEvent) => void;
   interrupt?(): void;
   readonly platform: Platform;
-  /** Read-only mode: every write that Bugpatrol kept from the backend in this run. */
+  /** Read-only mode and `app.connect.deny`: every request that Bugpatrol kept from the backend in this run. */
   readonly writes?: WriteLog;
   /** Connect to an app that `app.setup` already started. */
   connect(): Promise<void>;
