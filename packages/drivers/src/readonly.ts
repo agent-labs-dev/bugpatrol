@@ -81,11 +81,30 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
  * routes do not reach a dedicated or shared worker, so while a deny list or a
  * read-only WebSocket rule applies, pages cannot start one. A route does not see
  * the hops of a redirect either, so with a deny list each page also watches
- * the redirects it receives and fails one whose next request `deny` matches.
+ * the redirects it receives, from before its first request, and fails one whose next request `deny` matches.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
+  const watchRedirects = options.deny && redirectGuard(context, options.log, options.deny);
+  if (watchRedirects) {
+    // A watch started while a request is in flight misses that request, so each page is watched as soon as it
+    // exists, and again before any request that finds it unwatched.
+    context.on('page', (page) => void watchRedirects(page).catch(() => undefined));
+    await Promise.all(context.pages().map(watchRedirects));
+  }
   await context.route('**/*', async (route) => {
     const request = route.request();
+    if (watchRedirects) {
+      // No page exists yet for the first navigation of a popup, and a worker's request has no frame: a worker is
+      // refused whenever a deny list applies.
+      const page = (() => {
+        try {
+          return request.frame().page();
+        } catch {
+          return undefined;
+        }
+      })();
+      if (page) await watchRedirects(page).catch(() => undefined);
+    }
     const rule = options.deny?.(request.method(), request.url());
     if (!rule && (options.allowWrites || SAFE.has(request.method()))) return route.continue();
     options.log.record(request.method(), request.url(), rule);
@@ -93,7 +112,6 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
   });
   const readOnlySockets = options.websockets === 'block' || options.dropFrames.length > 0;
   if (!readOnlySockets && !options.deny) return;
-  if (options.deny) await guardRedirects(context, options.log, options.deny);
   await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) => options.log.record('WORKER', url));
   await context.addInitScript(refuseWorkers);
   await context.routeWebSocket(/.*/, async (socket) => {
@@ -126,16 +144,17 @@ function redirectedMethod(method: string, status: number): string {
 }
 
 /**
- * Chromium follows a redirect on its own, so `context.route` never sees the second hop. Each page
- * therefore watches its responses, and a redirect to a request that `deny` matches fails
- * before the browser sends it.
+ * Chromium follows a redirect on its own, so `context.route` never sees the second hop. A page
+ * therefore watches its responses, and a redirect to a request that `deny` matches fails before the
+ * browser sends it. The returned function starts the watch of a page once.
  */
-async function guardRedirects(
+function redirectGuard(
   context: BrowserContext,
   log: WriteLog,
   deny: NonNullable<ReadOnlyOptions['deny']>,
-): Promise<void> {
-  const watch = async (page: Page) => {
+): (page: Page) => Promise<void> {
+  const watched = new WeakMap<Page, Promise<void>>();
+  const start = async (page: Page) => {
     const session: CDPSession = await context.newCDPSession(page);
     session.on('Fetch.requestPaused' as never, async (event: PausedResponse) => {
       try {
@@ -158,8 +177,14 @@ async function guardRedirects(
     });
     await session.send('Fetch.enable' as never, { patterns: [{ urlPattern: '*', requestStage: 'Response' }] } as never);
   };
-  context.on('page', (page) => void watch(page).catch(() => undefined));
-  await Promise.all(context.pages().map(watch));
+  return (page) => {
+    let started = watched.get(page);
+    if (!started) {
+      started = start(page);
+      watched.set(page, started);
+    }
+    return started;
+  };
 }
 
 /** Runs in each frame before its scripts: replaces the worker constructors with ones that log and throw. */

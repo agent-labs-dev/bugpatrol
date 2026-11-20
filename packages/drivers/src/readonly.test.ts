@@ -346,6 +346,53 @@ describe('app.connect.deny against what a route cannot see', () => {
     ]);
   });
 
+  it('fails a redirect of a request that a popup sends after it opened', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const [popup] = await Promise.all([context.waitForEvent('page'), page.evaluate((target) => open(target), url)]);
+    await popup.waitForLoadState();
+    await popup.evaluate(() => fetch('/start', { method: 'POST' }).catch(() => undefined));
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([expect.stringMatching(/^POST .*\/billing\/checkout at /)]);
+  });
+
+  it('refuses a worker in an Electron window it attached to', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const endpoint = await cdpApp(api.url);
+    const driver = new ElectronDriver(endpoint, [], undefined, denyOnly(['GET /sync']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const observer = await chromium.connectOverCDP(endpoint);
+    cleanups.push(() => observer.close());
+    const outcome = await observer
+      .contexts()[0]!
+      .pages()[0]!
+      .evaluate(() => {
+        try {
+          new Worker(URL.createObjectURL(new Blob(['new WebSocket("ws://" + location.host + "/sync")'])));
+          return 'started';
+        } catch {
+          return 'refused';
+        }
+      });
+    expect(outcome).toBe('refused');
+    expect(api.seen.filter((line) => line.startsWith('UPGRADE'))).toEqual([]);
+  });
+
   it('refuses a worker, whose WebSockets no route reaches', { timeout: 60_000 }, async () => {
     const api = await backend();
     const browser = await chromium.launch({ headless: true });

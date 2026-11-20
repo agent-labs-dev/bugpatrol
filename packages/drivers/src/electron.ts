@@ -89,9 +89,9 @@ export class ElectronDriver extends WebDriver {
     const { readOnly } = this.options;
     if (readOnly) await guardBrowser(this.context, readOnly);
     this.page = await this.choosePage();
-    // WebSocket routes apply from a page's next load, and a socket opened before connect is not
-    // held back at all, so each app page loads again.
-    if (readOnly && (readOnly.websockets === 'block' || readOnly.dropFrames.length)) {
+    // WebSocket routes and the worker guard apply from a page's next load, and a socket opened before
+    // connect is not held back at all, so each app page loads again.
+    if (readOnly && (readOnly.websockets === 'block' || readOnly.dropFrames.length || readOnly.deny)) {
       for (const page of this.context.pages()) {
         if (URL.canParse(page.url()) && !browserOwnedProtocols.has(new URL(page.url()).protocol)) await page.reload();
       }
