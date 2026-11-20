@@ -137,6 +137,9 @@ type PausedResponse = {
   responseHeaders?: { name: string; value: string }[];
 };
 
+/** The statuses on which Chromium follows a Location header: any other 3xx is an ordinary response. */
+const browserRedirects = new Set([301, 302, 303, 307, 308]);
+
 /** The method of the request that follows a redirect (RFC 9110 15.4). */
 function redirectedMethod(method: string, status: number): string {
   if (status === 303) return method === 'HEAD' ? 'HEAD' : 'GET';
@@ -154,23 +157,28 @@ function redirectGuard(
   deny: NonNullable<ReadOnlyOptions['deny']>,
 ): (page: Page) => Promise<void> {
   const watched = new WeakMap<Page, Promise<void>>();
+  /** The request a redirect leads to when `deny` matches it. A Location that is no URL leads nowhere: the browser fails that itself. */
+  const deniedRedirect = ({ request, responseStatusCode: status = 0, responseHeaders }: PausedResponse) => {
+    const location = responseHeaders?.find(({ name }) => name.toLowerCase() === 'location')?.value;
+    if (!location || !browserRedirects.has(status) || !URL.canParse(location, request.url)) return undefined;
+    const url = new URL(location, request.url).href;
+    const method = redirectedMethod(request.method, status);
+    const rule = deny(method, url);
+    return rule ? { method, url, rule } : undefined;
+  };
   const start = async (page: Page) => {
     const session: CDPSession = await context.newCDPSession(page);
     session.on('Fetch.requestPaused' as never, async (event: PausedResponse) => {
+      const denied = deniedRedirect(event);
+      if (denied) log.record(denied.method, denied.url, denied.rule);
       try {
-        const { requestId, request, responseStatusCode: status = 0 } = event;
-        const location = event.responseHeaders?.find(({ name }) => name.toLowerCase() === 'location')?.value;
-        if (location && status >= 300 && status < 400) {
-          const next = new URL(location, request.url).href;
-          const method = redirectedMethod(request.method, status);
-          const rule = deny(method, next);
-          if (rule) {
-            log.record(method, next, rule);
-            await session.send('Fetch.failRequest' as never, { requestId, errorReason: 'BlockedByClient' } as never);
-            return;
-          }
-        }
-        await session.send('Fetch.continueResponse' as never, { requestId } as never);
+        // Exactly one answer, whatever the inspection found: a paused request that gets none hangs its navigation.
+        if (denied)
+          await session.send(
+            'Fetch.failRequest' as never,
+            { requestId: event.requestId, errorReason: 'BlockedByClient' } as never,
+          );
+        else await session.send('Fetch.continueResponse' as never, { requestId: event.requestId } as never);
       } catch {
         // The page closed, or the request ended, before the answer.
       }

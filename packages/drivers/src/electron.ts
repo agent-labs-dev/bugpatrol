@@ -19,6 +19,19 @@ const browserOwnedProtocols = new Set([
   'devtools:',
 ]);
 
+/** Loads a page again with a GET. The hash is set after the load, since a navigation that differs from the page's address by nothing but a hash loads nothing. */
+async function loadAgain(page: Page): Promise<void> {
+  const address = new URL(page.url());
+  const { hash } = address;
+  address.hash = '';
+  await page.goto(address.href);
+  if (hash) {
+    await page.evaluate((next) => {
+      location.hash = next;
+    }, hash);
+  }
+}
+
 /** An app scheme or a loopback dev server, rather than a remote page a window happens to show (an OAuth window). */
 function local(url: URL): boolean {
   return (url.protocol !== 'http:' && url.protocol !== 'https:') || isLoopback(url.href);
@@ -90,10 +103,11 @@ export class ElectronDriver extends WebDriver {
     if (readOnly) await guardBrowser(this.context, readOnly);
     this.page = await this.choosePage();
     // WebSocket routes and the worker guard apply from a page's next load, and a socket opened before
-    // connect is not held back at all, so each app page loads again.
+    // connect is not held back at all, so each app page loads again. A reload would send a page's POST
+    // a second time, so the load is a GET of its address.
     if (readOnly && (readOnly.websockets === 'block' || readOnly.dropFrames.length || readOnly.deny)) {
       for (const page of this.context.pages()) {
-        if (URL.canParse(page.url()) && !browserOwnedProtocols.has(new URL(page.url()).protocol)) await page.reload();
+        if (URL.canParse(page.url()) && !browserOwnedProtocols.has(new URL(page.url()).protocol)) await loadAgain(page);
       }
     }
     this.home = new URL(this.page.url());

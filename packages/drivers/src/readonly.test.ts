@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { denyList } from '@bugpatrol/contract';
-import { chromium } from 'playwright';
+import { chromium, type Page } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ElectronDriver } from './electron.js';
 import { guardBrowser, type ReadOnlyProxy, redactQuery, startReadOnlyProxy, WriteLog } from './readonly.js';
@@ -113,7 +113,7 @@ const denyOnly = (globs: string[]) => ({
 });
 
 /** A browser with the app open, standing in for an Electron app: returns its CDP endpoint. */
-async function cdpApp(url: string): Promise<string> {
+async function cdpApp(url: string, prepare?: (page: Page) => Promise<void>): Promise<string> {
   const probe = createNetServer();
   await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
   const port = (probe.address() as AddressInfo).port;
@@ -126,6 +126,7 @@ async function cdpApp(url: string): Promise<string> {
   });
   cleanups.push(() => app.close());
   await app.pages()[0]!.goto(`${url}/`);
+  await prepare?.(app.pages()[0]!);
   return `http://127.0.0.1:${port}`;
 }
 
@@ -285,6 +286,20 @@ describe('app.connect.deny in a browser', () => {
     ]);
   });
 
+  it('electron: attaches to a page that a POST reached without sending the POST again', {
+    timeout: 60_000,
+  }, async () => {
+    const api = await backend();
+    const app = await cdpApp(api.url, async (page) => {
+      await page.getByRole('button', { name: 'Submit' }).click();
+      await page.waitForURL('**/api/form');
+    });
+    const driver = new ElectronDriver(app, [], undefined, denyOnly(['POST /api/items']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    expect(api.seen.filter((line) => line.startsWith('POST /api/form'))).toHaveLength(1);
+  });
+
   it('web: refuses a WebSocket whose path a glob matches', { timeout: 60_000 }, async () => {
     const api = await backend();
     const driver = new WebDriver({
@@ -345,6 +360,75 @@ describe('app.connect.deny against what a route cannot see', () => {
       expect.stringMatching(/^POST .*\/billing\/checkout at .*: app.connect.deny has POST \/billing\/\*\*$/),
     ]);
   });
+
+  /** A server that answers `/start` with the given status and Location, and everything else with a page. */
+  async function redirecting(status: number, location: string) {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(status, { location }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    return {
+      seen,
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      context: await browser.newContext(),
+    };
+  }
+
+  /** Sends `method` to `/start` from a page behind the guard: how the request ended, and what the guard logged. */
+  async function sendThroughGuard(status: number, location: string, method: string, glob: string) {
+    const { seen, url, context } = await redirecting(status, location);
+    const options = denyOnly([glob]);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const outcome = await page.evaluate(
+      (verb) =>
+        Promise.race([
+          fetch('/start', { method: verb, body: verb === 'POST' ? 'x' : undefined }).then(
+            () => 'followed',
+            () => 'failed',
+          ),
+          new Promise<string>((done) => setTimeout(() => done('hung'), 8000)),
+        ]),
+      method,
+    );
+    return { outcome, seen, logged: options.log.drain() };
+  }
+
+  it('lets a 3xx that the browser does not follow through, whatever its Location', { timeout: 60_000 }, async () => {
+    const { outcome, seen, logged } = await sendThroughGuard(300, '/billing/checkout', 'POST', 'POST /billing/**');
+    expect(outcome).toBe('followed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(logged).toEqual([]);
+  });
+
+  it('answers a response whose Location is no URL, rather than leaving the request paused', {
+    timeout: 60_000,
+  }, async () => {
+    const { outcome, logged } = await sendThroughGuard(307, 'http://exa mple.com', 'POST', 'POST /billing/**');
+    expect(outcome).not.toBe('hung');
+    expect(logged).toEqual([]);
+  });
+
+  it.each([301, 302, 303])(
+    'rewrites a POST that a %i redirect turns into a GET before it asks `deny`',
+    { timeout: 60_000 },
+    async (status) => {
+      const passed = await sendThroughGuard(status, '/billing/checkout', 'POST', 'POST /billing/**');
+      expect(passed.outcome).toBe('followed');
+      expect(passed.seen).toContain('GET /billing/checkout');
+      expect(passed.logged).toEqual([]);
+      const failed = await sendThroughGuard(status, '/billing/checkout', 'POST', 'GET /billing/**');
+      expect(failed.outcome).toBe('failed');
+      expect(failed.logged).toEqual([expect.stringMatching(/^GET .*\/billing\/checkout at /)]);
+    },
+  );
 
   it('fails a redirect of a request that a popup sends after it opened', { timeout: 60_000 }, async () => {
     const seen: string[] = [];
