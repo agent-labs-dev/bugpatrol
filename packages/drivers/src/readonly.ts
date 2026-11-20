@@ -3,7 +3,7 @@ import { request as httpsRequest } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { connect as tlsConnect } from 'node:tls';
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext, CDPSession, Page } from 'playwright';
 
 /** The methods that read-only mode lets reach the backend. */
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -78,8 +78,10 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
  * refused or have their matching client frames dropped.
  * Routes apply to pages and requests made after this call; a service worker's
  * own requests bypass them, so a web context blocks service workers. WebSocket
- * routes do not reach a dedicated or shared worker, so while a read-only
- * WebSocket rule applies, pages cannot start one.
+ * routes do not reach a dedicated or shared worker, so while a deny list or a
+ * read-only WebSocket rule applies, pages cannot start one. A route does not see
+ * the hops of a redirect either, so with a deny list each page also watches
+ * the redirects it receives and fails one whose next request `deny` matches.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
   await context.route('**/*', async (route) => {
@@ -91,12 +93,9 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
   });
   const readOnlySockets = options.websockets === 'block' || options.dropFrames.length > 0;
   if (!readOnlySockets && !options.deny) return;
-  if (readOnlySockets) {
-    await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) =>
-      options.log.record('WORKER', url),
-    );
-    await context.addInitScript(refuseWorkers);
-  }
+  if (options.deny) await guardRedirects(context, options.log, options.deny);
+  await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) => options.log.record('WORKER', url));
+  await context.addInitScript(refuseWorkers);
   await context.routeWebSocket(/.*/, async (socket) => {
     // A WebSocket handshake is a GET.
     const rule = options.deny?.('GET', socket.url());
@@ -113,6 +112,56 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
   });
 }
 
+type PausedResponse = {
+  requestId: string;
+  request: { method: string; url: string };
+  responseStatusCode?: number;
+  responseHeaders?: { name: string; value: string }[];
+};
+
+/** The method of the request that follows a redirect (RFC 9110 15.4). */
+function redirectedMethod(method: string, status: number): string {
+  if (status === 303) return method === 'HEAD' ? 'HEAD' : 'GET';
+  return (status === 301 || status === 302) && method === 'POST' ? 'GET' : method;
+}
+
+/**
+ * Chromium follows a redirect on its own, so `context.route` never sees the second hop. Each page
+ * therefore watches its responses, and a redirect to a request that `deny` matches fails
+ * before the browser sends it.
+ */
+async function guardRedirects(
+  context: BrowserContext,
+  log: WriteLog,
+  deny: NonNullable<ReadOnlyOptions['deny']>,
+): Promise<void> {
+  const watch = async (page: Page) => {
+    const session: CDPSession = await context.newCDPSession(page);
+    session.on('Fetch.requestPaused' as never, async (event: PausedResponse) => {
+      try {
+        const { requestId, request, responseStatusCode: status = 0 } = event;
+        const location = event.responseHeaders?.find(({ name }) => name.toLowerCase() === 'location')?.value;
+        if (location && status >= 300 && status < 400) {
+          const next = new URL(location, request.url).href;
+          const method = redirectedMethod(request.method, status);
+          const rule = deny(method, next);
+          if (rule) {
+            log.record(method, next, rule);
+            await session.send('Fetch.failRequest' as never, { requestId, errorReason: 'BlockedByClient' } as never);
+            return;
+          }
+        }
+        await session.send('Fetch.continueResponse' as never, { requestId } as never);
+      } catch {
+        // The page closed, or the request ended, before the answer.
+      }
+    });
+    await session.send('Fetch.enable' as never, { patterns: [{ urlPattern: '*', requestStage: 'Response' }] } as never);
+  };
+  context.on('page', (page) => void watch(page).catch(() => undefined));
+  await Promise.all(context.pages().map(watch));
+}
+
 /** Runs in each frame before its scripts: replaces the worker constructors with ones that log and throw. */
 function refuseWorkers() {
   const scope = globalThis as unknown as Record<string, unknown> & { __bugpatrolBlockedWorker?: (url: string) => void };
@@ -121,7 +170,7 @@ function refuseWorkers() {
     const refused = class {
       constructor(url: string | URL) {
         scope.__bugpatrolBlockedWorker?.(new URL(String(url), location.href).href);
-        throw new DOMException('Bugpatrol read-only mode blocks workers', 'SecurityError');
+        throw new DOMException('Bugpatrol blocks workers while it holds requests back', 'SecurityError');
       }
     };
     Object.defineProperty(scope, name, { value: refused, writable: false, configurable: false });

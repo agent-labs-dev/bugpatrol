@@ -315,6 +315,59 @@ describe('app.connect.deny in a browser', () => {
   });
 });
 
+describe('app.connect.deny against what a route cannot see', () => {
+  it('fails a redirect to a denied request, and logs it', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const outcome = await page.evaluate(() =>
+      fetch('/start', { method: 'POST', body: 'payment' }).then(
+        () => 'followed',
+        () => 'failed',
+      ),
+    );
+    expect(outcome).toBe('failed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([
+      expect.stringMatching(/^POST .*\/billing\/checkout at .*: app.connect.deny has POST \/billing\/\*\*$/),
+    ]);
+  });
+
+  it('refuses a worker, whose WebSockets no route reaches', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['GET /sync']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(`${api.url}/`);
+    const outcome = await page.evaluate(() => {
+      try {
+        new SharedWorker(URL.createObjectURL(new Blob(['onconnect = () => {}'], { type: 'text/javascript' })));
+        return 'started';
+      } catch {
+        return 'refused';
+      }
+    });
+    expect(outcome).toBe('refused');
+    expect(options.log.drain()).toEqual([expect.stringMatching(/^WORKER blob:/)]);
+  });
+});
+
 describe('read-only mode in a browser worker', () => {
   it('keeps a worker from opening a WebSocket past the rules', { timeout: 60_000 }, async () => {
     const api = await backend();
