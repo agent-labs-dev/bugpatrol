@@ -80,8 +80,9 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
  * own requests bypass them, so a web context blocks service workers. WebSocket
  * routes do not reach a dedicated or shared worker, so while a deny list or a
  * read-only WebSocket rule applies, pages cannot start one. A route does not see
- * the hops of a redirect either, so with a deny list each page also watches
- * the redirects it receives, from before its first request, and fails one whose next request `deny` matches.
+ * the hops of a redirect either, so with a deny list each page, and each frame of it that runs in a process of its
+ * own, also watches the redirects it receives, from before its first request, and fails one whose next request
+ * `deny` matches.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
   const watchRedirects = options.deny && redirectGuard(context, options.log, options.deny);
@@ -146,10 +147,67 @@ function redirectedMethod(method: string, status: number): string {
   return (status === 301 || status === 302) && method === 'POST' ? 'GET' : method;
 }
 
+/** What a watch needs of a CDP target: a page's own session, or a frame target reached through it. */
+type Target = {
+  send(method: string, params?: object): Promise<unknown>;
+  on(method: string, handler: (params: never) => void): void;
+};
+
+const sessionTarget = (session: CDPSession): Target => ({
+  send: (method, params) => session.send(method as never, params as never),
+  on: (method, handler) => session.on(method as never, handler as never),
+});
+
+/**
+ * A target that `parent` attached to without a flat session: Playwright's CDPSession cannot address a child
+ * session, so commands and events travel wrapped in Target messages.
+ */
+function childTarget(parent: Target, sessionId: string): Target {
+  let next = 0;
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  const handlers = new Map<string, ((params: never) => void)[]>();
+  parent.on('Target.receivedMessageFromTarget', (event: { sessionId: string; message: string }) => {
+    if (event.sessionId !== sessionId) return;
+    const message = JSON.parse(event.message) as {
+      id?: number;
+      method?: string;
+      params?: never;
+      error?: { message: string };
+    };
+    const waiting = message.id === undefined ? undefined : pending.get(message.id);
+    if (waiting) {
+      pending.delete(message.id!);
+      if (message.error) waiting.reject(new Error(message.error.message));
+      else waiting.resolve(message);
+    } else if (message.method) for (const handler of handlers.get(message.method) ?? []) handler(message.params!);
+  });
+  parent.on('Target.detachedFromTarget', (event: { sessionId: string }) => {
+    if (event.sessionId !== sessionId) return;
+    for (const waiting of pending.values()) waiting.reject(new Error('The frame target detached'));
+    pending.clear();
+  });
+  return {
+    send: (method, params = {}) =>
+      new Promise((resolve, reject) => {
+        const id = ++next;
+        pending.set(id, { resolve, reject });
+        parent
+          .send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params }) })
+          .catch((error: Error) => {
+            pending.delete(id);
+            reject(error);
+          });
+      }),
+    on: (method, handler) => handlers.set(method, [...(handlers.get(method) ?? []), handler]),
+  };
+}
+
 /**
  * Chromium follows a redirect on its own, so `context.route` never sees the second hop. A page
  * therefore watches its responses, and a redirect to a request that `deny` matches fails before the
- * browser sends it. The returned function starts the watch of a page once.
+ * browser sends it. Under site isolation a cross-site frame is a target of its own whose requests the
+ * page's session never sees, so each target also attaches to the frames it starts, holding each until
+ * its watch is on. The returned function starts the watch of a page once.
  */
 function redirectGuard(
   context: BrowserContext,
@@ -166,25 +224,37 @@ function redirectGuard(
     const rule = deny(method, url);
     return rule ? { method, url, rule } : undefined;
   };
-  const start = async (page: Page) => {
-    const session: CDPSession = await context.newCDPSession(page);
-    session.on('Fetch.requestPaused' as never, async (event: PausedResponse) => {
+  const watch = async (target: Target) => {
+    target.on('Fetch.requestPaused', async (event: PausedResponse) => {
       const denied = deniedRedirect(event);
       if (denied) log.record(denied.method, denied.url, denied.rule);
       try {
         // Exactly one answer, whatever the inspection found: a paused request that gets none hangs its navigation.
         if (denied)
-          await session.send(
-            'Fetch.failRequest' as never,
-            { requestId: event.requestId, errorReason: 'BlockedByClient' } as never,
-          );
-        else await session.send('Fetch.continueResponse' as never, { requestId: event.requestId } as never);
+          await target.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+        else await target.send('Fetch.continueResponse', { requestId: event.requestId });
       } catch {
         // The page closed, or the request ended, before the answer.
       }
     });
-    await session.send('Fetch.enable' as never, { patterns: [{ urlPattern: '*', requestStage: 'Response' }] } as never);
+    target.on(
+      'Target.attachedToTarget',
+      async ({ sessionId, targetInfo }: { sessionId: string; targetInfo: { type: string } }) => {
+        const child = childTarget(target, sessionId);
+        try {
+          if (targetInfo.type === 'iframe') await watch(child);
+        } catch {
+          // The frame went away before its watch was on.
+        } finally {
+          // Every target the watch attached to waits for this, a worker too: workers are refused in the page.
+          await child.send('Runtime.runIfWaitingForDebugger').catch(() => undefined);
+        }
+      },
+    );
+    await target.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Response' }] });
+    await target.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: false });
   };
+  const start = async (page: Page) => watch(sessionTarget(await context.newCDPSession(page)));
   return (page) => {
     let started = watched.get(page);
     if (!started) {

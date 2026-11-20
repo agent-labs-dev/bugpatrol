@@ -361,6 +361,48 @@ describe('app.connect.deny against what a route cannot see', () => {
     ]);
   });
 
+  it('fails a denied redirect from a cross-site iframe in its own process', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      // The frame sends its POST as it loads, before a watch started after its first request could see it.
+      else if (request.url === '/frame')
+        response.end(
+          '<script>fetch("/start", { method: "POST" }).then(() => parent.postMessage("followed", "*"), () => parent.postMessage("failed", "*"))</script>',
+        );
+      else response.end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const port = (server.address() as AddressInfo).port;
+    const browser = await chromium.launch({ headless: true, args: ['--site-per-process'] });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(`http://127.0.0.1:${port}/`);
+    // localhost is another site than 127.0.0.1, so the frame gets its own renderer and CDP target.
+    const outcome = await page.evaluate(
+      (src) =>
+        new Promise<string>((done) => {
+          addEventListener('message', (event) => done(String(event.data)));
+          const child = document.createElement('iframe');
+          child.src = src;
+          document.body.append(child);
+        }),
+      `http://localhost:${port}/frame`,
+    );
+    expect(page.frames().map((frame) => new URL(frame.url()).hostname)).toEqual(['127.0.0.1', 'localhost']);
+    expect(outcome).toBe('failed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([
+      expect.stringMatching(/^POST .*\/billing\/checkout at .*: app.connect.deny has POST \/billing\/\*\*$/),
+    ]);
+  });
+
   /** A server that answers `/start` with the given status and Location, and everything else with a page. */
   async function redirecting(status: number, location: string) {
     const seen: string[] = [];
