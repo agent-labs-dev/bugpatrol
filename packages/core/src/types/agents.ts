@@ -783,7 +783,7 @@ export type AgentEventKind =
   | 'fix'
   | 'lesson'
   | 'usage'
-  /** Read-only mode kept a write of the app from its backend. */
+  /** Read-only mode or `app.connect.deny` kept a request of the app from its backend. */
   | 'write-blocked'
   | 'error';
 
@@ -867,7 +867,7 @@ export type SessionSummary = {
   screensFound: string[];
   candidates: number;
   issues: string[];
-  /** Read-only mode: the writes of the app that Bugpatrol kept from its backend in this session. */
+  /** Read-only mode and `app.connect.deny`: the requests of the app that Bugpatrol kept from its backend in this session. */
   writesBlocked?: number;
 };
 

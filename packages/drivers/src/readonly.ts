@@ -3,23 +3,31 @@ import { request as httpsRequest } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { connect as tlsConnect } from 'node:tls';
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext, CDPSession, Page } from 'playwright';
 
 /** The methods that read-only mode lets reach the backend. */
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/**
+ * What a driver holds back from the backend. Without `allowWrites`, only
+ * reads go out (`app.readOnly`). `deny` names the `app.connect.deny` glob
+ * that a request matches; a matching request never goes out, read or write.
+ */
 export type ReadOnlyOptions = {
   log: WriteLog;
+  /** Writes go out, less those that `deny` matches: `app.connect.deny` without read-only mode. */
+  allowWrites?: true;
+  deny?: (method: string, url: string) => string | undefined;
   /** `block` refuses every WebSocket; `pass` lets it through, less the client frames that `dropFrames` matches. */
   websockets: 'block' | 'pass';
   dropFrames: RegExp[];
 };
 
 /**
- * A write that read-only mode kept from the backend. `method` is `WEBSOCKET` for a refused socket, `FRAME` for a
- * dropped frame and `WORKER` for a refused worker.
+ * A request that Bugpatrol kept from the backend. `method` is `WEBSOCKET` for a refused socket, `FRAME` for a
+ * dropped frame and `WORKER` for a refused worker. `rule` is the `app.connect.deny` glob it matched, if any.
  */
-export type BlockedWrite = { at: string; method: string; url: string };
+export type BlockedWrite = { at: string; method: string; url: string; rule?: string };
 
 /** The URL with each query value hidden, since a query can carry a token. */
 export function redactQuery(url: string): string {
@@ -35,22 +43,24 @@ export function redactQuery(url: string): string {
   return `${parsed.href}?${names.map((name) => `${name}=[redacted]`).join('&')}`;
 }
 
-/** Every write that read-only mode blocked in a run. */
+/** Every request that read-only mode or `app.connect.deny` blocked in a run. */
 export class WriteLog {
   private readonly blocked: BlockedWrite[] = [];
   private drained = 0;
 
-  record(method: string, url: string): void {
-    this.blocked.push({ at: new Date().toISOString(), method, url: redactQuery(url) });
+  record(method: string, url: string, rule?: string): void {
+    this.blocked.push({ at: new Date().toISOString(), method, url: redactQuery(url), ...(rule ? { rule } : {}) });
   }
 
   get count(): number {
     return this.blocked.length;
   }
 
-  /** One line for each write blocked since the last call. */
+  /** One line for each request blocked since the last call. */
   drain(): string[] {
-    const lines = this.blocked.slice(this.drained).map(({ at, method, url }) => `${method} ${url} at ${at}`);
+    const lines = this.blocked
+      .slice(this.drained)
+      .map(({ at, method, url, rule }) => `${method} ${url} at ${at}${rule ? `: app.connect.deny has ${rule}` : ''}`);
     this.drained = this.blocked.length;
     return lines;
   }
@@ -62,27 +72,55 @@ const matches = (patterns: RegExp[], data: string | Buffer) => {
 };
 
 /**
- * Holds back the writes of a browser: every request but a read is aborted,
- * and WebSockets are refused or have their matching client frames dropped.
+ * Holds back the writes of a browser: every request that `deny` matches is
+ * aborted, and so is every request but a read unless `allowWrites` is set.
+ * A WebSocket whose handshake `deny` matches is refused; the others are
+ * refused or have their matching client frames dropped.
  * Routes apply to pages and requests made after this call; a service worker's
  * own requests bypass them, so a web context blocks service workers. WebSocket
- * routes do not reach a dedicated or shared worker, so while a WebSocket rule
- * applies, pages cannot start one.
+ * routes do not reach a dedicated or shared worker, so while a deny list or a
+ * read-only WebSocket rule applies, pages cannot start one. A route does not see
+ * the hops of a redirect either, so with a deny list each page, and each frame of it that runs in a process of its
+ * own, also watches the redirects it receives, from before its first request, and fails one whose next request
+ * `deny` matches.
  */
 export async function guardBrowser(context: BrowserContext, options: ReadOnlyOptions): Promise<void> {
+  const watchRedirects = options.deny && redirectGuard(context, options.log, options.deny);
+  if (watchRedirects) {
+    // A watch started while a request is in flight misses that request, so each page is watched as soon as it
+    // exists, and again before any request that finds it unwatched.
+    context.on('page', (page) => void watchRedirects(page).catch(() => undefined));
+    await Promise.all(context.pages().map(watchRedirects));
+  }
   await context.route('**/*', async (route) => {
     const request = route.request();
-    if (SAFE.has(request.method())) return route.continue();
-    options.log.record(request.method(), request.url());
+    if (watchRedirects) {
+      // No page exists yet for the first navigation of a popup, and a worker's request has no frame: a worker is
+      // refused whenever a deny list applies.
+      const page = (() => {
+        try {
+          return request.frame().page();
+        } catch {
+          return undefined;
+        }
+      })();
+      if (page) await watchRedirects(page).catch(() => undefined);
+    }
+    const rule = options.deny?.(request.method(), request.url());
+    if (!rule && (options.allowWrites || SAFE.has(request.method()))) return route.continue();
+    options.log.record(request.method(), request.url(), rule);
     await route.abort('blockedbyclient');
   });
-  if (options.websockets === 'pass' && !options.dropFrames.length) return;
+  const readOnlySockets = options.websockets === 'block' || options.dropFrames.length > 0;
+  if (!readOnlySockets && !options.deny) return;
   await context.exposeBinding('__bugpatrolBlockedWorker', (_source, url: string) => options.log.record('WORKER', url));
   await context.addInitScript(refuseWorkers);
   await context.routeWebSocket(/.*/, async (socket) => {
-    if (options.websockets === 'block') {
-      options.log.record('WEBSOCKET', socket.url());
-      await socket.close({ code: 1008, reason: 'Bugpatrol read-only mode' });
+    // A WebSocket handshake is a GET.
+    const rule = options.deny?.('GET', socket.url());
+    if (rule || options.websockets === 'block') {
+      options.log.record('WEBSOCKET', socket.url(), rule);
+      await socket.close({ code: 1008, reason: rule ? `app.connect.deny has ${rule}` : 'Bugpatrol read-only mode' });
       return;
     }
     const server = socket.connectToServer();
@@ -93,6 +131,140 @@ export async function guardBrowser(context: BrowserContext, options: ReadOnlyOpt
   });
 }
 
+type PausedResponse = {
+  requestId: string;
+  request: { method: string; url: string };
+  responseStatusCode?: number;
+  responseHeaders?: { name: string; value: string }[];
+};
+
+/** The statuses on which Chromium follows a Location header: any other 3xx is an ordinary response. */
+const browserRedirects = new Set([301, 302, 303, 307, 308]);
+
+/** The method of the request that follows a redirect (RFC 9110 15.4). */
+function redirectedMethod(method: string, status: number): string {
+  if (status === 303) return method === 'HEAD' ? 'HEAD' : 'GET';
+  return (status === 301 || status === 302) && method === 'POST' ? 'GET' : method;
+}
+
+/** What a watch needs of a CDP target: a page's own session, or a frame target reached through it. */
+type Target = {
+  send(method: string, params?: object): Promise<unknown>;
+  on(method: string, handler: (params: never) => void): void;
+};
+
+const sessionTarget = (session: CDPSession): Target => ({
+  send: (method, params) => session.send(method as never, params as never),
+  on: (method, handler) => session.on(method as never, handler as never),
+});
+
+/**
+ * A target that `parent` attached to without a flat session: Playwright's CDPSession cannot address a child
+ * session, so commands and events travel wrapped in Target messages.
+ */
+function childTarget(parent: Target, sessionId: string): Target {
+  let next = 0;
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  const handlers = new Map<string, ((params: never) => void)[]>();
+  parent.on('Target.receivedMessageFromTarget', (event: { sessionId: string; message: string }) => {
+    if (event.sessionId !== sessionId) return;
+    const message = JSON.parse(event.message) as {
+      id?: number;
+      method?: string;
+      params?: never;
+      error?: { message: string };
+    };
+    const waiting = message.id === undefined ? undefined : pending.get(message.id);
+    if (waiting) {
+      pending.delete(message.id!);
+      if (message.error) waiting.reject(new Error(message.error.message));
+      else waiting.resolve(message);
+    } else if (message.method) for (const handler of handlers.get(message.method) ?? []) handler(message.params!);
+  });
+  parent.on('Target.detachedFromTarget', (event: { sessionId: string }) => {
+    if (event.sessionId !== sessionId) return;
+    for (const waiting of pending.values()) waiting.reject(new Error('The frame target detached'));
+    pending.clear();
+  });
+  return {
+    send: (method, params = {}) =>
+      new Promise((resolve, reject) => {
+        const id = ++next;
+        pending.set(id, { resolve, reject });
+        parent
+          .send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params }) })
+          .catch((error: Error) => {
+            pending.delete(id);
+            reject(error);
+          });
+      }),
+    on: (method, handler) => handlers.set(method, [...(handlers.get(method) ?? []), handler]),
+  };
+}
+
+/**
+ * Chromium follows a redirect on its own, so `context.route` never sees the second hop. A page
+ * therefore watches its responses, and a redirect to a request that `deny` matches fails before the
+ * browser sends it. Under site isolation a cross-site frame is a target of its own whose requests the
+ * page's session never sees, so each target also attaches to the frames it starts, holding each until
+ * its watch is on. The returned function starts the watch of a page once.
+ */
+function redirectGuard(
+  context: BrowserContext,
+  log: WriteLog,
+  deny: NonNullable<ReadOnlyOptions['deny']>,
+): (page: Page) => Promise<void> {
+  const watched = new WeakMap<Page, Promise<void>>();
+  /** The request a redirect leads to when `deny` matches it. A Location that is no URL leads nowhere: the browser fails that itself. */
+  const deniedRedirect = ({ request, responseStatusCode: status = 0, responseHeaders }: PausedResponse) => {
+    const location = responseHeaders?.find(({ name }) => name.toLowerCase() === 'location')?.value;
+    if (!location || !browserRedirects.has(status) || !URL.canParse(location, request.url)) return undefined;
+    const url = new URL(location, request.url).href;
+    const method = redirectedMethod(request.method, status);
+    const rule = deny(method, url);
+    return rule ? { method, url, rule } : undefined;
+  };
+  const watch = async (target: Target) => {
+    target.on('Fetch.requestPaused', async (event: PausedResponse) => {
+      const denied = deniedRedirect(event);
+      if (denied) log.record(denied.method, denied.url, denied.rule);
+      try {
+        // Exactly one answer, whatever the inspection found: a paused request that gets none hangs its navigation.
+        if (denied)
+          await target.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+        else await target.send('Fetch.continueResponse', { requestId: event.requestId });
+      } catch {
+        // The page closed, or the request ended, before the answer.
+      }
+    });
+    target.on(
+      'Target.attachedToTarget',
+      async ({ sessionId, targetInfo }: { sessionId: string; targetInfo: { type: string } }) => {
+        const child = childTarget(target, sessionId);
+        try {
+          if (targetInfo.type === 'iframe') await watch(child);
+        } catch {
+          // The frame went away before its watch was on.
+        } finally {
+          // Every target the watch attached to waits for this, a worker too: workers are refused in the page.
+          await child.send('Runtime.runIfWaitingForDebugger').catch(() => undefined);
+        }
+      },
+    );
+    await target.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Response' }] });
+    await target.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: false });
+  };
+  const start = async (page: Page) => watch(sessionTarget(await context.newCDPSession(page)));
+  return (page) => {
+    let started = watched.get(page);
+    if (!started) {
+      started = start(page);
+      watched.set(page, started);
+    }
+    return started;
+  };
+}
+
 /** Runs in each frame before its scripts: replaces the worker constructors with ones that log and throw. */
 function refuseWorkers() {
   const scope = globalThis as unknown as Record<string, unknown> & { __bugpatrolBlockedWorker?: (url: string) => void };
@@ -101,7 +273,7 @@ function refuseWorkers() {
     const refused = class {
       constructor(url: string | URL) {
         scope.__bugpatrolBlockedWorker?.(new URL(String(url), location.href).href);
-        throw new DOMException('Bugpatrol read-only mode blocks workers', 'SecurityError');
+        throw new DOMException('Bugpatrol blocks workers while it holds requests back', 'SecurityError');
       }
     };
     Object.defineProperty(scope, name, { value: refused, writable: false, configurable: false });
@@ -184,8 +356,9 @@ export type ReadOnlyProxy = { url: string; close(): Promise<void> };
 /**
  * A loopback reverse proxy to `upstream` for an app that talks to its
  * backend itself. Reads go through; any other method gets a 405 and is
- * logged. A WebSocket upgrade is refused, or tunnelled with the matching
- * client frames dropped.
+ * logged, and a request that `deny` matches gets a 403 and is logged. A
+ * WebSocket upgrade that `deny` matches is refused; the others are refused,
+ * or tunnelled with the matching client frames dropped.
  */
 export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOptions): Promise<ReadOnlyProxy> {
   const base = new URL(upstream);
@@ -196,11 +369,17 @@ export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOpti
 
   const server = createServer((request, response) => {
     const method = request.method ?? 'GET';
-    if (!SAFE.has(method)) {
-      options.log.record(method, target(request.url));
+    const rule = options.deny?.(method, target(request.url));
+    if (rule || (!options.allowWrites && !SAFE.has(method))) {
+      options.log.record(method, target(request.url), rule);
       request.resume();
-      response.writeHead(405, { allow: 'GET, HEAD, OPTIONS', 'content-type': 'text/plain' });
-      response.end('Bugpatrol read-only mode blocked this write.\n');
+      if (rule) {
+        response.writeHead(403, { 'content-type': 'text/plain' });
+        response.end(`Bugpatrol blocked this request: app.connect.deny has ${rule}.\n`);
+      } else {
+        response.writeHead(405, { allow: 'GET, HEAD, OPTIONS', 'content-type': 'text/plain' });
+        response.end('Bugpatrol read-only mode blocked this write.\n');
+      }
       return;
     }
     const outgoing = (secure ? httpsRequest : httpRequest)(
@@ -227,8 +406,9 @@ export async function startReadOnlyProxy(upstream: string, options: ReadOnlyOpti
   };
   server.on('upgrade', (request: IncomingMessage, client: Duplex, head: Buffer) => {
     track(client);
-    if (options.websockets === 'block') {
-      options.log.record('WEBSOCKET', target(request.url));
+    const rule = options.deny?.('GET', target(request.url));
+    if (rule || options.websockets === 'block') {
+      options.log.record('WEBSOCKET', target(request.url), rule);
       client.end('HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n');
       return;
     }

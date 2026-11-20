@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AgentRole } from '../types/agents.js';
 import { HTTP_METHODS } from '../types/endpoint.js';
 import { CLI_AGENTS, cliPreset } from './agents.js';
+import { denyRule } from './deny.js';
 
 function validRegex(value: string): boolean {
   try {
@@ -229,11 +230,24 @@ export const appSchema = z
          */
         disposable: z.boolean().default(false),
         /**
-         * API: endpoints Bugpatrol never requests. Each glob matches a path
-         * template of the spec, with an optional leading method: `*` is one
-         * segment, `**` is any number of segments. Example: `POST /admin/**`.
+         * Requests that never reach the backend. Each glob has an optional
+         * leading method and a path: `*` is one segment, `**` is any number
+         * of segments. Example: `POST /billing/checkout/**`. API: Bugpatrol
+         * never requests a matching path template of the spec. Web and
+         * Electron: the driver aborts each request of the app whose path
+         * matches, on any host, and logs it as blocked; other requests go
+         * out. An Electron app's main process, service workers and requests
+         * from before the attach are not covered. CLI, desktop and mobile:
+         * the read-only proxies apply it, on top of read-only mode, so it
+         * needs `app.readOnly.proxy`.
          */
-        deny: z.array(z.string().min(1)).default([]),
+        deny: z
+          .array(
+            z.string().refine((glob) => denyRule(glob) !== undefined, {
+              error: (issue) => `app.connect.deny ${issue.input}: use an optional method and a path that starts with /`,
+            }),
+          )
+          .default([]),
         /** API: the most requests in one minute. A 429 or a Retry-After also slows them. */
         perMinute: z.number().int().positive().default(60),
         timeoutMs: z.number().int().positive().max(120000).default(30000),
@@ -759,6 +773,18 @@ export const bugpatrolConfigSchema = z
         path: ['app', 'readOnly', 'proxy'],
         message:
           'An Electron app can send requests before Bugpatrol attaches over CDP, and its service workers open WebSockets that CDP rules do not reach. Name its backend in app.readOnly.proxy, and point the app at the proxy with {{NAME}}.',
+      });
+    }
+    // Bugpatrol sees the requests of these apps only through a read-only proxy.
+    if (
+      config.app.connect.deny.length &&
+      !['web', 'electron', 'api'].includes(platform) &&
+      !Object.keys(readOnly?.proxy ?? {}).length
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['app', 'connect', 'deny'],
+        message: `Bugpatrol cannot see the requests of a ${platform} app. Name its backend in app.readOnly.proxy, and point the app at the proxy's {{NAME}}, so that the proxy applies app.connect.deny.`,
       });
     }
     if (readOnly?.dropFrames.length && readOnly.websockets !== 'pass') {

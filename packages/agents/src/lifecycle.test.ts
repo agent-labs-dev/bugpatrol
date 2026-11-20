@@ -32,6 +32,23 @@ describe('startApp', () => {
     }
   });
 
+  it('gives a deny-only app one blocked-request log for the run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-life-'));
+    const emitted: string[] = [];
+    try {
+      const app = appSchema.parse({
+        platform: 'web',
+        connect: { url: 'http://127.0.0.1:3000', deny: ['POST /billing/**'] },
+      });
+      const running = await startApp(app, { root, vars: new Vars(), emit: (line) => emitted.push(line) });
+      expect(running.writes).toBeDefined();
+      await running.stop();
+      expect(emitted).toContain('Bugpatrol blocked 0 request(s) in this run');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('leaves a public capture out of redaction, and warns about a short secret capture', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bugpatrol-life-'));
     const vars = new Vars();

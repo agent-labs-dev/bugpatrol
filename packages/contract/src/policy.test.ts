@@ -3,7 +3,7 @@ import { ConfigError, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildContract, type Contract } from './contract.js';
 import { loadSpec } from './load.js';
-import { requestPolicy } from './policy.js';
+import { denyList, requestPolicy } from './policy.js';
 
 let contract: Contract;
 beforeAll(async () => {
@@ -59,10 +59,24 @@ describe('requestPolicy', () => {
     expect(() => policy('http://127.0.0.1:8000', { deny: ['admin/**'] })).toThrow(ConfigError);
   });
 
+  it('denyList matches the path of a URL on any host, and names the glob', () => {
+    const denied = denyList(['POST /billing/checkout/**', '/admin/*']);
+    expect(denied('POST', 'https://app.test/billing/checkout/session?plan=pro')).toBe('POST /billing/checkout/**');
+    expect(denied('post', 'https://pay.other.test/billing/checkout')).toBe('POST /billing/checkout/**');
+    expect(denied('GET', 'https://app.test/billing/checkout/session')).toBeUndefined();
+    expect(denied('GET', 'http://127.0.0.1:3000/admin/users')).toBe('/admin/*');
+    expect(denied('POST', 'https://app.test/billing/plans')).toBeUndefined();
+    expect(() => denyList(['billing/**'])).toThrow(ConfigError);
+  });
+
   it('%2F does not escape a deny glob', () => {
     const guarded = policy('http://127.0.0.1:8000', { deny: ['/admin/**'] });
     for (const url of ['/admin%2Fwipe', '/admin%2fwipe', 'http://127.0.0.1:8000/admin/%77ipe', '/a/../admin/wipe'])
       for (const method of ['GET', 'POST'] as const) expect(guarded.check(method, url).ok).toBe(false);
+    // A server that splits the path before decoding reads a%2Fb as one segment.
+    expect(denyList(['POST /billing/session/*'])('POST', 'https://app.test/billing/session/a%2Fb')).toBe(
+      'POST /billing/session/*',
+    );
   });
 
   it('skips x-bugpatrol-skip operations, and lets a URL outside the contract only read', () => {

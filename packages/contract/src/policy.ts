@@ -1,4 +1,4 @@
-import { type AppConfig, ConfigError, type Endpoint, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
+import { type AppConfig, ConfigError, denyRule, type Endpoint, HTTP_METHODS, type HttpMethod } from '@bugpatrol/core';
 import type { Contract, SkipReason } from './contract.js';
 import { matcher } from './match.js';
 
@@ -42,7 +42,7 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
   const allowedMethods = HTTP_METHODS.filter(
     (method) => connect.methods.includes(method) && (writesAllowed || READS.includes(method)),
   );
-  const deny = connect.deny.map(denyRule);
+  const denied = denyList(connect.deny);
   const skipped = contract.skipped.map(({ key, reason }) => {
     const space = key.indexOf(' ');
     return { method: key.slice(0, space) as HttpMethod, template: key.slice(space + 1), reason };
@@ -56,10 +56,8 @@ export function requestPolicy(contract: Contract, connect: PolicyConnect): Reque
     check(method, url) {
       const found = match(method, url);
       if (found && 'reason' in found) return { ok: false, reason: SKIPPED[found.reason] };
-      // The decoded path too: a server that decodes %2F must not reach a denied route.
-      const paths = [...(found ? [found.template] : []), decodedPath(url)];
-      const rule = deny.find((item) => (!item.method || item.method === method) && paths.some(item.test));
-      if (rule) return { ok: false, reason: `app.connect.deny has ${rule.glob}` };
+      const rule = denied(method, url, found?.template);
+      if (rule) return { ok: false, reason: `app.connect.deny has ${rule}` };
       if (!allowedMethods.includes(method)) {
         if (!writesAllowed && !READS.includes(method))
           return {
@@ -88,31 +86,31 @@ export function isLoopback(url: string): boolean {
   return hostname === 'localhost' || hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 }
 
-/** `[METHOD] /path`: `*` is one segment or a part of one, and a `**` segment is any number of segments. */
-function denyRule(glob: string): { glob: string; method?: HttpMethod; test(path: string): boolean } {
-  const [first, second] = glob.trim().split(/\s+/);
-  const method = second === undefined ? undefined : first!.toUpperCase();
-  const path = second ?? first!;
-  if ((method && !HTTP_METHODS.includes(method as HttpMethod)) || !path.startsWith('/'))
-    throw new ConfigError(`app.connect.deny ${glob}: use an optional method and a path that starts with /`);
-  const source = path
-    .split('/')
-    .slice(1)
-    .map((segment) =>
-      segment === '**'
-        ? '(?:/[^/]*)*'
-        : `/${segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replaceAll('\\*', '[^/]*')}`,
-    )
-    .join('');
-  const pattern = new RegExp(`^${source}/?$`, 's');
-  return { glob, ...(method ? { method: method as HttpMethod } : {}), test: (value) => pattern.test(value) };
+/**
+ * `app.connect.deny` as one test: the glob that a request matches, or
+ * undefined. It matches the path of `url`, on any host, and `template`, the
+ * path template of the endpoint, when there is one. The api request policy,
+ * the web and Electron drivers and the read-only proxies all use it.
+ */
+export function denyList(globs: string[]): (method: string, url: string, template?: string) => string | undefined {
+  const rules = globs.map((glob) => {
+    const rule = denyRule(glob);
+    if (!rule) throw new ConfigError(`app.connect.deny ${glob}: use an optional method and a path that starts with /`);
+    return rule;
+  });
+  return (method, url, template) => {
+    // Both the encoded and the decoded path: a server may split the path before
+    // or after it decodes %2F, and neither reading may reach a denied route.
+    const paths = [...(template ? [template] : []), ...requestPaths(url)];
+    return rules.find((rule) => (!rule.method || rule.method === method.toUpperCase()) && paths.some(rule.test))?.glob;
+  };
 }
 
-function decodedPath(url: string): string {
+function requestPaths(url: string): string[] {
   const { pathname } = new URL(url, 'http://policy.invalid');
   try {
-    return decodeURIComponent(pathname);
+    return [pathname, decodeURIComponent(pathname)];
   } catch {
-    return pathname;
+    return [pathname];
   }
 }

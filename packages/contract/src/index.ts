@@ -17,4 +17,4 @@ export {
   type OpenApiDoc,
   type OpenApiOperation,
 } from './load.js';
-export { isLoopback, type PolicyVerdict, type RequestPolicy, requestPolicy } from './policy.js';
+export { denyList, isLoopback, type PolicyVerdict, type RequestPolicy, requestPolicy } from './policy.js';

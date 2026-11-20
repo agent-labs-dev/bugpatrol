@@ -1,8 +1,8 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type Contract, requestPolicy } from '@bugpatrol/contract';
-import { type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
+import { type Contract, denyList, requestPolicy } from '@bugpatrol/contract';
+import { type AppConfig, type BugpatrolConfig, ConfigError } from '@bugpatrol/core';
 import { type ApiCredentials, ApiDriver } from './api.js';
 import { Pacer } from './api-pacer.js';
 import { CliDriver, PRIVATE_DIR } from './cli.js';
@@ -44,14 +44,19 @@ function windowPattern(pattern: string): RegExp {
   }
 }
 
-/** What `app.readOnly` asks of a driver, logging to `log`. Undefined when read-only mode is off. */
-export function readOnlyOptions(config: BugpatrolConfig, log: WriteLog = new WriteLog()): ReadOnlyOptions | undefined {
-  const readOnly = config.app.readOnly;
-  if (!readOnly) return undefined;
+/**
+ * What `app.readOnly` and `app.connect.deny` ask of a driver or a read-only
+ * proxy, logging to `log`. Undefined when neither holds anything back.
+ */
+export function readOnlyOptions(app: AppConfig, log: WriteLog = new WriteLog()): ReadOnlyOptions | undefined {
+  const { readOnly, connect } = app;
+  const deny = connect.deny.length ? { deny: denyList(connect.deny) } : undefined;
+  if (!readOnly) return deny && { log, allowWrites: true, websockets: 'pass', dropFrames: [], ...deny };
   return {
     log,
     websockets: readOnly.websockets,
     dropFrames: readOnly.dropFrames.map((pattern) => new RegExp(pattern)),
+    ...deny,
   };
 }
 
@@ -72,7 +77,7 @@ export function createDriver(
   writes?: WriteLog,
 ): Driver {
   const { platform, connect } = config.app;
-  const readOnly = readOnlyOptions(config, writes);
+  const readOnly = readOnlyOptions(config.app, writes);
   if (platform === 'cli') {
     const { env, command, ...cli } = connect.cli;
     return new CliDriver({
@@ -108,7 +113,7 @@ export function createDriver(
     return new ApiDriver({
       url: origin,
       credentials: apiCredentials(connect, vars),
-      policy: requestPolicy(contract, { ...connect, url: origin, readOnly: Boolean(readOnly) }),
+      policy: requestPolicy(contract, { ...connect, url: origin, readOnly: Boolean(config.app.readOnly) }),
       pacer: new Pacer({ perMinute: connect.perMinute }),
       timeoutMs: connect.timeoutMs,
       redact,

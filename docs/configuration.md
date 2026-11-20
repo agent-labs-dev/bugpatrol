@@ -52,6 +52,7 @@ app:
   connect: { url: http://localhost:3000 }   # or cdp, or appId + device, or cli: { command, timeoutMs, cols, rows, env }
   # connect.allowedOrigins: [https://accounts.example.com]   # web, Electron: other origins the explorer may be on
   # connect.loadTimeoutMs: 180000   # web: how long the first page load may take; 30 seconds by default
+  # connect.deny: ['POST /billing/checkout/**']   # requests that never reach the backend; see Deny list
   instructions: .bugpatrol/instructions.md
   secrets: [TEST_PASSWORD]      # environment variables the explorer may use as {{NAME}}
   # readOnly: true              # only GET, HEAD and OPTIONS reach the backend; see Read-only mode
@@ -185,7 +186,28 @@ app:
         MY_APP_API_URL: '{{API_URL}}'
 ```
 
-Each blocked write is logged with its method, its URL with the query values hidden, and the time. The explorer sees the writes blocked since its last step, each one is a `write-blocked` event in the session, and the session summary ends with `Read-only mode blocked N write(s).`
+Each blocked write is logged with its method, its URL with the query values hidden, and the time. The explorer sees the requests blocked since its last step, each one is a `write-blocked` event in the session, and the session summary ends with `Bugpatrol blocked N request(s).`
+
+## Deny list
+
+`app.connect.deny` names requests that never reach the backend. On web, Electron and API apps every other request, writes included, goes out. Use it for an app that a review must use normally but that can start something it must not, such as a payment: the app guide's never-do list is prose for the model, and `readOnly` would block every write the app needs.
+
+```yaml
+app:
+  platform: electron
+  connect:
+    deny:
+      - POST /billing/checkout/**
+      - POST /billing/top-up/**
+```
+
+Each glob has an optional leading method and a path that starts with `/`: `*` is one segment or part of one, `**` is any number of segments. A glob without a method matches every method, reads included, and a WebSocket handshake counts as a `GET`. A path matches in its encoded and its decoded form. The config is rejected for a glob of another shape.
+
+- **Web and Electron**: the driver aborts each request and refuses each WebSocket of the app whose method and path match, on any host, and lets every other request through, a redirect to a matching request included, in a cross-site frame too: the driver fails the redirect before the browser follows it, except on the very first navigation of a popup, which no page exists yet to watch. A web context blocks service workers, whose own requests would bypass the rule, and every page blocks dedicated and shared workers, whose WebSockets no rule reaches; a page that starts one gets an error and the worker is logged as a blocked request. In an Electron app, the driver reloads each page once as it attaches and sees only the requests of its windows from then on: requests from the main process, from service workers and from before the attach reach the backend. When those can start what the list forbids, use `app.readOnly` with a `proxy` instead, which blocks every write.
+- **API**: the request policy never sends a request that matches, on the path template of the spec or the request path. The explorer's request fails with the glob as its reason.
+- **CLI, desktop, iOS and Android**: the read-only proxies of `app.readOnly.proxy` answer a matching request with a 403, so these platforms need a `proxy`; the config is rejected without one. A proxy is always in read-only mode, so on these platforms the list adds to it: it also holds back the reads that match. The proxy matches the path on the backend, so for an upstream such as `https://api.example.com/v1` the glob starts with `/v1`.
+
+On web, Electron and the proxies, a blocked request is logged and reported like a blocked write, with the glob it matched: `POST https://app.example.com/billing/checkout/session at <time>: app.connect.deny has POST /billing/checkout/**`. The explorer sees it after its step, so it knows the backend never got the request.
 
 ## Connect
 
@@ -286,7 +308,7 @@ Each step saves a screenshot of the terminal, `NNN-<label>.png`, and its text be
 | `headers` | `{}` | The headers that go into each credential set |
 | `credentials` | none | `self` and an optional `other`, each with its `headers`. `other` enables the cross-user cases |
 | `errors` | none | `statuses` that each endpoint can return, and the `schema` of their body |
-| `deny` | `[]` | Globs of endpoints that Bugpatrol never requests, for example `POST /admin/**` |
+| `deny` | `[]` | Globs of endpoints that Bugpatrol never requests, for example `POST /admin/**`. See [Deny list](#deny-list) |
 | `methods` | all seven | The methods that Bugpatrol can send. The request policy can allow fewer |
 | `disposable` | `false` | Allow writes also when `url` is not loopback. Set it only when the data can be lost |
 | `perMinute` | `60` | The most requests in one minute |

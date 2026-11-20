@@ -5,7 +5,8 @@ import { type AddressInfo, createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
-import { chromium } from 'playwright';
+import { denyList } from '@bugpatrol/contract';
+import { chromium, type Page } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ElectronDriver } from './electron.js';
 import { guardBrowser, type ReadOnlyProxy, redactQuery, startReadOnlyProxy, WriteLog } from './readonly.js';
@@ -102,6 +103,33 @@ async function writeEverything(driver: Driver): Promise<{ title?: string; blocke
 
 const readOnly = () => ({ log: new WriteLog(), websockets: 'block' as const, dropFrames: [] });
 
+/** What `app.connect.deny` alone asks of a driver: writes go out, less the matching requests. */
+const denyOnly = (globs: string[]) => ({
+  log: new WriteLog(),
+  allowWrites: true as const,
+  websockets: 'pass' as const,
+  dropFrames: [],
+  deny: denyList(globs),
+});
+
+/** A browser with the app open, standing in for an Electron app: returns its CDP endpoint. */
+async function cdpApp(url: string, prepare?: (page: Page) => Promise<void>): Promise<string> {
+  const probe = createNetServer();
+  await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise((done) => probe.close(done));
+  const profile = await mkdtemp(join(tmpdir(), 'bugpatrol-readonly-'));
+  cleanups.push(() => rm(profile, { recursive: true, force: true }));
+  const app = await chromium.launchPersistentContext(profile, {
+    headless: true,
+    args: [`--remote-debugging-port=${port}`, '--disable-gpu'],
+  });
+  cleanups.push(() => app.close());
+  await app.pages()[0]!.goto(`${url}/`);
+  await prepare?.(app.pages()[0]!);
+  return `http://127.0.0.1:${port}`;
+}
+
 async function proxy(upstream: string, options: Partial<Parameters<typeof startReadOnlyProxy>[1]> = {}) {
   const log = new WriteLog();
   const started = await startReadOnlyProxy(upstream, { log, websockets: 'block', dropFrames: [], ...options });
@@ -130,6 +158,41 @@ describe('the read-only proxy', () => {
     expect(lines[0]).toMatch(new RegExp(`^POST ${api.url}/v1/items/1\\?token=\\[redacted\\] at \\d{4}-`));
     expect(lines.join('\n')).not.toContain('secret-value');
     expect(log.drain()).toEqual([]);
+  });
+
+  it('refuses a WebSocket whose path app.connect.deny matches, and passes the others', async () => {
+    const api = await backend();
+    const { url, log } = await proxy(api.url, { websockets: 'pass', allowWrites: true, deny: denyList(['/sync']) });
+    const open = (path: string) =>
+      new Promise<string>((done) => {
+        const socket = new WebSocket(`${url.replace('http', 'ws')}${path}`);
+        socket.onopen = () => {
+          socket.close();
+          done('open');
+        };
+        socket.onerror = () => done('refused');
+      });
+    expect(await open('/sync')).toBe('refused');
+    expect(await open('/live')).toBe('open');
+    expect(api.seen).toEqual([expect.stringMatching(/^UPGRADE \/live/)]);
+    expect(log.drain()).toEqual([
+      expect.stringMatching(/^WEBSOCKET http:\/\/127\.0\.0\.1:\d+\/sync at .*: app.connect.deny has \/sync$/),
+    ]);
+  });
+
+  it('answers a request that app.connect.deny matches with a 403, read or write', async () => {
+    const api = await backend();
+    const { url, log } = await proxy(`${api.url}/v1`, { deny: denyList(['/v1/billing/**']) });
+    expect((await fetch(`${url}/billing/plans`)).status).toBe(403);
+    expect((await fetch(`${url}/billing/plans`, { method: 'POST' })).status).toBe(403);
+    expect((await fetch(`${url}/items`)).status).toBe(200);
+    expect(api.seen).toEqual([`GET /v1/items ${new URL(api.url).host}`]);
+    expect(log.drain()).toEqual([
+      expect.stringMatching(
+        /^GET http:\/\/127\.0\.0\.1:\d+\/v1\/billing\/plans at .*: app.connect.deny has \/v1\/billing\/\*\*$/,
+      ),
+      expect.stringMatching(/^POST .*\/v1\/billing\/plans at .*: app.connect.deny has \/v1\/billing\/\*\*$/),
+    ]);
   });
 
   it('refuses a WebSocket by default, and logs it', async () => {
@@ -187,19 +250,7 @@ describe('read-only mode in a browser', () => {
 
   it('electron: aborts the writes of an app it attached to over CDP', { timeout: 60_000 }, async () => {
     const api = await backend();
-    const probe = createNetServer();
-    await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
-    const port = (probe.address() as AddressInfo).port;
-    await new Promise((done) => probe.close(done));
-    const profile = await mkdtemp(join(tmpdir(), 'bugpatrol-readonly-'));
-    cleanups.push(() => rm(profile, { recursive: true, force: true }));
-    const app = await chromium.launchPersistentContext(profile, {
-      headless: true,
-      args: [`--remote-debugging-port=${port}`, '--disable-gpu'],
-    });
-    cleanups.push(() => app.close());
-    await app.pages()[0]!.goto(`${api.url}/`);
-    const driver = new ElectronDriver(`http://127.0.0.1:${port}`, [], undefined, readOnly());
+    const driver = new ElectronDriver(await cdpApp(api.url), [], undefined, readOnly());
     cleanups.push(() => driver.close());
     await driver.connect();
     // The page was open before Bugpatrol attached: its requests are held back from now on.
@@ -208,6 +259,285 @@ describe('read-only mode in a browser', () => {
     expect(blocked.filter((line) => line.startsWith('POST'))).toHaveLength(3);
     expect(api.seen.filter((line) => /^(POST|PUT|PATCH|DELETE|UPGRADE) /.test(line))).toEqual([]);
     expect(blocked).toContainEqual(expect.stringMatching(/^WEBSOCKET /));
+  });
+});
+
+describe('app.connect.deny in a browser', () => {
+  const host = (url: string) => new URL(url).host;
+
+  it('web: aborts each request that a glob matches, and lets every other write through', {
+    timeout: 60_000,
+  }, async () => {
+    const api = await backend();
+    const options = denyOnly(['POST /api/items', 'POST /api/form']);
+    const driver = new WebDriver({ url: `${api.url}/`, viewport: { width: 640, height: 400 }, readOnly: options });
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { title, blocked } = await writeEverything(driver);
+    expect(title).toBe('read GET');
+    expect(api.seen.filter((line) => !line.startsWith('GET / '))).toEqual([
+      `GET /api/items ${host(api.url)}`,
+      `POST /api/beacon ${host(api.url)}`,
+      expect.stringMatching(/^UPGRADE \/sync/),
+    ]);
+    expect(blocked).toEqual([
+      expect.stringMatching(/^POST .*\/api\/items\?token=\[redacted\] at .*: app.connect.deny has POST \/api\/items$/),
+      expect.stringMatching(/^POST .*\/api\/form at .*: app.connect.deny has POST \/api\/form$/),
+    ]);
+  });
+
+  it('electron: attaches to a page that a POST reached without sending the POST again', {
+    timeout: 60_000,
+  }, async () => {
+    const api = await backend();
+    const app = await cdpApp(api.url, async (page) => {
+      await page.getByRole('button', { name: 'Submit' }).click();
+      await page.waitForURL('**/api/form');
+    });
+    const driver = new ElectronDriver(app, [], undefined, denyOnly(['POST /api/items']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    expect(api.seen.filter((line) => line.startsWith('POST /api/form'))).toHaveLength(1);
+  });
+
+  it('web: refuses a WebSocket whose path a glob matches', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const driver = new WebDriver({
+      url: `${api.url}/`,
+      viewport: { width: 640, height: 400 },
+      readOnly: denyOnly(['/sync']),
+    });
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { blocked } = await writeEverything(driver);
+    expect(api.seen.filter((line) => line.startsWith('UPGRADE'))).toEqual([]);
+    expect(blocked).toEqual([expect.stringMatching(/^WEBSOCKET ws:.*\/sync at .*: app.connect.deny has \/sync$/)]);
+  });
+
+  it('electron: aborts the matching requests of an app it attached to over CDP', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const driver = new ElectronDriver(await cdpApp(api.url), [], undefined, denyOnly(['POST /api/items']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const { blocked } = await writeEverything(driver);
+    expect(blocked).toEqual([
+      expect.stringMatching(/^POST .*\/api\/items\?token=\[redacted\] at .*: app.connect.deny has POST \/api\/items$/),
+    ]);
+    expect(api.seen.filter((line) => line.startsWith('POST'))).toEqual([
+      `POST /api/beacon ${host(api.url)}`,
+      `POST /api/form ${host(api.url)}`,
+    ]);
+  });
+});
+
+describe('app.connect.deny against what a route cannot see', () => {
+  it('fails a redirect to a denied request, and logs it', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const outcome = await page.evaluate(() =>
+      fetch('/start', { method: 'POST', body: 'payment' }).then(
+        () => 'followed',
+        () => 'failed',
+      ),
+    );
+    expect(outcome).toBe('failed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([
+      expect.stringMatching(/^POST .*\/billing\/checkout at .*: app.connect.deny has POST \/billing\/\*\*$/),
+    ]);
+  });
+
+  it('fails a denied redirect from a cross-site iframe in its own process', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      // The frame sends its POST as it loads, before a watch started after its first request could see it.
+      else if (request.url === '/frame')
+        response.end(
+          '<script>fetch("/start", { method: "POST" }).then(() => parent.postMessage("followed", "*"), () => parent.postMessage("failed", "*"))</script>',
+        );
+      else response.end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const port = (server.address() as AddressInfo).port;
+    const browser = await chromium.launch({ headless: true, args: ['--site-per-process'] });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(`http://127.0.0.1:${port}/`);
+    // localhost is another site than 127.0.0.1, so the frame gets its own renderer and CDP target.
+    const outcome = await page.evaluate(
+      (src) =>
+        new Promise<string>((done) => {
+          addEventListener('message', (event) => done(String(event.data)));
+          const child = document.createElement('iframe');
+          child.src = src;
+          document.body.append(child);
+        }),
+      `http://localhost:${port}/frame`,
+    );
+    expect(page.frames().map((frame) => new URL(frame.url()).hostname)).toEqual(['127.0.0.1', 'localhost']);
+    expect(outcome).toBe('failed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([
+      expect.stringMatching(/^POST .*\/billing\/checkout at .*: app.connect.deny has POST \/billing\/\*\*$/),
+    ]);
+  });
+
+  /** A server that answers `/start` with the given status and Location, and everything else with a page. */
+  async function redirecting(status: number, location: string) {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(status, { location }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    return {
+      seen,
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      context: await browser.newContext(),
+    };
+  }
+
+  /** Sends `method` to `/start` from a page behind the guard: how the request ended, and what the guard logged. */
+  async function sendThroughGuard(status: number, location: string, method: string, glob: string) {
+    const { seen, url, context } = await redirecting(status, location);
+    const options = denyOnly([glob]);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const outcome = await page.evaluate(
+      (verb) =>
+        Promise.race([
+          fetch('/start', { method: verb, body: verb === 'POST' ? 'x' : undefined }).then(
+            () => 'followed',
+            () => 'failed',
+          ),
+          new Promise<string>((done) => setTimeout(() => done('hung'), 8000)),
+        ]),
+      method,
+    );
+    return { outcome, seen, logged: options.log.drain() };
+  }
+
+  it('lets a 3xx that the browser does not follow through, whatever its Location', { timeout: 60_000 }, async () => {
+    const { outcome, seen, logged } = await sendThroughGuard(300, '/billing/checkout', 'POST', 'POST /billing/**');
+    expect(outcome).toBe('followed');
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(logged).toEqual([]);
+  });
+
+  it('answers a response whose Location is no URL, rather than leaving the request paused', {
+    timeout: 60_000,
+  }, async () => {
+    const { outcome, logged } = await sendThroughGuard(307, 'http://exa mple.com', 'POST', 'POST /billing/**');
+    expect(outcome).not.toBe('hung');
+    expect(logged).toEqual([]);
+  });
+
+  it.each([301, 302, 303])(
+    'rewrites a POST that a %i redirect turns into a GET before it asks `deny`',
+    { timeout: 60_000 },
+    async (status) => {
+      const passed = await sendThroughGuard(status, '/billing/checkout', 'POST', 'POST /billing/**');
+      expect(passed.outcome).toBe('followed');
+      expect(passed.seen).toContain('GET /billing/checkout');
+      expect(passed.logged).toEqual([]);
+      const failed = await sendThroughGuard(status, '/billing/checkout', 'POST', 'GET /billing/**');
+      expect(failed.outcome).toBe('failed');
+      expect(failed.logged).toEqual([expect.stringMatching(/^GET .*\/billing\/checkout at /)]);
+    },
+  );
+
+  it('fails a redirect of a request that a popup sends after it opened', { timeout: 60_000 }, async () => {
+    const seen: string[] = [];
+    const server = createServer((request, response) => {
+      seen.push(`${request.method} ${request.url}`);
+      if (request.url === '/start') response.writeHead(307, { location: '/billing/checkout' }).end();
+      else response.setHeader('content-type', 'text/html').end('<title>App</title>');
+    });
+    servers.push(server);
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['POST /billing/**']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(url);
+    const [popup] = await Promise.all([context.waitForEvent('page'), page.evaluate((target) => open(target), url)]);
+    await popup.waitForLoadState();
+    await popup.evaluate(() => fetch('/start', { method: 'POST' }).catch(() => undefined));
+    expect(seen.filter((line) => line.includes('/billing/'))).toEqual([]);
+    expect(options.log.drain()).toEqual([expect.stringMatching(/^POST .*\/billing\/checkout at /)]);
+  });
+
+  it('refuses a worker in an Electron window it attached to', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const endpoint = await cdpApp(api.url);
+    const driver = new ElectronDriver(endpoint, [], undefined, denyOnly(['GET /sync']));
+    cleanups.push(() => driver.close());
+    await driver.connect();
+    const observer = await chromium.connectOverCDP(endpoint);
+    cleanups.push(() => observer.close());
+    const outcome = await observer
+      .contexts()[0]!
+      .pages()[0]!
+      .evaluate(() => {
+        try {
+          new Worker(URL.createObjectURL(new Blob(['new WebSocket("ws://" + location.host + "/sync")'])));
+          return 'started';
+        } catch {
+          return 'refused';
+        }
+      });
+    expect(outcome).toBe('refused');
+    expect(api.seen.filter((line) => line.startsWith('UPGRADE'))).toEqual([]);
+  });
+
+  it('refuses a worker, whose WebSockets no route reaches', { timeout: 60_000 }, async () => {
+    const api = await backend();
+    const browser = await chromium.launch({ headless: true });
+    cleanups.push(() => browser.close());
+    const context = await browser.newContext();
+    const options = denyOnly(['GET /sync']);
+    await guardBrowser(context, options);
+    const page = await context.newPage();
+    await page.goto(`${api.url}/`);
+    const outcome = await page.evaluate(() => {
+      try {
+        new SharedWorker(URL.createObjectURL(new Blob(['onconnect = () => {}'], { type: 'text/javascript' })));
+        return 'started';
+      } catch {
+        return 'refused';
+      }
+    });
+    expect(outcome).toBe('refused');
+    expect(options.log.drain()).toEqual([expect.stringMatching(/^WORKER blob:/)]);
   });
 });
 
