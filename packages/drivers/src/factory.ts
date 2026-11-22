@@ -128,6 +128,7 @@ export function createDriver(
     return new WebDriver({
       url: vars(url),
       viewport: { width: viewport.width, height: viewport.height },
+      redact,
       allowedOrigins: connect.allowedOrigins.map(vars),
       readOnly,
       loadTimeoutMs: connect.loadTimeoutMs,

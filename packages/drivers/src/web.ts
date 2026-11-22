@@ -25,6 +25,8 @@ export function chromiumProblem(): string | undefined {
 export type WebOptions = {
   url: string;
   viewport: { width: number; height: number };
+  /** Hides setup captures and secrets in what the driver reports, such as a connect URL that carries a token. */
+  redact?: (value: string) => string;
   headless?: boolean;
   /** Origins besides the app's own that the explorer may be on, e.g. a sign-in provider. */
   allowedOrigins?: string[];
@@ -108,19 +110,23 @@ export class WebDriver implements Driver {
     this.page = await this.context.newPage();
     this.watch(this.page);
     this.home = new URL(this.options.url);
-    const { url, loadTimeoutMs } = this.options;
+    const { url, loadTimeoutMs, redact = (value: string) => value } = this.options;
+    // Playwright's message repeats the URL, which can carry a setup capture, so the
+    // error is rebuilt from redacted text and keeps no cause.
     await this.page.goto(url, { timeout: loadTimeoutMs }).catch((error: unknown) => {
-      if (!(error instanceof errors.TimeoutError)) throw error;
       throw new InfrastructureError(
-        `The app at ${url} did not load within ${(loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) / 1000}s. A dev server that builds the app on the first request can take longer: raise app.connect.loadTimeoutMs`,
-        { cause: error },
+        error instanceof errors.TimeoutError
+          ? `The app at ${redact(url)} did not load within ${(loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) / 1000}s. A dev server that builds the app on the first request can take longer: raise app.connect.loadTimeoutMs`
+          : `The app at ${redact(url)} did not load: ${redact(error instanceof Error ? error.message : String(error))}`,
       );
     });
     await this.awaitHandOff(this.page);
     const landed = this.offOrigin(this.page.url());
     if (landed) {
       throw new ConfigError(
-        `app.connect.url is ${this.options.url}, but it redirected to ${landed.href}. Set app.connect.url to the address to test, or add ${landed.origin} to app.connect.allowedOrigins`,
+        redact(
+          `app.connect.url is ${url}, but it redirected to ${landed.href}. Set app.connect.url to the address to test, or add ${landed.origin} to app.connect.allowedOrigins`,
+        ),
       );
     }
     this.lastInApp = this.page.url();
