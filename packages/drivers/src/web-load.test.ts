@@ -64,3 +64,16 @@ describe('the first page load', () => {
     expect(String(failure)).not.toContain('tok_secret');
   });
 });
+
+describe('viewports[].deviceScaleFactor', () => {
+  it('captures at the scale factor and reports it', { timeout: 30_000 }, async () => {
+    const url = await slowServer(0);
+    driver = new WebDriver({ url, viewport: { width: 393, height: 852, deviceScaleFactor: 2 } });
+    await driver.connect();
+    const observation = await driver.observe();
+    if (observation.capture.kind !== 'image') throw new Error('No screenshot');
+    expect(observation.capture.png.readUInt32BE(16)).toBe(786);
+    expect(observation.capture.png.readUInt32BE(20)).toBe(1704);
+    expect(observation.viewport).toEqual({ width: 393, height: 852, scale: 2 });
+  });
+});

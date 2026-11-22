@@ -24,7 +24,8 @@ export function chromiumProblem(): string | undefined {
 
 export type WebOptions = {
   url: string;
-  viewport: { width: number; height: number };
+  /** The page's size in CSS pixels; a screenshot has `deviceScaleFactor` (default 1) image pixels to each. */
+  viewport: { width: number; height: number; deviceScaleFactor?: number };
   /** Hides setup captures and secrets in what the driver reports, such as a connect URL that carries a token. */
   redact?: (value: string) => string;
   headless?: boolean;
@@ -99,8 +100,10 @@ export class WebDriver implements Driver {
     // hosts the GPU process fails to start and every new page then hangs.
     this.browser = await chromium.launch({ headless, args: headless ? ['--disable-gpu'] : [] });
     const { readOnly } = this.options;
+    const { deviceScaleFactor, ...viewport } = this.options.viewport;
     this.context = await this.browser.newContext({
-      viewport: this.options.viewport,
+      viewport,
+      deviceScaleFactor,
       reducedMotion: 'reduce',
       // A service worker's own requests bypass the routes that hold back writes.
       ...(readOnly ? { serviceWorkers: 'block' as const } : {}),
@@ -255,7 +258,8 @@ export class WebDriver implements Driver {
       location: page.url(),
       title,
       capture: { kind: 'image', png: screenshot },
-      viewport: { ...size, scale: 1 },
+      // A PNG's width is the big-endian word at byte 16 of its header.
+      viewport: { ...size, scale: screenshot.readUInt32BE(16) / size.width },
       elements,
       windows,
       volatileRegions: [],

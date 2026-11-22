@@ -127,7 +127,7 @@ export function createDriver(
     const viewport = config.viewports[0]!;
     return new WebDriver({
       url: vars(url),
-      viewport: { width: viewport.width, height: viewport.height },
+      viewport: { width: viewport.width, height: viewport.height, deviceScaleFactor: viewport.deviceScaleFactor },
       redact,
       allowedOrigins: connect.allowedOrigins.map(vars),
       readOnly,
