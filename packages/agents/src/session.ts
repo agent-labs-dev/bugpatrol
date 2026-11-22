@@ -18,6 +18,8 @@ export class AgentSession {
   readonly emit: EventSink;
   readonly trail: RoutineStep[] = [];
   readonly completedRoutines = new Set<string>();
+  /** Original trail identities for saved steps, whose JSON loses object identity when read back. */
+  readonly savedRoutineSteps = new Map<string, RoutineStep[]>();
   anchor: { routineId?: string; index: number } = { index: 0 };
   lastObservation?: Observation;
   previousObservation?: Observation;

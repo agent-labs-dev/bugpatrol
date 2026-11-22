@@ -441,11 +441,24 @@ async function saveRoutine(
   }
   const compacted = compactSteps(steps);
   const kept = new Set(compacted);
+  const imported = new Map<RoutineStep, RoutineStep>();
+  if (flattenedFrom) {
+    for (const parent of chain.slice(1)) {
+      const originals = session.savedRoutineSteps.get(parent.id) ?? [];
+      parent.steps.forEach((step, index) => {
+        const original = originals[index];
+        if (original) imported.set(original, step);
+      });
+    }
+  }
   const inSlice = new Set(trail);
   const inRoutine = new Set(trail.filter((_, index) => kept.has(sliced[index]!)));
   // Saved over the routine that it continues, the routine no longer holds what came before this slice.
   const replaces = session.anchor.routineId === id;
-  session.keepErrors((step) => (step && inSlice.has(step) ? inRoutine.has(step) : !replaces));
+  session.keepErrors((step) => {
+    if (step && imported.has(step)) return kept.has(imported.get(step)!);
+    return step && inSlice.has(step) ? inRoutine.has(step) : !replaces;
+  });
   const routine: Routine = {
     version: 1,
     id,
@@ -459,6 +472,14 @@ async function saveRoutine(
     updatedAt: now,
   };
   await session.workspace.saveRoutine(routine);
+  session.savedRoutineSteps.set(
+    id,
+    compacted.map((step) => {
+      const trailIndex = sliced.indexOf(step);
+      if (trailIndex >= 0) return trail[trailIndex]!;
+      return [...imported].find(([, saved]) => saved === step)?.[0] ?? step;
+    }),
+  );
   session.anchor = { routineId: id, index: session.trail.length };
   const warning = portabilityWarning(routine, session.root);
   if (warning) session.emit({ kind: 'error', summary: warning });
