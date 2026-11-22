@@ -352,6 +352,8 @@ describe('pull request review', { timeout: 30_000 }, () => {
       ).toHaveLength(2);
       expect(await f.workspace.readReview(7)).toMatchObject({
         posted: { url: 'https://github.com/o/r/pull/7#issuecomment-91' },
+        // A reader tells a killed review from a live one by this pid.
+        pid: process.pid,
       });
 
       // A later `bugpatrol judge` must not file this as an issue of the main branch.

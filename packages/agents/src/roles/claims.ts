@@ -246,7 +246,7 @@ export function claimTools(
         end();
         ctx.budget.start();
         started = claim.id;
-        session.anchor = { index: session.trail.length };
+        session.startFlow();
         return response(`Started ${claim.id}. Each step from now on is in its flow.`);
       },
     },

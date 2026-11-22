@@ -946,6 +946,7 @@ async function runReview(ctx: ReviewContext): Promise<PrReview> {
     base: pr.base,
     baseRef: pr.baseRef,
     status: 'running',
+    pid: process.pid,
     startedAt: new Date().toISOString(),
     sessions: {},
     files: { config: configFile, ...(guideFile && { guide: guideFile }) },

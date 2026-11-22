@@ -725,6 +725,8 @@ export type PrReview = {
   base: string;
   baseRef: string;
   status: 'running' | 'finished' | 'failed';
+  /** The process that runs the review, so a killed review does not look like one in progress. */
+  pid?: number;
   startedAt: string;
   endedAt?: string;
   sessions: {
