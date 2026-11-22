@@ -57,6 +57,18 @@ describe('createDriver', () => {
     expect(createDriver(config, vars)).toMatchObject({ options: { loadTimeoutMs: 180_000 } });
   });
 
+  it('gives the web driver the first viewport with its scale factor, and the redaction', () => {
+    const config = bugpatrolConfigSchema.parse({
+      version: 1,
+      app: { platform: 'web', connect: { url: 'http://127.0.0.1:8081' } },
+      viewports: [{ name: 'phone', width: 393, height: 852, deviceScaleFactor: 2 }],
+    });
+    const redact = (value: string) => value;
+    expect(createDriver(config, vars, redact)).toMatchObject({
+      options: { viewport: { width: 393, height: 852, deviceScaleFactor: 2 }, redact },
+    });
+  });
+
   it('holds back the requests app.connect.deny matches, and writes too only in read-only mode', () => {
     const app = (extra: { connect?: object; readOnly?: boolean }) =>
       bugpatrolConfigSchema.parse({
