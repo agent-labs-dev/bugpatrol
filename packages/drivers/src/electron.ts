@@ -81,8 +81,9 @@ export class ElectronDriver extends WebDriver {
     private readonly pageTimeoutMs = PAGE_TIMEOUT_MS,
     readOnly?: ReadOnlyOptions,
     window?: RegExp,
+    redact?: (value: string) => string,
   ) {
-    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly, window });
+    super({ url: '', viewport: { width: 1280, height: 800 }, allowedOrigins, readOnly, window, redact });
   }
 
   override async connect(): Promise<void> {

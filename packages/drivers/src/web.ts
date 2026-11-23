@@ -196,7 +196,7 @@ export class WebDriver implements Driver {
     const failures: string[] = [];
     this.failures.set(page, failures);
     const add = (line: string) => {
-      if (failures.length < 50) failures.push(line);
+      if (failures.length < 50) failures.push(this.redact(line));
     };
     page.on('response', (response) => {
       const type = response.request().resourceType();
@@ -229,10 +229,14 @@ export class WebDriver implements Driver {
     });
   }
 
+  private redact(value: string): string {
+    return (this.options.redact ?? ((text: string) => text))(value);
+  }
+
   async observe(): Promise<Observation> {
     const page = this.activePage();
     const left = await this.stayInApp(page);
-    if (left && this.leftApp.length < 20) this.leftApp.push(left.href);
+    if (left && this.leftApp.length < 20) this.leftApp.push(this.redact(left.href));
     const context = this.context!;
     for (const candidate of context.pages()) {
       this.watch(candidate);
@@ -247,7 +251,7 @@ export class WebDriver implements Driver {
       context.pages().map(async (candidate, index) => ({
         id: String(index),
         title: await candidate.title().catch(() => ''),
-        location: candidate.url(),
+        location: this.redact(candidate.url()),
         active: candidate === page,
       })),
     );
@@ -255,7 +259,7 @@ export class WebDriver implements Driver {
     const errors = this.errors.get(page) ?? [];
     const observation: Observation = {
       platform: this.platform,
-      location: page.url(),
+      location: this.redact(page.url()),
       title,
       capture: { kind: 'image', png: screenshot },
       // A PNG's width is the big-endian word at byte 16 of its header.
@@ -460,7 +464,9 @@ export class WebDriver implements Driver {
         return {
           ok: false,
           retryable: false,
-          error: `Left the app for ${left.href} and went back. Add ${left.origin} to app.connect.allowedOrigins to allow it`,
+          error: this.redact(
+            `Left the app for ${left.href} and went back. Add ${left.origin} to app.connect.allowedOrigins to allow it`,
+          ),
         };
       }
       const fallback = 'locator' in action ? action.locator : undefined;
@@ -471,7 +477,7 @@ export class WebDriver implements Driver {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: message.slice(0, 200) };
+      return { ok: false, error: this.redact(message).slice(0, 200) };
     }
   }
 
@@ -503,6 +509,8 @@ export class WebDriver implements Driver {
     }
     return {
       ...probe,
+      url: this.redact(probe.url),
+      ...(probe.links ? { links: probe.links.map((link) => ({ ...link, href: this.redact(link.href) })) } : {}),
       screenId,
       viewport: {
         name: this.platform === 'web' ? 'window' : 'desktop',

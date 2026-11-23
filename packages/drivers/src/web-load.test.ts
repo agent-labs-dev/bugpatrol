@@ -77,3 +77,38 @@ describe('viewports[].deviceScaleFactor', () => {
     expect(observation.viewport).toEqual({ width: 393, height: 852, scale: 2 });
   });
 });
+
+describe('observation and snapshot URL redaction', () => {
+  it('redacts setup captures in observed locations, windows, links, network errors and snapshots', {
+    timeout: 30_000,
+  }, async () => {
+    server = createServer((request, response) => {
+      if (request.url?.startsWith('/api/fail')) {
+        response.writeHead(500).end('boom');
+        return;
+      }
+      response
+        .writeHead(200, { 'content-type': 'text/html' })
+        .end(
+          '<title>App</title><a href="/next?token=tok_secret">Next</a><script>fetch("/api/fail?token=tok_secret").catch(() => undefined);</script>',
+        );
+    });
+    await new Promise<void>((done) => server!.listen(0, '127.0.0.1', done));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const redact = (value: string) => value.replaceAll('tok_secret', '{{TOKEN}}');
+    driver = new WebDriver({ url: `${base}login?token=tok_secret`, viewport: { width: 640, height: 400 }, redact });
+    await driver.connect();
+    const observation = await driver.observe();
+    const snapshot = driver.snapshot(observation, 'login');
+
+    expect(observation.location).toContain('token={{TOKEN}}');
+    expect(observation.location).not.toContain('tok_secret');
+    expect(observation.windows?.every((w) => !w.location.includes('tok_secret'))).toBe(true);
+    expect(observation.windows?.[0]?.location).toContain('token={{TOKEN}}');
+    expect(observation.networkErrors?.every((line) => !line.includes('tok_secret'))).toBe(true);
+    expect(snapshot.url).toContain('token={{TOKEN}}');
+    expect(snapshot.url).not.toContain('tok_secret');
+    expect(snapshot.links?.every((link) => !link.href.includes('tok_secret'))).toBe(true);
+    expect(snapshot.links?.[0]?.href).toContain('token={{TOKEN}}');
+  });
+});
