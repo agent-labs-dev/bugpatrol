@@ -54,19 +54,26 @@ export async function evaluateScreen(
       ? session.lastCapture
       : await session.capture(observation, screenId);
   if (!screenshot) return [];
+  const captureScale = observation.viewport.scale ?? snapshot.viewport.scale ?? 1;
+  const scaledSnapshot: ScreenSnapshot =
+    snapshot.viewport.scale === captureScale
+      ? snapshot
+      : { ...snapshot, viewport: { ...snapshot.viewport, scale: captureScale } };
   await writeFile(
     join(paths.session(session.root, session.sessionId, session.workspace.profile), `${screenId}.snapshot.json`),
-    `${JSON.stringify(snapshot, null, 2)}\n`,
+    `${JSON.stringify(scaledSnapshot, null, 2)}\n`,
   );
 
   const baseline = await readBaseline(session, screenId);
-  const firstSight = !baseline.snapshot;
-  if (firstSight) await saveBaseline(session, baseline, screenshot, snapshot);
+  const baselineScale = baseline.snapshot?.viewport.scale ?? 1;
+  const scaleChanged = Boolean(baseline.snapshot) && baselineScale !== captureScale;
+  const firstSight = !baseline.snapshot || scaleChanged;
+  if (firstSight) await saveBaseline(session, baseline, screenshot, scaledSnapshot);
 
   const native = observation.platform === 'ios' || observation.platform === 'android';
   const enabled = new Set<string>(session.config.agents.checks);
-  const violations = evaluateAll(snapshot, {
-    baseline: baseline.snapshot,
+  const violations = evaluateAll(scaledSnapshot, {
+    baseline: firstSight ? undefined : baseline.snapshot,
     disabled: RULES.map((rule) => rule.id).filter((id) => !enabled.has(id) || (native && NATIVE_DISABLED.includes(id))),
   });
   const entries = groupViolations(violations);

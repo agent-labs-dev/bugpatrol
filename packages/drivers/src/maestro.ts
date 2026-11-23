@@ -346,6 +346,7 @@ export function nativeSnapshot(observation: Observation, screenId: string): Scre
       name: 'window',
       width: observation.viewport.width,
       height: observation.viewport.height,
+      scale: observation.viewport.scale,
     },
     url: observation.location,
     title: observation.title,

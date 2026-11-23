@@ -15,7 +15,7 @@ export type ScreenLink = {
 
 export type ScreenSnapshot = {
   screenId: string;
-  viewport: { name: string; width: number; height: number };
+  viewport: { name: string; width: number; height: number; scale?: number };
   url: string;
   title?: string;
   /** Outgoing links. Every one is a candidate edge in the app graph. */
