@@ -138,7 +138,7 @@ export function createDriver(
     const { cdp, launch } = connect;
     const origins = connect.allowedOrigins.map(vars);
     const window = connect.window ? windowPattern(vars(connect.window)) : undefined;
-    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly, window);
+    if (cdp && !launch) return new ElectronDriver(vars(cdp), origins, undefined, readOnly, window, redact);
     if (!launch || cdp) {
       throw new ConfigError('Electron driver requires exactly one of app.connect.cdp or app.connect.launch');
     }
@@ -158,6 +158,7 @@ export function createDriver(
       undefined,
       readOnly,
       window,
+      redact,
     );
   }
   if (!connect.appId) {
