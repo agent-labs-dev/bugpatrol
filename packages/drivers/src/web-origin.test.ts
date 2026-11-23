@@ -98,16 +98,28 @@ describe('the web driver stays on the app origin', () => {
   });
 
   it('tells the explorer when the app redirects away on its own', { timeout: 30_000 }, async () => {
-    const other = await serve(() => '<title>Other app</title>');
-    let redirects = 1;
-    const app = await serve((request) =>
-      request.url === '/next' && redirects-- > 0
-        ? `<title>Next</title><script>setTimeout(() => location.assign('${other}/later'), 300)</script>`
-        : '<title>App</title><a href="/next">Next</a>',
-    );
+    // The redirect is armed by the test only after the tap lands, so no act
+    // or observe can catch it before the poll below starts watching. The
+    // 300 ms timer this replaces could fire while the tap's own stayInApp ran,
+    // and such an interleaving swallowed the entry the poll waits for (#229).
+    let redirectArmed = false;
+    const other = await serve(() => {
+      // A one-shot redirect: disarm when the browser arrives, so going back
+      // cannot send the app away again before the assertions below run.
+      redirectArmed = false;
+      return '<title>Other app</title>';
+    });
+    const app = await serve((request) => {
+      if (request.url === '/state') return redirectArmed ? 'go' : 'wait';
+      if (request.url === '/next') {
+        return `<title>Next</title><script>setInterval(() => { fetch('state').then((response) => response.text()).then((state) => { if (state === 'go' && !window.__redirected) { window.__redirected = true; location.assign('${other}/later'); } }).catch(() => undefined); }, 50)</script>`;
+      }
+      return '<title>App</title><a href="/next">Next</a>';
+    });
     const web = driver(app);
     await web.connect();
     expect((await web.act({ kind: 'tap', ref: (await element(web, 'Next')).ref })).ok).toBe(true);
+    redirectArmed = true;
     await expect.poll(async () => (await web.observe()).leftApp ?? [], { timeout: 5000 }).toEqual([`${other}/later`]);
     const observation = await web.observe();
     expect(observation.leftApp).toEqual([]);
