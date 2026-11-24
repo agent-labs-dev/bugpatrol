@@ -214,6 +214,43 @@ describe('evaluateScreen', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('preserves size-change detection when a fractional device scale rounds the PNG width', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-fractional-scale-'));
+    const fractionalConfig = parseConfig({
+      version: 1,
+      app: { connect: { url: 'fake://home' } },
+      viewports: [{ name: 'desktop', width: 800, height: 600, deviceScaleFactor: 1.5 }],
+      agents: { checks: ['pixel-diff'] },
+    });
+    const captureAtWidth = async (width: number) => {
+      const workspace = new Workspace(root);
+      const record = await workspace.startSession('explorer');
+      const driver = new FakeDriver({ home: { elements: [] } });
+      await driver.connect();
+      await driver.act({ kind: 'viewport', width, height: 600 });
+      const session = new AgentSession(root, fractionalConfig, new Vars(), record.id, 'explorer', driver);
+      const observation = await driver.observe();
+      const png = new PNG({ width: Math.round(width * 1.5), height: 900 });
+      png.data.fill(255);
+      const bytes = PNG.sync.write(png);
+      observation.capture = { kind: 'image', png: bytes };
+      observation.viewport = { width, height: 600, scale: bytes.readUInt32BE(16) / width };
+      return evaluateScreen(session, {
+        screenId: 'home',
+        observation,
+        snapshot: driver.snapshot(observation, 'home'),
+      });
+    };
+    try {
+      expect(await captureAtWidth(800)).toEqual([]);
+      const candidates = await captureAtWidth(801);
+      expect(candidates.filter((candidate) => candidate.ruleId === 'pixel-diff')).toHaveLength(1);
+      expect(candidates[0]?.summary).toBe('The screen size changed');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('file_issue with issue_id', () => {
