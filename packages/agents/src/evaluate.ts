@@ -33,6 +33,22 @@ type Baseline = { png: string; snapshotFile: string; snapshot?: ScreenSnapshot }
 const SEVERITY_RANK: Record<Candidate['severity'], number> = { cosmetic: 0, minor: 1, major: 2, critical: 3 };
 
 /**
+ * True when two capture scales represent the same device scale factor, allowing
+ * for ±0.5 px integer PNG rounding when `scale` is derived as `pngWidth / cssWidth`.
+ */
+function sameCaptureScale(
+  baselineWidth: number,
+  baselineScale: number,
+  currentWidth: number,
+  currentScale: number,
+): boolean {
+  if (baselineScale === currentScale) return true;
+  if (baselineWidth <= 0 || currentWidth <= 0) return false;
+  const roundingTolerance = Math.min(0.05, 0.5 / baselineWidth + 0.5 / currentWidth + 1e-6);
+  return Math.abs(baselineScale - currentScale) <= roundingTolerance;
+}
+
+/**
  * Turns one capture into the candidates a judge should see, and no more.
  *
  * - The first capture of a screen becomes its baseline. The absolute checks
@@ -66,7 +82,9 @@ export async function evaluateScreen(
 
   const baseline = await readBaseline(session, screenId);
   const baselineScale = baseline.snapshot?.viewport.scale ?? 1;
-  const scaleChanged = Boolean(baseline.snapshot) && baselineScale !== captureScale;
+  const scaleChanged =
+    Boolean(baseline.snapshot) &&
+    !sameCaptureScale(baseline.snapshot!.viewport.width, baselineScale, scaledSnapshot.viewport.width, captureScale);
   const firstSight = !baseline.snapshot || scaleChanged;
   if (firstSight) await saveBaseline(session, baseline, screenshot, scaledSnapshot);
 
