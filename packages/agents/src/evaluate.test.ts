@@ -1,8 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_CHECKS, parseConfig } from '@bugpatrol/core';
-import { RULES } from '@bugpatrol/invariants';
+import { AGENT_CHECKS, parseConfig, paths } from '@bugpatrol/core';
+import { RULES, type ScreenSnapshot } from '@bugpatrol/invariants';
+import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import { evaluateScreen, groupViolations } from './evaluate.js';
 import { judgePrompt, judgeSystem } from './prompts.js';
@@ -166,6 +167,52 @@ describe('evaluateScreen', () => {
   it('offers every invariant rule except console errors, which the explorer reads itself', () => {
     const ids = RULES.map((rule) => rule.id).filter((id) => id !== 'runtime/console-errors');
     expect([...AGENT_CHECKS].sort()).toEqual([...ids, 'pixel-diff'].sort());
+  });
+
+  it('re-baselines when capture scale changes instead of raising a size-change candidate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-eval-scale-'));
+    const solidPng = (width: number, height: number, shade: number) => {
+      const png = new PNG({ width, height });
+      for (let i = 0; i < png.data.length; i += 4) {
+        png.data[i] = shade;
+        png.data[i + 1] = shade;
+        png.data[i + 2] = shade;
+        png.data[i + 3] = 255;
+      }
+      return PNG.sync.write(png);
+    };
+    const evalAt = async (width: number, height: number, scale: number, shade: number) => {
+      const workspace = new Workspace(root);
+      const record = await workspace.startSession('explorer');
+      const driver = new FakeDriver({ home: { elements: [] } });
+      await driver.connect();
+      const session = new AgentSession(root, config, new Vars(), record.id, 'explorer', driver);
+      const observation = await driver.observe();
+      observation.capture = { kind: 'image', png: solidPng(width, height, shade) };
+      observation.viewport = { width: 10, height: 10, scale };
+      const snapshot = driver.snapshot(observation, 'home');
+      return evaluateScreen(session, { screenId: 'home', observation, snapshot });
+    };
+    try {
+      // Establish a legacy 1x baseline (without scale recorded on disk).
+      expect(await evalAt(10, 10, 1, 40)).toEqual([]);
+      const snapshotFile = paths.agentBaselineSnapshot(root, 'home');
+      const legacy = JSON.parse(await readFile(snapshotFile, 'utf8')) as ScreenSnapshot;
+      delete legacy.viewport.scale;
+      await writeFile(snapshotFile, `${JSON.stringify(legacy, null, 2)}\n`);
+
+      // Switching deviceScaleFactor to 2x produces a 20x20 capture: must re-baseline cleanly.
+      const at2x = await evalAt(20, 20, 2, 40);
+      expect(at2x.filter((item) => item.ruleId === 'pixel-diff')).toEqual([]);
+      const updated = JSON.parse(await readFile(snapshotFile, 'utf8')) as ScreenSnapshot;
+      expect(updated.viewport.scale).toBe(2);
+
+      // A real pixel change at the same 2x scale still raises pixel-diff against the new baseline.
+      const diffAt2x = await evalAt(20, 20, 2, 200);
+      expect(diffAt2x.filter((item) => item.ruleId === 'pixel-diff')).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

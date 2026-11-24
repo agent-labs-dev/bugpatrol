@@ -516,6 +516,7 @@ export class WebDriver implements Driver {
         name: this.platform === 'web' ? 'window' : 'desktop',
         width: observation.viewport.width,
         height: observation.viewport.height,
+        scale: observation.viewport.scale,
       },
       consoleErrors: observation.consoleErrors,
     };
