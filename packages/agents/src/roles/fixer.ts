@@ -398,6 +398,17 @@ export async function runFixer(
           summary: `The prepare command failed in the worktree: ${String(error).slice(0, 200)}`,
         });
       }
+      // An install can rewrite tracked files such as the lockfile. Those
+      // changes belong to the machine, not the fix, so the fixer starts from
+      // the committed files.
+      const touched = await git(worktree, 'diff', '--name-only');
+      if (touched) {
+        await git(worktree, 'checkout', '--', '.');
+        session.emit({
+          kind: 'fix',
+          summary: `Restored files the prepare command changed: ${touched.split('\n').join(', ')}`,
+        });
+      }
     }
     const previous = retry.get(issue.id);
     const attempt: FixAttempt = {

@@ -205,6 +205,32 @@ describe('fixer', () => {
     }
   });
 
+  it('leaves tracked files the prepare command rewrote out of the change', async () => {
+    const f = await repoFixture();
+    try {
+      const config = parseConfig({
+        ...f.config,
+        agents: {
+          ...f.config.agents,
+          fixer: { ...f.config.agents.fixer, retest: { prepare: 'echo lockfile-drift >> app.txt' } },
+        },
+      });
+      const session = new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer');
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run() {
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'The cause is in the backend.' };
+        },
+      };
+      const [proposal] = await runFixer(session, runtime);
+      expect(proposal).toMatchObject({ status: 'declined' });
+      expect(proposal!.diff).toBe('');
+      expect(proposal!.commit).toBeUndefined();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('retries a failed proposal from a clean worktree', async () => {
     const f = await repoFixture();
     try {
