@@ -398,15 +398,22 @@ export async function runFixer(
           summary: `The prepare command failed in the worktree: ${String(error).slice(0, 200)}`,
         });
       }
-      // An install can rewrite tracked files such as the lockfile. Those
-      // changes belong to the machine, not the fix, so the fixer starts from
-      // the committed files.
-      const touched = await git(worktree, 'diff', '--name-only');
-      if (touched) {
-        await git(worktree, 'checkout', '--', '.');
+      // An install can rewrite (or even stage) tracked files such as the
+      // lockfile. Those changes belong to the machine, not the fix, so restore
+      // both index and working tree to HEAD while leaving ignored install
+      // output (such as node_modules) untouched.
+      const [worktreeChanged, stagedChanged] = await Promise.all([
+        git(worktree, 'diff', '--name-only', 'HEAD'),
+        git(worktree, 'diff', '--cached', '--name-only', 'HEAD'),
+      ]);
+      const touched = [
+        ...new Set([...worktreeChanged.split('\n'), ...stagedChanged.split('\n')].filter(Boolean)),
+      ].sort();
+      if (touched.length > 0) {
+        await git(worktree, 'reset', '--hard', 'HEAD');
         session.emit({
           kind: 'fix',
-          summary: `Restored files the prepare command changed: ${touched.split('\n').join(', ')}`,
+          summary: `Restored files the prepare command changed: ${touched.join(', ')}`,
         });
       }
     }
