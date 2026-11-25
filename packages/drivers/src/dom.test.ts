@@ -192,6 +192,45 @@ describe('controls the explorer could not see or use', () => {
     });
     expect((await driver.observe()).viewport).toMatchObject({ width: 320, height: 240 });
   });
+
+  it('captures plain visible viewport text (including inline spans) and excludes hidden or scrolled-out text', async () => {
+    const textPage = await context.newPage();
+    try {
+      await textPage.setContent(`
+        <label for="runs-on">Runs on</label>
+        <select id="runs-on"><option value="dev_1" selected>Barry</option></select>
+        <p>A run starts on <strong>barry</strong>.</p>
+        <div style="display:none">Hidden display text</div>
+        <div style="visibility:hidden">Hidden visibility text</div>
+        <div style="opacity:0">Transparent text</div>
+        <div style="width:1px;height:1px;overflow:hidden">Screen reader only text</div>
+        <div style="height:40px;overflow:auto">
+          <div style="height:120px">Visible top line</div>
+          <p>Scrolled below container</p>
+        </div>
+        <p>Token secret-value-123 here</p>
+      `);
+      const textDriver = new FixtureDriver({
+        url: '',
+        viewport: { width: 800, height: 600 },
+        redact: (value) => value.replaceAll('secret-value-123', '[REDACTED]'),
+      });
+      textDriver.bind(browser, context, textPage);
+      const observation = await textDriver.observe();
+      expect(observation.visibleText).toContain('A run starts on barry.');
+      expect(observation.visibleText).toContain('Barry');
+      expect(observation.visibleText).toContain('Visible top line');
+      expect(observation.visibleText).toContain('Token [REDACTED] here');
+      expect(observation.visibleText).not.toContain('secret-value-123');
+      expect(observation.visibleText).not.toContain('Hidden display text');
+      expect(observation.visibleText).not.toContain('Hidden visibility text');
+      expect(observation.visibleText).not.toContain('Transparent text');
+      expect(observation.visibleText).not.toContain('Screen reader only text');
+      expect(observation.visibleText).not.toContain('Scrolled below container');
+    } finally {
+      await textPage.close();
+    }
+  });
 });
 
 describe('openAllowed', () => {

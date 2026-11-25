@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { ConfigError, InfrastructureError, sha256 } from '@bugpatrol/core';
 import { PROBE_SOURCE, type ScreenSnapshot } from '@bugpatrol/invariants';
 import { type Browser, type BrowserContext, type CDPSession, chromium, errors, type Page } from 'playwright';
-import { observeDom, resolveTarget, stepFor } from './dom.js';
+import { observeDom, observeVisibleText, resolveTarget, stepFor } from './dom.js';
 import { guardBrowser, type ReadOnlyOptions } from './readonly.js';
 import { sampleFile } from './samples.js';
 import type { ActResult, Driver, DriverAction, Observation, UiElement } from './types.js';
@@ -241,9 +241,10 @@ export class WebDriver implements Driver {
     for (const candidate of context.pages()) {
       this.watch(candidate);
     }
-    const [screenshot, elements, title] = await Promise.all([
+    const [screenshot, elements, visibleText, title] = await Promise.all([
       page.screenshot({ fullPage: false }),
       observeDom(page),
+      observeVisibleText(page),
       page.title(),
     ]);
     await this.captureProbe();
@@ -257,6 +258,7 @@ export class WebDriver implements Driver {
     );
     const size = page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
     const errors = this.errors.get(page) ?? [];
+    const redactedVisibleText = visibleText ? this.redact(visibleText) : undefined;
     const observation: Observation = {
       platform: this.platform,
       location: this.redact(page.url()),
@@ -265,6 +267,7 @@ export class WebDriver implements Driver {
       // A PNG's width is the big-endian word at byte 16 of its header.
       viewport: { ...size, scale: screenshot.readUInt32BE(16) / size.width },
       elements,
+      ...(redactedVisibleText ? { visibleText: redactedVisibleText } : {}),
       windows,
       volatileRegions: [],
       consoleErrors: errors.splice(0),

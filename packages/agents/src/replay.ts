@@ -33,12 +33,19 @@ export function bugMisses(check: BugCheck, screen: Observation, errors: string[]
     : [];
   const texts = [
     screen.title,
+    screen.visibleText,
     ...responseLines,
     response?.body,
     screen.terminal?.output,
     ...screen.elements.flatMap((element) => [element.name, element.text, element.value, element.testId]),
   ].filter((text): text is string => Boolean(text));
-  const onScreen = (part: string) => texts.some((text) => text.includes(part));
+  const normalize = (value: string) => value.replace(/\s+/g, ' ').trim();
+  const normalizedVisible = screen.visibleText ? normalize(screen.visibleText) : '';
+  const onScreen = (part: string) => {
+    if (texts.some((text) => text.includes(part))) return true;
+    const normalizedPart = normalize(part);
+    return Boolean(normalizedPart && normalizedVisible?.includes(normalizedPart));
+  };
   const misses: string[] = [];
   if (check.shows && !onScreen(check.shows)) misses.push(`the screen does not show "${check.shows}"`);
   if (check.lacks && onScreen(check.lacks)) misses.push(`the screen shows "${check.lacks}"`);

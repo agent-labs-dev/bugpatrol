@@ -194,6 +194,141 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
   });
 }
 
+/**
+ * Visible text rendered in the viewport, including plain copy outside
+ * interactive elements and text split across inline nodes, while excluding
+ * hidden, sr-only, and scrolled-out text.
+ */
+export async function observeVisibleText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+    const MAX_CHARS = 50_000;
+    const isBlock = (style: CSSStyleDeclaration) =>
+      style.display !== 'inline' && style.display !== 'contents' && !style.display.startsWith('inline-');
+    const parentOf = (el: Element): Element | null => {
+      if (el.parentElement) return el.parentElement;
+      const root = el.getRootNode();
+      return root instanceof ShadowRoot ? root.host : null;
+    };
+    const isVisuallyHiddenStyle = (style: CSSStyleDeclaration, rect: DOMRect) => {
+      if (style.clip === 'rect(0px, 0px, 0px, 0px)' || style.clipPath === 'inset(50%)') return true;
+      if (rect.width <= 1 && rect.height <= 1 && style.overflow === 'hidden') return true;
+      return false;
+    };
+    const clipBoxFor = (el: Element) => {
+      let left = 0;
+      let top = 0;
+      let right = innerWidth;
+      let bottom = innerHeight;
+      for (let cur: Element | null = el; cur; cur = parentOf(cur)) {
+        const cs = getComputedStyle(cur);
+        const cr = cur.getBoundingClientRect();
+        if (isVisuallyHiddenStyle(cs, cr)) return null;
+        if (
+          cur !== document.body &&
+          cur !== document.documentElement &&
+          /(hidden|clip|scroll|auto)/.test(`${cs.overflowX} ${cs.overflowY}`)
+        ) {
+          left = Math.max(left, cr.left);
+          top = Math.max(top, cr.top);
+          right = Math.min(right, cr.right);
+          bottom = Math.min(bottom, cr.bottom);
+          if (right <= left || bottom <= top) return null;
+        }
+        if (cs.position === 'fixed') break;
+      }
+      return { left, top, right, bottom };
+    };
+    const rectsVisibleIn = (
+      rects: DOMRectList | DOMRect[],
+      clip: { left: number; top: number; right: number; bottom: number },
+    ) => {
+      for (const r of Array.from(rects)) {
+        if (
+          r.width > 0 &&
+          r.height > 0 &&
+          r.right > clip.left &&
+          r.left < clip.right &&
+          r.bottom > clip.top &&
+          r.top < clip.bottom
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const lines: string[] = [];
+    let current = '';
+    let total = 0;
+    const flush = () => {
+      const cleaned = current.replace(/\s+/g, ' ').trim();
+      current = '';
+      if (!cleaned) return;
+      lines.push(cleaned);
+      total += cleaned.length + 1;
+    };
+
+    const visit = (node: Node) => {
+      if (total >= MAX_CHARS) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const raw = node.nodeValue ?? '';
+        if (!raw) return;
+        const parent = node.parentElement;
+        if (!parent || SKIP_TAGS.has(parent.tagName)) return;
+        const style = getComputedStyle(parent);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          Number(style.opacity) <= 0.01 ||
+          !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+        ) {
+          return;
+        }
+        const clip = clipBoxFor(parent);
+        if (!clip) return;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        if (!rectsVisibleIn(range.getClientRects(), clip)) return;
+        current += raw;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node as Element;
+      if (SKIP_TAGS.has(el.tagName)) return;
+      if (el.tagName === 'BR') {
+        flush();
+        return;
+      }
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || Number(style.opacity) <= 0.01) return;
+      const block = isBlock(style);
+      if (block) flush();
+      if (el instanceof HTMLSelectElement) {
+        if (style.visibility !== 'hidden' && el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+          const clip = clipBoxFor(el);
+          const selected = el.selectedOptions[0]?.textContent?.trim();
+          if (clip && selected && rectsVisibleIn([el.getBoundingClientRect()], clip)) {
+            current += (current ? ' ' : '') + selected;
+          }
+        }
+        if (block) flush();
+        return;
+      }
+      const children = el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes;
+      for (const child of Array.from(children)) {
+        visit(child);
+        if (total >= MAX_CHARS) break;
+      }
+      if (block) flush();
+    };
+
+    if (document.body) visit(document.body);
+    flush();
+    return lines.join('\n').slice(0, MAX_CHARS);
+  });
+}
+
 export type ResolvedTarget = {
   locator?: Locator;
   point?: { x: number; y: number };
