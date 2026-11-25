@@ -205,6 +205,39 @@ describe('fixer', () => {
     }
   });
 
+  it.each([
+    ['unstaged', 'echo lockfile-drift >> app.txt'],
+    ['staged', 'echo lockfile-drift >> app.txt && git add app.txt'],
+    ['staged and unstaged', 'echo lockfile-drift >> app.txt && git add app.txt && echo more-drift >> app.txt'],
+  ])('leaves %s tracked files the prepare command rewrote out of the change', async (_label, prepare) => {
+    const f = await repoFixture();
+    try {
+      const config = parseConfig({
+        ...f.config,
+        agents: {
+          ...f.config.agents,
+          fixer: { ...f.config.agents.fixer, retest: { prepare } },
+        },
+      });
+      const session = new AgentSession(f.root, config, new Vars(), f.session.sessionId, 'fixer');
+      let startingContent: string | undefined;
+      const runtime: Runtime = {
+        label: 'cli:fake',
+        async run(task) {
+          startingContent = await readFile(join(task.workdir!, 'app.txt'), 'utf8');
+          return { stop: 'done', steps: 1, costUsd: 0, summary: 'The cause is in the backend.' };
+        },
+      };
+      const [proposal] = await runFixer(session, runtime);
+      expect(proposal).toMatchObject({ status: 'declined' });
+      expect(proposal!.diff).toBe('');
+      expect(proposal!.commit).toBeUndefined();
+      expect(startingContent).toBe('broken\n');
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it('retries a failed proposal from a clean worktree', async () => {
     const f = await repoFixture();
     try {
