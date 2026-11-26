@@ -87,6 +87,11 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
         done(code ?? 1);
       });
     });
+    // Prevent an unhandled rejection when a background command's readiness wait rejects on spawn error.
+    void closed.catch(() => undefined);
+    // Attach a handler up front so an asynchronous spawn error during a
+    // background wait cannot surface as an unhandled rejection.
+    closed.catch(() => undefined);
     const timeout = setTimeout(() => killGroup(child), command.timeoutMs);
     try {
       if (command.background) {

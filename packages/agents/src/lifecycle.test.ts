@@ -215,4 +215,26 @@ describe('startApp', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('handles a capture-only background spawn failure without an unhandled rejection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-bg-spawn-fail-'));
+    try {
+      const app = appSchema.parse({
+        setup: [
+          {
+            run: 'echo "CDP :9333"',
+            cwd: 'missing-directory',
+            background: true,
+            capture: { CDP_PORT: 'CDP :(\\d+)' },
+          },
+        ],
+        teardown: [{ run: 'echo cleaned > cleanup' }],
+      });
+      await expect(startApp(app, { root, vars: new Vars() })).rejects.toBeInstanceOf(InfrastructureError);
+      expect((await readFile(join(root, 'cleanup'), 'utf8')).trim()).toBe('cleaned');
+      await new Promise<void>((done) => setImmediate(done));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
