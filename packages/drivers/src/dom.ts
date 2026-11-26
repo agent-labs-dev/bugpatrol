@@ -194,6 +194,204 @@ export async function observeDom(page: Page): Promise<UiElement[]> {
   });
 }
 
+/**
+ * Visible text rendered in the viewport, including plain copy outside
+ * interactive elements and text split across inline nodes, while excluding
+ * hidden, sr-only, and scrolled-out text.
+ */
+export async function observeVisibleText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+    const MAX_CHARS = 50_000;
+    const isBlock = (style: CSSStyleDeclaration) =>
+      style.display !== 'inline' && style.display !== 'contents' && !style.display.startsWith('inline-');
+    const parentOf = (el: Element): Element | null => {
+      if (el.assignedSlot) return el.assignedSlot;
+      if (el.parentElement) return el.parentElement;
+      const root = el.getRootNode();
+      return root instanceof ShadowRoot ? root.host : null;
+    };
+    const isVisuallyHiddenStyle = (style: CSSStyleDeclaration, rect: DOMRect) => {
+      if (style.clip === 'rect(0px, 0px, 0px, 0px)' || style.clipPath === 'inset(50%)') return true;
+      if (rect.width <= 1 && rect.height <= 1 && style.overflow === 'hidden') return true;
+      return false;
+    };
+    const clipBoxFor = (el: Element) => {
+      let left = 0;
+      let top = 0;
+      let right = innerWidth;
+      let bottom = innerHeight;
+      for (let cur: Element | null = el; cur; cur = parentOf(cur)) {
+        const cs = getComputedStyle(cur);
+        if (cs.display === 'none' || Number(cs.opacity) <= 0.01) return null;
+        if (cs.display === 'contents') continue;
+        const cr = cur.getBoundingClientRect();
+        if (isVisuallyHiddenStyle(cs, cr)) return null;
+        if (
+          cur !== document.body &&
+          cur !== document.documentElement &&
+          /(hidden|clip|scroll|auto)/.test(`${cs.overflowX} ${cs.overflowY}`)
+        ) {
+          left = Math.max(left, cr.left);
+          top = Math.max(top, cr.top);
+          right = Math.min(right, cr.right);
+          bottom = Math.min(bottom, cr.bottom);
+          if (right <= left || bottom <= top) return null;
+        }
+        if (cs.position === 'fixed') break;
+      }
+      return { left, top, right, bottom };
+    };
+    type ClipBox = { left: number; top: number; right: number; bottom: number };
+    const rectIntersects = (r: DOMRect, clip: ClipBox) => {
+      if (r.width <= 0 || r.height <= 0) return false;
+      const visibleW = Math.min(r.right, clip.right) - Math.max(r.left, clip.left);
+      const visibleH = Math.min(r.bottom, clip.bottom) - Math.max(r.top, clip.top);
+      return visibleW > Math.min(1, r.width * 0.25) && visibleH > Math.min(4, r.height * 0.25);
+    };
+    const rectInside = (r: DOMRect, clip: ClipBox) =>
+      r.width > 0 &&
+      r.height > 0 &&
+      r.left >= clip.left - 0.5 &&
+      r.right <= clip.right + 0.5 &&
+      r.top >= clip.top - 0.5 &&
+      r.bottom <= clip.bottom + 0.5;
+    const rectsVisibleIn = (rects: DOMRectList | DOMRect[], clip: ClipBox) => {
+      for (const r of Array.from(rects)) {
+        if (rectIntersects(r, clip)) return true;
+      }
+      return false;
+    };
+    const range = document.createRange();
+    const visibleTextSlice = (node: Text, raw: string, clip: ClipBox): string => {
+      const sliceRange = (start: number, end: number): string => {
+        if (start >= end) return '';
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+        if (rects.length === 0 || !rects.some((r) => rectIntersects(r, clip))) return '';
+        if (rects.every((r) => rectInside(r, clip))) return raw.slice(start, end);
+        if (end - start <= 1) return raw.slice(start, end);
+        const mid = (start + end) >> 1;
+        const leftPart = sliceRange(start, mid);
+        const rightPart = sliceRange(mid, end);
+        if (leftPart && rightPart && !/\s$/.test(leftPart) && !/^\s/.test(rightPart)) {
+          const boundary = raw.slice(Math.max(start, mid - 1), Math.min(end, mid + 1));
+          if (/\s/.test(boundary)) return `${leftPart} ${rightPart}`;
+        }
+        return leftPart + rightPart;
+      };
+      // Fast path for nodes completely outside or completely inside the clip box.
+      range.selectNodeContents(node);
+      const allRects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      if (allRects.length === 0 || !allRects.some((r) => rectIntersects(r, clip))) return '';
+      if (allRects.every((r) => rectInside(r, clip))) return raw;
+      // Split explicit newlines first so preserved lines stay separated cleanly.
+      if (raw.includes('\n')) {
+        const parts: string[] = [];
+        let offset = 0;
+        while (offset < raw.length) {
+          const nl = raw.indexOf('\n', offset);
+          const lineEnd = nl === -1 ? raw.length : nl;
+          const piece = sliceRange(offset, lineEnd);
+          if (piece) parts.push(piece);
+          if (nl === -1) break;
+          offset = nl + 1;
+        }
+        return parts.join('\n');
+      }
+      return sliceRange(0, raw.length);
+    };
+
+    const lines: string[] = [];
+    let current = '';
+    let total = 0;
+    const flush = () => {
+      const cleaned = current.replace(/\s+/g, ' ').trim();
+      current = '';
+      if (!cleaned) return;
+      lines.push(cleaned);
+      total += cleaned.length + 1;
+    };
+
+    const visit = (node: Node) => {
+      if (total >= MAX_CHARS) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const textNode = node as Text;
+        const raw = textNode.nodeValue ?? '';
+        if (!raw) return;
+        const parent =
+          textNode.parentElement ?? (textNode.parentNode instanceof ShadowRoot ? textNode.parentNode.host : null);
+        if (!parent || SKIP_TAGS.has(parent.tagName)) return;
+        const owner = textNode.assignedSlot ?? parent;
+        const style = getComputedStyle(owner);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          Number(style.opacity) <= 0.01 ||
+          (style.display !== 'contents' && !owner.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
+        ) {
+          return;
+        }
+        const clip = clipBoxFor(owner);
+        if (!clip) return;
+        const visible = visibleTextSlice(textNode, raw, clip);
+        if (!visible) return;
+        if (visible.includes('\n')) {
+          const segs = visible.split('\n');
+          for (let i = 0; i < segs.length; i++) {
+            current += segs[i]!;
+            if (i < segs.length - 1) flush();
+          }
+        } else {
+          current += visible;
+        }
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node as Element;
+      if (SKIP_TAGS.has(el.tagName)) return;
+      if (el.tagName === 'BR') {
+        flush();
+        return;
+      }
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || Number(style.opacity) <= 0.01) return;
+      const block = isBlock(style);
+      if (block) flush();
+      if (el instanceof HTMLSelectElement) {
+        if (style.visibility !== 'hidden' && el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+          const clip = clipBoxFor(el);
+          const selected = el.selectedOptions[0]?.textContent?.trim();
+          if (clip && selected && rectsVisibleIn([el.getBoundingClientRect()], clip)) {
+            current += (current ? ' ' : '') + selected;
+          }
+        }
+        if (block) flush();
+        return;
+      }
+      let children: Node[];
+      if (el instanceof HTMLSlotElement) {
+        const assigned = el.assignedNodes({ flatten: true });
+        children = assigned.length > 0 ? assigned : Array.from(el.childNodes);
+      } else if (el.shadowRoot) {
+        children = Array.from(el.shadowRoot.childNodes);
+      } else {
+        children = Array.from(el.childNodes);
+      }
+      for (const child of children) {
+        visit(child);
+        if (total >= MAX_CHARS) break;
+      }
+      if (block) flush();
+    };
+
+    if (document.body) visit(document.body);
+    flush();
+    return lines.join('\n').slice(0, MAX_CHARS);
+  });
+}
+
 export type ResolvedTarget = {
   locator?: Locator;
   point?: { x: number; y: number };

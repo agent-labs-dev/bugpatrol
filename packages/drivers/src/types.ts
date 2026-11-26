@@ -51,6 +51,11 @@ export type Observation = {
   /** The logical size of the screen the element boxes are in. */
   viewport: { width: number; height: number; scale: number };
   elements: UiElement[];
+  /**
+   * Web and Electron: visible text rendered in the viewport, including plain
+   * copy outside interactive elements, redacted by the driver.
+   */
+  visibleText?: string;
   /** Web and Electron: every window, so the explorer can switch. */
   windows?: Array<{ id: string; title: string; location: string; active: boolean }>;
   /**

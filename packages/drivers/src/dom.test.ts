@@ -1,6 +1,6 @@
 import { type Browser, type BrowserContext, chromium, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { observeDom, resolveTarget } from './dom.js';
+import { observeDom, observeVisibleText, resolveTarget } from './dom.js';
 import { openAllowed, WebDriver } from './web.js';
 
 let browser: Browser;
@@ -192,6 +192,107 @@ describe('controls the explorer could not see or use', () => {
     });
     expect((await driver.observe()).viewport).toMatchObject({ width: 320, height: 240 });
   });
+
+  it('captures plain visible viewport text (including inline spans) and excludes hidden or scrolled-out text', async () => {
+    const textPage = await context.newPage();
+    try {
+      await textPage.setContent(`
+        <label for="runs-on">Runs on</label>
+        <select id="runs-on"><option value="dev_1" selected>Barry</option></select>
+        <p>A run starts on <strong>barry</strong>.</p>
+        <div style="display:none">Hidden display text</div>
+        <div style="visibility:hidden">Hidden visibility text</div>
+        <div style="opacity:0">Transparent text</div>
+        <div style="width:1px;height:1px;overflow:hidden">Screen reader only text</div>
+        <div style="height:40px;overflow:auto">
+          <div style="height:120px">Visible top line</div>
+          <p>Scrolled below container</p>
+        </div>
+        <p>Token secret-value-123 here</p>
+      `);
+      const textDriver = new FixtureDriver({
+        url: '',
+        viewport: { width: 800, height: 600 },
+        redact: (value) => value.replaceAll('secret-value-123', '[REDACTED]'),
+      });
+      textDriver.bind(browser, context, textPage);
+      const observation = await textDriver.observe();
+      expect(observation.visibleText).toContain('A run starts on barry.');
+      expect(observation.visibleText).toContain('Barry');
+      expect(observation.visibleText).toContain('Visible top line');
+      expect(observation.visibleText).toContain('Token [REDACTED] here');
+      expect(observation.visibleText).not.toContain('secret-value-123');
+      expect(observation.visibleText).not.toContain('Hidden display text');
+      expect(observation.visibleText).not.toContain('Hidden visibility text');
+      expect(observation.visibleText).not.toContain('Transparent text');
+      expect(observation.visibleText).not.toContain('Screen reader only text');
+      expect(observation.visibleText).not.toContain('Scrolled below container');
+    } finally {
+      await textPage.close();
+    }
+  });
+
+  it.each(['overflow container', 'viewport'] as const)(
+    'excludes clipped lines from a partially visible text node (%s)',
+    async (boundary) => {
+      const clipPage = await context.newPage();
+      try {
+        const style = boundary === 'overflow container' ? 'height:20px;overflow:hidden' : 'position:absolute;top:580px';
+        await clipPage.setContent(
+          `<div style="white-space:pre;font:16px/20px monospace;${style}">Visible first line\nHidden second line</div>`,
+        );
+        const text = await observeVisibleText(clipPage);
+        expect(text).toContain('Visible first line');
+        expect(text).not.toContain('Hidden second line');
+      } finally {
+        await clipPage.close();
+      }
+    },
+  );
+
+  it('captures direct shadow-root text and assigned slot text without invisible slot fallback', async () => {
+    const shadowPage = await context.newPage();
+    try {
+      await shadowPage.setContent(
+        '<div id="direct"></div><div id="slotted"><p>A run starts on barry.</p></div><div id="fallback"></div>',
+      );
+      await shadowPage.evaluate(() => {
+        document.querySelector('#direct')!.attachShadow({ mode: 'open' }).textContent = 'Direct shadow copy';
+        document.querySelector('#slotted')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<slot><span>No runner selected</span></slot>';
+        document.querySelector('#fallback')!.attachShadow({ mode: 'open' }).innerHTML =
+          '<slot><span>Default fallback copy</span></slot>';
+      });
+      const text = await observeVisibleText(shadowPage);
+      expect(text).toContain('Direct shadow copy');
+      expect(text).toContain('A run starts on barry.');
+      expect(text).not.toContain('No runner selected');
+      expect(text).toContain('Default fallback copy');
+    } finally {
+      await shadowPage.close();
+    }
+  });
+
+  it.each(['<slot style="visibility:hidden"></slot>', '<div style="visibility:hidden"><slot></slot></div>'])(
+    'excludes assigned plain text hidden by %s while preserving explicit visibility overrides',
+    async (shadowHtml) => {
+      const slotPage = await context.newPage();
+      try {
+        await slotPage.setContent(
+          '<div id="host">Hidden assigned sentence<span style="visibility:visible">Explicit visible</span></div><p>Visible sibling sentence</p>',
+        );
+        await slotPage.evaluate((html) => {
+          document.querySelector('#host')!.attachShadow({ mode: 'open' }).innerHTML = html;
+        }, shadowHtml);
+        const text = await observeVisibleText(slotPage);
+        expect(text).toContain('Visible sibling sentence');
+        expect(text).toContain('Explicit visible');
+        expect(text).not.toContain('Hidden assigned sentence');
+      } finally {
+        await slotPage.close();
+      }
+    },
+  );
 });
 
 describe('openAllowed', () => {

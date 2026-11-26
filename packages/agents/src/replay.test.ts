@@ -155,6 +155,30 @@ describe('bug checks', () => {
     expect(bugMisses({ shows: 'HTTP 204 No Content', lacks: 'x-request-id: unexpected' }, screen, [])).toEqual([]);
     expect(bugMisses({ shows: 'content-type: text/event-stream' }, screen, [])).toEqual([]);
   });
+
+  it('matches shows and lacks against visibleText on web and electron screens', () => {
+    const screen: Observation = {
+      platform: 'electron',
+      location: 'http://127.0.0.1/agents',
+      title: 'Agents',
+      capture: { kind: 'image', png: Buffer.alloc(0) },
+      viewport: { width: 1280, height: 800, scale: 1 },
+      elements: [],
+      visibleText: 'Runs on\nA run starts on\nbarry.\nExperimental features\nTry early capabilities before release.',
+      volatileRegions: [],
+      consoleErrors: [],
+      at: '2026-01-01T00:00:00.000Z',
+    };
+
+    expect(bugMisses({ shows: 'A run starts on barry.' }, screen, [])).toEqual([]);
+    expect(bugMisses({ shows: 'Try early capabilities before release.' }, screen, [])).toEqual([]);
+    expect(bugMisses({ lacks: 'A run starts on barry.' }, screen, [])).toEqual([
+      'the screen shows "A run starts on barry."',
+    ]);
+    expect(bugMisses({ shows: 'Not on this screen' }, screen, [])).toEqual([
+      'the screen does not show "Not on this screen"',
+    ]);
+  });
 });
 
 describe('replay control boundaries', () => {
