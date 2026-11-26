@@ -58,36 +58,54 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
     let output = '';
     let settled = false;
     const captures = Object.entries(command.capture).map(([name, pattern]) => [name, new RegExp(pattern)] as const);
-    const append = (chunk: Buffer) => {
-      output += chunk.toString();
+    const captured = new Set<string>();
+    const matchCaptures = () => {
       for (const [name, pattern] of captures) {
         const match = pattern.exec(output);
         if (match?.[1] === undefined) continue;
+        captured.add(name);
         if (command.public.includes(name)) opts.vars.setPublic(name, match[1]);
         else opts.vars.set(name, match[1]);
       }
     };
+    const append = (chunk: Buffer) => {
+      output += chunk.toString();
+      matchCaptures();
+    };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);
-    const exit = new Promise<number>((done, reject) => {
+    child.once('exit', () => {
+      settled = true;
+    });
+    // Wait for `close` rather than `exit` so buffered stdout/stderr chunks finish
+    // draining before setup captures are checked (#223).
+    const closed = new Promise<number>((done, reject) => {
       child.once('error', reject);
-      child.once('exit', (code) => {
+      child.once('close', (code) => {
         settled = true;
+        matchCaptures();
         done(code ?? 1);
       });
     });
     const timeout = setTimeout(() => killGroup(child), command.timeoutMs);
     try {
       if (command.background) {
-        if (command.readyWhen) {
-          const ready = new RegExp(command.readyWhen);
+        if (command.readyWhen || captures.length > 0) {
+          const ready = command.readyWhen ? new RegExp(command.readyWhen) : undefined;
           await new Promise<void>((done, reject) => {
-            const wait = setTimeout(() => finish(new Error('timed out waiting for ready output')), command.timeoutMs);
+            const wait = setTimeout(() => {
+              const missing = captures.map(([name]) => name).filter((name) => !captured.has(name));
+              const reason =
+                ready && !ready.test(output)
+                  ? 'timed out waiting for ready output'
+                  : `timed out waiting for capture ${missing.join(', ')}`;
+              finish(new Error(reason));
+            }, command.timeoutMs);
             const finish = (error?: Error) => {
               clearTimeout(wait);
               child.stdout?.off('data', check);
               child.stderr?.off('data', check);
-              child.off('exit', onExit);
+              child.off('close', onClose);
               child.off('error', finish);
               if (error) {
                 reject(error);
@@ -95,25 +113,49 @@ export async function startApp(app: AppConfig, opts: Options): Promise<RunningAp
                 done();
               }
             };
+            const isSatisfied = () => (!ready || ready.test(output)) && captures.every(([name]) => captured.has(name));
             const check = () => {
-              if (ready.test(output)) {
+              matchCaptures();
+              if (isSatisfied()) {
                 finish();
               }
             };
-            const onExit = () => finish(new Error('exited before ready'));
+            const onClose = () => {
+              matchCaptures();
+              if (isSatisfied()) {
+                finish();
+              } else if (ready && !ready.test(output)) {
+                finish(new Error('exited before ready'));
+              } else {
+                const missing = captures.map(([name]) => name).filter((name) => !captured.has(name));
+                const detail = output.trim()
+                  ? 'command output did not match its capture pattern'
+                  : 'command produced no output';
+                finish(new Error(`capture ${missing.join(', ')} produced nothing (${detail})`));
+              }
+            };
             child.stdout?.on('data', check);
             child.stderr?.on('data', check);
-            child.once('exit', onExit);
+            child.once('close', onClose);
             child.once('error', finish);
             check();
           });
         }
         children.push(child);
-        void exit.catch(() => undefined);
+        void closed.catch(() => undefined);
       } else {
-        const code = await exit;
+        const code = await closed;
         if (code !== 0) {
           throw new Error(`exit ${code}`);
+        }
+      }
+      if (phase === 'Setup') {
+        const missing = captures.map(([name]) => name).filter((name) => !captured.has(name));
+        if (missing.length > 0) {
+          const detail = output.trim()
+            ? 'command output did not match its capture pattern'
+            : 'command produced no output';
+          throw new Error(`capture ${missing.join(', ')} produced nothing (${detail})`);
         }
       }
       report(`${phase}: ran \`${shell}\` (${((Date.now() - started) / 1000).toFixed(1)}s)`);
