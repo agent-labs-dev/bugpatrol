@@ -148,4 +148,93 @@ describe('startApp', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('drains stdout before resolving fast setup captures across repeated runs (#223)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-capture-drain-'));
+    try {
+      const app = appSchema.parse({
+        setup: [{ run: 'printf "CDP :9222\\n"', capture: { CDP_PORT: 'CDP :(\\d+)' } }],
+      });
+      for (let i = 0; i < 20; i++) {
+        const vars = new Vars();
+        const running = await startApp(app, { root, vars });
+        try {
+          expect(vars.resolve('http://127.0.0.1:{{CDP_PORT}}')).toBe('http://127.0.0.1:9222');
+        } finally {
+          await running.stop();
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for both readyWhen and captures on background setup commands (#223)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-bg-capture-'));
+    try {
+      const vars = new Vars();
+      const app = appSchema.parse({
+        setup: [
+          {
+            run: 'echo READY; sleep 0.05; echo "CDP :9333"; sleep 10',
+            background: true,
+            readyWhen: 'READY',
+            capture: { CDP_PORT: 'CDP :(\\d+)' },
+            timeoutMs: 2000,
+          },
+        ],
+      });
+      const running = await startApp(app, { root, vars });
+      try {
+        expect(vars.resolve('{{CDP_PORT}}')).toBe('9333');
+      } finally {
+        await running.stop();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails setup loudly with a clear reason when a declared capture produces nothing (#223)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-missing-capture-'));
+    try {
+      const emptyApp = appSchema.parse({
+        setup: [{ run: 'true', capture: { CDP_PORT: 'CDP :(\\d+)' } }],
+      });
+      await expect(startApp(emptyApp, { root, vars: new Vars() })).rejects.toThrow(
+        /capture CDP_PORT produced nothing \(command produced no output\)/,
+      );
+
+      const mismatchApp = appSchema.parse({
+        setup: [{ run: 'echo "unrelated line"', capture: { CDP_PORT: 'CDP :(\\d+)' } }],
+      });
+      await expect(startApp(mismatchApp, { root, vars: new Vars() })).rejects.toThrow(
+        /capture CDP_PORT produced nothing \(command output did not match its capture pattern\)/,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('handles a capture-only background spawn failure without an unhandled rejection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bugpatrol-bg-spawn-fail-'));
+    try {
+      const app = appSchema.parse({
+        setup: [
+          {
+            run: 'echo "CDP :9333"',
+            cwd: 'missing-directory',
+            background: true,
+            capture: { CDP_PORT: 'CDP :(\\d+)' },
+          },
+        ],
+        teardown: [{ run: 'echo cleaned > cleanup' }],
+      });
+      await expect(startApp(app, { root, vars: new Vars() })).rejects.toBeInstanceOf(InfrastructureError);
+      expect((await readFile(join(root, 'cleanup'), 'utf8')).trim()).toBe('cleaned');
+      await new Promise<void>((done) => setImmediate(done));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
