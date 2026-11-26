@@ -206,6 +206,7 @@ export async function observeVisibleText(page: Page): Promise<string> {
     const isBlock = (style: CSSStyleDeclaration) =>
       style.display !== 'inline' && style.display !== 'contents' && !style.display.startsWith('inline-');
     const parentOf = (el: Element): Element | null => {
+      if (el.assignedSlot) return el.assignedSlot;
       if (el.parentElement) return el.parentElement;
       const root = el.getRootNode();
       return root instanceof ShadowRoot ? root.host : null;
@@ -239,23 +240,65 @@ export async function observeVisibleText(page: Page): Promise<string> {
       }
       return { left, top, right, bottom };
     };
-    const rectsVisibleIn = (
-      rects: DOMRectList | DOMRect[],
-      clip: { left: number; top: number; right: number; bottom: number },
-    ) => {
+    type ClipBox = { left: number; top: number; right: number; bottom: number };
+    const rectIntersects = (r: DOMRect, clip: ClipBox) => {
+      if (r.width <= 0 || r.height <= 0) return false;
+      const visibleW = Math.min(r.right, clip.right) - Math.max(r.left, clip.left);
+      const visibleH = Math.min(r.bottom, clip.bottom) - Math.max(r.top, clip.top);
+      return visibleW > Math.min(1, r.width * 0.25) && visibleH > Math.min(4, r.height * 0.25);
+    };
+    const rectInside = (r: DOMRect, clip: ClipBox) =>
+      r.width > 0 &&
+      r.height > 0 &&
+      r.left >= clip.left - 0.5 &&
+      r.right <= clip.right + 0.5 &&
+      r.top >= clip.top - 0.5 &&
+      r.bottom <= clip.bottom + 0.5;
+    const rectsVisibleIn = (rects: DOMRectList | DOMRect[], clip: ClipBox) => {
       for (const r of Array.from(rects)) {
-        if (
-          r.width > 0 &&
-          r.height > 0 &&
-          r.right > clip.left &&
-          r.left < clip.right &&
-          r.bottom > clip.top &&
-          r.top < clip.bottom
-        ) {
-          return true;
-        }
+        if (rectIntersects(r, clip)) return true;
       }
       return false;
+    };
+    const range = document.createRange();
+    const visibleTextSlice = (node: Text, raw: string, clip: ClipBox): string => {
+      const sliceRange = (start: number, end: number): string => {
+        if (start >= end) return '';
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+        if (rects.length === 0 || !rects.some((r) => rectIntersects(r, clip))) return '';
+        if (rects.every((r) => rectInside(r, clip))) return raw.slice(start, end);
+        if (end - start <= 1) return raw.slice(start, end);
+        const mid = (start + end) >> 1;
+        const leftPart = sliceRange(start, mid);
+        const rightPart = sliceRange(mid, end);
+        if (leftPart && rightPart && !/\s$/.test(leftPart) && !/^\s/.test(rightPart)) {
+          const boundary = raw.slice(Math.max(start, mid - 1), Math.min(end, mid + 1));
+          if (/\s/.test(boundary)) return `${leftPart} ${rightPart}`;
+        }
+        return leftPart + rightPart;
+      };
+      // Fast path for nodes completely outside or completely inside the clip box.
+      range.selectNodeContents(node);
+      const allRects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      if (allRects.length === 0 || !allRects.some((r) => rectIntersects(r, clip))) return '';
+      if (allRects.every((r) => rectInside(r, clip))) return raw;
+      // Split explicit newlines first so preserved lines stay separated cleanly.
+      if (raw.includes('\n')) {
+        const parts: string[] = [];
+        let offset = 0;
+        while (offset < raw.length) {
+          const nl = raw.indexOf('\n', offset);
+          const lineEnd = nl === -1 ? raw.length : nl;
+          const piece = sliceRange(offset, lineEnd);
+          if (piece) parts.push(piece);
+          if (nl === -1) break;
+          offset = nl + 1;
+        }
+        return parts.join('\n');
+      }
+      return sliceRange(0, raw.length);
     };
 
     const lines: string[] = [];
@@ -272,9 +315,11 @@ export async function observeVisibleText(page: Page): Promise<string> {
     const visit = (node: Node) => {
       if (total >= MAX_CHARS) return;
       if (node.nodeType === Node.TEXT_NODE) {
-        const raw = node.nodeValue ?? '';
+        const textNode = node as Text;
+        const raw = textNode.nodeValue ?? '';
         if (!raw) return;
-        const parent = node.parentElement;
+        const parent =
+          textNode.parentElement ?? (textNode.parentNode instanceof ShadowRoot ? textNode.parentNode.host : null);
         if (!parent || SKIP_TAGS.has(parent.tagName)) return;
         const style = getComputedStyle(parent);
         if (
@@ -285,12 +330,20 @@ export async function observeVisibleText(page: Page): Promise<string> {
         ) {
           return;
         }
-        const clip = clipBoxFor(parent);
+        const clipStart = textNode.assignedSlot ?? parent;
+        const clip = clipBoxFor(clipStart);
         if (!clip) return;
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        if (!rectsVisibleIn(range.getClientRects(), clip)) return;
-        current += raw;
+        const visible = visibleTextSlice(textNode, raw, clip);
+        if (!visible) return;
+        if (visible.includes('\n')) {
+          const segs = visible.split('\n');
+          for (let i = 0; i < segs.length; i++) {
+            current += segs[i]!;
+            if (i < segs.length - 1) flush();
+          }
+        } else {
+          current += visible;
+        }
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
@@ -315,8 +368,16 @@ export async function observeVisibleText(page: Page): Promise<string> {
         if (block) flush();
         return;
       }
-      const children = el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes;
-      for (const child of Array.from(children)) {
+      let children: Node[];
+      if (el instanceof HTMLSlotElement) {
+        const assigned = el.assignedNodes({ flatten: true });
+        children = assigned.length > 0 ? assigned : Array.from(el.childNodes);
+      } else if (el.shadowRoot) {
+        children = Array.from(el.shadowRoot.childNodes);
+      } else {
+        children = Array.from(el.childNodes);
+      }
+      for (const child of children) {
         visit(child);
         if (total >= MAX_CHARS) break;
       }
