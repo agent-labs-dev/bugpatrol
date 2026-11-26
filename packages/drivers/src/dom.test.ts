@@ -272,6 +272,27 @@ describe('controls the explorer could not see or use', () => {
       await shadowPage.close();
     }
   });
+
+  it.each(['<slot style="visibility:hidden"></slot>', '<div style="visibility:hidden"><slot></slot></div>'])(
+    'excludes assigned plain text hidden by %s while preserving explicit visibility overrides',
+    async (shadowHtml) => {
+      const slotPage = await context.newPage();
+      try {
+        await slotPage.setContent(
+          '<div id="host">Hidden assigned sentence<span style="visibility:visible">Explicit visible</span></div><p>Visible sibling sentence</p>',
+        );
+        await slotPage.evaluate((html) => {
+          document.querySelector('#host')!.attachShadow({ mode: 'open' }).innerHTML = html;
+        }, shadowHtml);
+        const text = await observeVisibleText(slotPage);
+        expect(text).toContain('Visible sibling sentence');
+        expect(text).toContain('Explicit visible');
+        expect(text).not.toContain('Hidden assigned sentence');
+      } finally {
+        await slotPage.close();
+      }
+    },
+  );
 });
 
 describe('openAllowed', () => {

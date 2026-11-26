@@ -223,6 +223,8 @@ export async function observeVisibleText(page: Page): Promise<string> {
       let bottom = innerHeight;
       for (let cur: Element | null = el; cur; cur = parentOf(cur)) {
         const cs = getComputedStyle(cur);
+        if (cs.display === 'none' || Number(cs.opacity) <= 0.01) return null;
+        if (cs.display === 'contents') continue;
         const cr = cur.getBoundingClientRect();
         if (isVisuallyHiddenStyle(cs, cr)) return null;
         if (
@@ -321,17 +323,17 @@ export async function observeVisibleText(page: Page): Promise<string> {
         const parent =
           textNode.parentElement ?? (textNode.parentNode instanceof ShadowRoot ? textNode.parentNode.host : null);
         if (!parent || SKIP_TAGS.has(parent.tagName)) return;
-        const style = getComputedStyle(parent);
+        const owner = textNode.assignedSlot ?? parent;
+        const style = getComputedStyle(owner);
         if (
           style.display === 'none' ||
           style.visibility === 'hidden' ||
           Number(style.opacity) <= 0.01 ||
-          !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+          (style.display !== 'contents' && !owner.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
         ) {
           return;
         }
-        const clipStart = textNode.assignedSlot ?? parent;
-        const clip = clipBoxFor(clipStart);
+        const clip = clipBoxFor(owner);
         if (!clip) return;
         const visible = visibleTextSlice(textNode, raw, clip);
         if (!visible) return;
